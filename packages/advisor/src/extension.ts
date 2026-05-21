@@ -339,6 +339,30 @@ export function registerAdvisor(pi: ExtensionAPI): void {
 
       if (cmd === "on" && cfg.mode === "off") { saveConfig({ ...cfg, mode: "auto" }); ctx.ui.notify("Advisor enabled (auto mode).", "success"); return; }
       if (cmd === "off") { saveConfig({ ...cfg, mode: "off" }); ctx.ui.notify("Advisor disabled.", "info"); return; }
+      if (cmd === "mode") {
+        const v = rest[0];
+        if (v === "auto" || v === "manual") { saveConfig({ ...cfg, mode: v }); ctx.ui.notify(`Mode set to ${v}.`, "info"); return; }
+        if (v === "off") { saveConfig({ ...cfg, mode: "off" }); ctx.ui.notify("Advisor disabled.", "info"); return; }
+        ctx.ui.notify("Usage: /advisor mode auto|manual|off", "error");
+        return;
+      }
+      if (cmd === "model") {
+        const v = rest.join("/").trim();
+        if (!v || !v.includes("/")) {
+          const resolved = await resolveModel(ctx, cfg);
+          ctx.ui.notify([
+            `Current: ${resolved?.label || "auto"}`,
+            "",
+            "Usage: /advisor model <provider>/<model>",
+            '(e.g. "openai-codex/gpt-5.5" or "anthropic/claude-opus-4-6")',
+            "Run /advisor status for SOTA options.",
+          ].join("\n"), "info");
+          return;
+        }
+        saveConfig({ ...cfg, model: v });
+        ctx.ui.notify(`Model set to ${v}. Remove field to auto-detect.`, "info");
+        return;
+      }
       if (cmd === "config") {
         ctx.ui.notify([
           "Advisor config (3 fields, all optional):",
