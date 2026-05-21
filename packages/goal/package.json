@@ -1,0 +1,31 @@
+{
+  "name": "@fiale-plus/pi-goal",
+  "version": "0.1.0",
+  "description": "Session goal tracking extension for Pi.",
+  "type": "module",
+  "license": "MIT",
+  "keywords": [
+    "pi-package"
+  ],
+  "main": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "pi": {
+    "extensions": [
+      "./src/extension.ts"
+    ],
+    "skills": [
+      "./skills"
+    ]
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "^0.74.0"
+  },
+  "dependencies": {
+    "@fiale-plus/pi-core": "^0.1.0"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}

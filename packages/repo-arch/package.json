@@ -1,0 +1,28 @@
+{
+  "name": "@fiale-plus/pi-repo-arch",
+  "version": "0.1.0",
+  "description": "Pi integration bridge for repo-arch (CLI-first project-memory engine).",
+  "type": "module",
+  "license": "MIT",
+  "keywords": [
+    "pi-package"
+  ],
+  "main": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "pi": {
+    "extensions": [
+      "./pi/extensions/repo-arch.ts"
+    ],
+    "skills": [
+      "./pi/skills"
+    ]
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "^0.74.0"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}

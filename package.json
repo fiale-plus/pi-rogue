@@ -1,0 +1,23 @@
+{
+  "name": "pi-fiale-plus",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Fiale Plus Pi extensions, skills, and workflow plugins.",
+  "type": "module",
+  "workspaces": [
+    "packages/*"
+  ],
+  "scripts": {
+    "check": "npm run check -ws --if-present",
+    "test": "npm run test -ws --if-present"
+  },
+  "engines": {
+    "node": ">=22.5.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.15.3",
+    "tsx": "^4.19.4",
+    "typescript": "^5.8.3",
+    "vitest": "^4.0.18"
+  }
+}

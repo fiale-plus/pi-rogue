@@ -1,0 +1,18 @@
+{
+  "advisor": {
+    "enabled": true
+  },
+  "goal": {
+    "enabled": true
+  },
+  "guardrails": {
+    "enabled": true,
+    "mode": "ask",
+    "llmReview": {
+      "enabled": false
+    }
+  },
+  "brain": {
+    "enabled": true
+  }
+}

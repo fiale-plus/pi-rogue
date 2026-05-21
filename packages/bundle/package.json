@@ -1,0 +1,32 @@
+{
+  "name": "@fiale-plus/pi",
+  "version": "0.1.0",
+  "description": "Bundle package for the Fiale Plus Pi suite.",
+  "type": "module",
+  "license": "MIT",
+  "keywords": [
+    "pi-package"
+  ],
+  "main": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "pi": {
+    "extensions": [
+      "./src/extension.ts"
+    ]
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "^0.74.0"
+  },
+  "dependencies": {
+    "@fiale-plus/pi-advisor": "^0.1.0",
+    "@fiale-plus/pi-brain": "^0.1.0",
+    "@fiale-plus/pi-goal": "^0.1.0",
+    "@fiale-plus/pi-guardrails": "^0.1.0",
+    "@fiale-plus/pi-repo-arch": "^0.1.0"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}
