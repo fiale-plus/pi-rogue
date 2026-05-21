@@ -1,0 +1,1 @@
+{"cycle":1,"agent":"solo","metric":"coverage","before":{"total_tests":27,"advisor_test_files":0},"after":{"total_tests":31,"advisor_test_files":1},"delta":4,"action":"keep","status":"ok","description":"Added advisor config and SOTA model tests","timestamp":"2026-05-21T23:32:00Z"}

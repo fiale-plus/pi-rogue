@@ -1,7 +1,7 @@
 {
   "name": "@fiale-plus/pi-advisor",
   "version": "0.1.0",
-  "description": "Advisor / coaching extension for Pi.",
+  "description": "Strategic advisor and coaching extension for Pi — multi-model support, SOTA model suggestion, cache-aware session advisory.",
   "type": "module",
   "license": "MIT",
   "keywords": [
@@ -20,10 +20,12 @@
     ]
   },
   "peerDependencies": {
-    "@earendil-works/pi-coding-agent": "^0.74.0"
+    "@earendil-works/pi-coding-agent": "^0.74.0",
+    "@earendil-works/pi-ai": "^0.74.0"
   },
   "dependencies": {
-    "@fiale-plus/pi-core": "^0.1.0"
+    "@fiale-plus/pi-core": "^0.1.0",
+    "typebox": "^1.1.24"
   },
   "publishConfig": {
     "access": "public"
