@@ -7,6 +7,8 @@ description: Zero-config strategic advisor for Pi. Auto-detects best model, pref
 
 Works out of the box. Just install and use `/advisor`.
 
+> 96 strategic calls saved ~$53 on GPT-5.5 over 3,071 turns — see [`docs/savings.md`](../../docs/savings.md)
+
 ## Quick start
 
 - `/advisor` — status + config
@@ -39,5 +41,5 @@ Skip: reads, small edits, one-liners.
 Defaults: `mode: auto, review: light`
 
 ```json
-{ "mode": "auto", "review": "strict" }
+{ "mode": "auto", "review": "light" }
 ```

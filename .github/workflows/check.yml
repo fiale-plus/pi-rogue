@@ -1,9 +1,14 @@
 name: check
 
-on: [push, pull_request]
+on:
+  push:
+    branches: [main]
+  pull_request:
+    types: [opened, synchronize, reopened]
 
 jobs:
   check:
+    if: github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.draft == false)
     runs-on: ubuntu-latest
     strategy:
       matrix:
@@ -15,7 +20,12 @@ jobs:
           node-version: ${{ matrix.node-version }}
           cache: npm
       - run: npm ci
-      - run: npx tsc --noEmit
+      - name: Type check
+        run: npx tsc --noEmit
         continue-on-error: true
-      - run: npm test
-        continue-on-error: true
+      - name: Run tests
+        run: npm test
+      - name: Summary
+        run: |
+          echo "## CI Summary" >> $GITHUB_STEP_SUMMARY
+          echo "- Tests: $(npx vitest run 2>&1 | grep -oE 'Tests [0-9]+ passed' | grep -oE '[0-9]+' || echo '?') passed" >> $GITHUB_STEP_SUMMARY
