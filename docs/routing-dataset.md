@@ -10,7 +10,10 @@ Generated files are ignored by git:
 - `data/routing/unlabeled.jsonl` — skipped/ambiguous user turns
 - `data/routing/label-queue.jsonl` — hand-label queue; fill `goldLabel`
 - `data/routing/label-queue.md` — Obsidian-friendly review view
-- `data/routing/gold.jsonl` — final hand-labeled gold set, produced manually from queue rows
+- `data/routing/gold.jsonl` — final gold/model-gold set from reviewed queue rows
+- `data/routing/model-label-queue.jsonl` — model-assisted labels with provenance
+- `data/routing/advisor-router-examples.jsonl` — real advisor router decisions from local logs
+- `data/routing/advisor-router-report.json` — real-log diagnostics and trainability summary
 
 ## Build the queue
 
@@ -61,14 +64,31 @@ Better first training set:
 
 ## Convert reviewed queue to gold
 
-After filling `goldLabel` in `label-queue.jsonl`:
+If labels are manually filled in `label-queue.jsonl`:
 
 ```bash
 npm run routing:gold
 npm run routing:eval -- --input data/routing/gold.jsonl
 ```
 
+If manual labeling is unavailable, run a provenance-marked model-assisted pass:
+
+```bash
+npm run routing:autolabel
+npm run routing:eval -- --input data/routing/gold.jsonl
+```
+
 Use `npm run routing:gold -- --allow-partial` while labeling to get progress counts before the minimum viable set is complete.
+
+## Mine real advisor router log
+
+```bash
+npm run routing:advisor-log
+```
+
+This reads `~/.pi/agent/fiale-plus/advisor/evals/advisor-router.jsonl` and writes advisor-specific examples. These labels are **not** the same taxonomy as task-intent labels; use them for advisor phase/decision training and diagnostics only.
+
+Current finding: failed-turn closeout rows like `Turn reported failure.` are diagnostic examples, not task-intent training examples.
 
 ## Training gate
 
