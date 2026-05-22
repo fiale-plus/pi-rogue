@@ -303,10 +303,10 @@ async function doReview(pi: ExtensionAPI, ctx: any, trigger: string, delta: stri
 
   if (json.verdict === "on_track" && json.notify !== true) return;
   if (json.verdict === "skip") return;
-  const emoji = json.verdict === "on_track" ? "✅" : json.verdict === "course_correct" ? "🔄" : "⏳";
-  const compact = json.summary ? ` ${json.summary.slice(0, 120)}` : "";
+  const verdictLabel = json.verdict === "not_done" ? "not called" : json.verdict?.replace("_", " ") || "?";
+  const reason = reviewRoute.reason ? ` — ${reviewRoute.reason.slice(0, 100)}` : "";
   ctx.ui?.notify?.(
-    `${emoji} ${json.verdict?.replace("_", " ") || "?"}:${compact}`,
+    `advisor: ${verdictLabel}${reason}`,
     json.verdict === "course_correct" ? "warning" : "info",
   );
 
