@@ -16,6 +16,8 @@
     "routing:gold": "tsx scripts/prepare-routing-gold.ts",
     "routing:advisor-log": "tsx scripts/mine-advisor-router-log.ts",
     "routing:train": "tsx scripts/train-routing-model.ts",
+    "binary:build": "npx tsx scripts/build-binary-gate-dataset.ts",
+    "binary:train": "npx tsx scripts/train-binary-gate.ts",
     "routing:score": "tsx scripts/score-routing-active-learning.ts",
     "routing:silver": "tsx scripts/build-routing-silver.ts",
     "routing:eval": "tsx scripts/eval-routing-baselines.ts"

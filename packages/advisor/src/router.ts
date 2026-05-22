@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { existsSync, readFileSync } from "node:fs";
 import { appendText, featureFile, truncate } from "@fiale-plus/pi-core";
 
 export type AdvisorPhase = "preflight" | "review" | "closeout";
@@ -39,6 +40,100 @@ export interface RouterResponse {
 
 const ROUTER_LOG_PATH = featureFile("advisor", "evals/advisor-router.jsonl");
 const ROUTER_VERSION = 1;
+
+// ── Binary gate model (trained from local session data) ──────────────────
+const BINARY_GATE_PATH = featureFile("advisor", "binary-gate-model.json");
+const BINARY_GATE_THRESHOLD = 0.65;
+
+interface BinaryGateModel {
+  kind: string;
+  labels: string[];
+  features: string[];
+  idf: number[];
+  bias: number[];
+  weights: number[][];
+}
+
+let _binaryGateCache: BinaryGateModel | null | undefined = undefined;
+
+function loadBinaryGate(): BinaryGateModel | null {
+  if (_binaryGateCache !== undefined) return _binaryGateCache;
+  try {
+    if (!existsSync(BINARY_GATE_PATH)) return null;
+    _binaryGateCache = JSON.parse(readFileSync(BINARY_GATE_PATH, "utf8")) as BinaryGateModel;
+    if (_binaryGateCache.kind !== "binary-logreg-v1") { _binaryGateCache = null; return null; }
+    return _binaryGateCache;
+  } catch { _binaryGateCache = null; return null; }
+}
+
+function binaryGateTokens(text: string): string[] {
+  const norm = String(text ?? "").toLowerCase()
+    .replace(/https?:\/\/\S+/g, " url ")
+    .replace(/[^a-z0-9\s']/g, " ")
+    .replace(/\s+/g, " ").trim();
+  return norm ? norm.split(" ").filter(Boolean) : [];
+}
+
+function binaryGateFeatures(text: string, model: BinaryGateModel) {
+  const toks = binaryGateTokens(text);
+  const lower = String(text ?? "").toLowerCase()
+    .replace(/https?:\/\/\S+/g, " url ")
+    .replace(/[^a-z0-9\s']/g, " ")
+    .replace(/\s+/g, " ").trim();
+  const counts = new Map<string, number>();
+  const inc = (k: string, b = 1) => counts.set(k, (counts.get(k) || 0) + b);
+  for (const n of [1, 2]) {
+    if (toks.length >= n) for (let i = 0; i <= toks.length - n; i++)
+      inc(`w${n}:${toks.slice(i, i + n).join("_")}`);
+  }
+  const norm = ` ${lower} `;
+  for (const n of [3, 4]) {
+    if (norm.length >= n) for (let i = 0; i <= norm.length - n; i++) {
+      const g = norm.slice(i, i + n);
+      if (!/^\s+$/.test(g)) inc(`c${n}:${g}`);
+    }
+  }
+  if (toks.length > 0) inc(`pref1:${toks[0]}`);
+  if (toks.length > 1) inc(`pref2:${toks.slice(0, 2).join("_")}`);
+  if (toks.length > 2) inc(`pref3:${toks.slice(0, 3).join("_")}`);
+  if (text.includes("?")) inc("cue:question_mark");
+  const cues = ["check","why","what","how","should","status","stats","log","logs","review","diff","pr","build","run","test","deploy","fix","debug","install","configure","plan","continue","resume","compact","research","update","patch","cleanup","remove"];
+  const multi = ["what is","what's","safe to use","pull request","model family","how does","next step","path forward","should we","what should"];
+  const ts = new Set(toks);
+  for (const c of cues) if (ts.has(c)) inc(`cue:${c}`);
+  for (const c of multi) if (lower.includes(c)) inc(`cue:${c.replace(/\s+/g,"_")}`);
+
+  const index = new Map(model.features.map((f, i) => [f, i]));
+  const pairs: Array<[number, number]> = [];
+  let nrm = 0;
+  for (const [feature, tf] of counts) {
+    const idx = index.get(feature);
+    if (idx === undefined) continue;
+    const value = (1 + Math.log(tf)) * model.idf[idx];
+    pairs.push([idx, value]); nrm += value * value;
+  }
+  const scale = nrm > 0 ? 1 / Math.sqrt(nrm) : 1;
+  pairs.sort((a, b) => a[0] - b[0]);
+  return { I: pairs.map(([i]) => i), V: pairs.map(([, v]) => v * scale) };
+}
+
+function binaryGatePredict(text: string): { decision: "continue" | "escalate"; confidence: number } | null {
+  const model = loadBinaryGate();
+  if (!model) return null;
+  const vec = binaryGateFeatures(text, model);
+  const scores = model.bias.slice();
+  for (let c = 0; c < model.weights.length; c++) {
+    let score = scores[c]; const w = model.weights[c];
+    for (let i = 0; i < vec.I.length; i++) score += w[vec.I[i]] * vec.V[i];
+    scores[c] = score;
+  }
+  const maxS = Math.max(...scores);
+  const exps = scores.map((v) => Math.exp(v - maxS));
+  const sum = exps.reduce((a, b) => a + b, 0) || 1;
+  const probs = exps.map((v) => v / sum);
+  const idx = probs[0] >= probs[1] ? 0 : 1;
+  return { decision: model.labels[idx] as "continue" | "escalate", confidence: probs[idx] };
+}
 
 const QUICK_EDIT_RE = /\b(quick edit|small edit|tiny edit|rename|format(?:ting)?|lint|style|doc(?:s)?|comment|typo|readme|spell|spacing|cleanup|one[- ]?liner)\b/i;
 const COMPLEX_RE = /\b(architecture|architectural|refactor|design|trade[- ]?off|concurrency|security|auth|migration|performance|scale|scalability|framework|system design|review|schema|data model|protocol)\b/i;
