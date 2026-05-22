@@ -45,6 +45,7 @@ The miner writes JSONL rows:
 
 ```bash
 npm run routing:mine
+npm run routing:eval
 ```
 
 Defaults:

@@ -10,7 +10,8 @@
   "scripts": {
     "check": "npm run check -ws --if-present",
     "test": "npm run test -ws --if-present",
-    "routing:mine": "tsx scripts/mine-routing-examples.ts"
+    "routing:mine": "tsx scripts/mine-routing-examples.ts",
+    "routing:eval": "tsx scripts/eval-routing-baselines.ts"
   },
   "engines": {
     "node": ">=22.5.0"
