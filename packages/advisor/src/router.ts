@@ -43,7 +43,7 @@ const ROUTER_VERSION = 1;
 
 // ── Binary gate model (trained from local session data) ──────────────────
 const BINARY_GATE_PATH = featureFile("advisor", "binary-gate-model.json");
-const BINARY_GATE_THRESHOLD = 0.65;
+const BINARY_GATE_THRESHOLD = 0.55;
 
 interface BinaryGateModel {
   kind: string;
