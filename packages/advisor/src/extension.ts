@@ -1,8 +1,22 @@
 import { createHash } from "node:crypto";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { completeSimple, type Message, type ThinkingLevel } from "@earendil-works/pi-ai";
+import { completeSimple, type ThinkingLevel } from "@earendil-works/pi-ai";
 import { Type } from "typebox";
-import { featureFile, readText, truncate, writeText, appendText } from "@fiale-plus/pi-core";
+import { featureFile, readText, truncate, writeText } from "@fiale-plus/pi-core";
+import {
+  appendRouteLog,
+  buildRouterPrompt,
+  heuristicRoute,
+  mergeClassifierDecision,
+  mergeReviewPolicy,
+  parseRouterResponse,
+  routeNote,
+  shouldQueryClassifier,
+  summarizeRoute,
+  type AdvisorRouteDecision,
+  type AdvisorRouteInput,
+  type ReviewPolicy,
+} from "./router.js";
 
 // ── Config: 3 optional fields ────────────────────────────────────────────
 
@@ -49,20 +63,38 @@ interface SessionState {
   advisorCalls: number;
   cacheHits: number;
   followUp: string;
+  router: {
+    preflight?: AdvisorRouteDecision;
+    review?: AdvisorRouteDecision;
+  };
 }
 
 function defaultState(): SessionState {
-  return { turns: 0, lastTask: "", notes: [], files: [], errors: [], advisorCalls: 0, cacheHits: 0, followUp: "" };
+  return {
+    turns: 0,
+    lastTask: "",
+    notes: [],
+    files: [],
+    errors: [],
+    advisorCalls: 0,
+    cacheHits: 0,
+    followUp: "",
+    router: {},
+  };
 }
 
 // ── File I/O ──────────────────────────────────────────────────────────────
 function readJson<T>(path: string, fallback: T): T {
   try {
     return JSON.parse(readText(path) || "null") ?? fallback;
-  } catch { return fallback; }
+  } catch {
+    return fallback;
+  }
 }
 
-function writeJson(path: string, v: unknown) { writeText(path, JSON.stringify(v, null, 2) + "\n"); }
+function writeJson(path: string, v: unknown) {
+  writeText(path, JSON.stringify(v, null, 2) + "\n");
+}
 
 function loadConfig(): AdvisorConfig {
   const raw = readJson<Partial<AdvisorConfig>>(CONFIG_PATH, {});
@@ -73,7 +105,9 @@ function loadConfig(): AdvisorConfig {
   };
 }
 
-function saveConfig(c: AdvisorConfig) { writeJson(CONFIG_PATH, c); }
+function saveConfig(c: AdvisorConfig) {
+  writeJson(CONFIG_PATH, c);
+}
 
 function loadState(): SessionState {
   const raw = readJson<Partial<SessionState>>(STATE_PATH, {});
@@ -86,10 +120,16 @@ function loadState(): SessionState {
     advisorCalls: raw.advisorCalls ?? 0,
     cacheHits: raw.cacheHits ?? 0,
     followUp: raw.followUp ?? "",
+    router: {
+      preflight: raw.router?.preflight,
+      review: raw.router?.review,
+    },
   };
 }
 
-function saveState(s: SessionState) { writeJson(STATE_PATH, s); }
+function saveState(s: SessionState) {
+  writeJson(STATE_PATH, s);
+}
 
 function loadCache(): Record<string, string> {
   return readJson<Record<string, string>>(CACHE_PATH, {});
@@ -117,7 +157,7 @@ const REVIEW_SYSTEM = `You are a senior reviewer. An AI agent just completed wor
   "notify": true
 }`;
 
-const PREFLIGHT = `You have an ADVISOR tool. Call it before: new frameworks, refactoring, API design, concurrency, security, tradeoffs. Skip: reads, small edits, one-liners. Ask 1 concise question.`;
+const ROUTER_SYSTEM = `You are a routing classifier for a coding assistant. Return ONLY valid JSON with fields: label, confidence, reason. Use the allowed labels for the given phase. Keep it short.`;
 
 // ── Helpers ───────────────────────────────────────────────────────────────
 
@@ -138,6 +178,16 @@ function brief(s: SessionState): string {
 function squish(t: unknown, max = 200): string {
   const s = String(t ?? "").replace(/\s+/g, " ").trim();
   return s.length <= max ? s : s.slice(0, max - 1).trimEnd() + "…";
+}
+
+function responseText(resp: { content?: Array<{ type?: string; text?: string }> } | null | undefined): string {
+  return (resp?.content ?? []).filter((b: any) => b?.type === "text").map((b: any) => b.text).join("\n").trim();
+}
+
+function mergeRouteReview(configReview: AdvisorConfig["review"], route?: ReviewPolicy): ReviewPolicy {
+  if (configReview === "off") return "off";
+  if (!route) return configReview;
+  return mergeReviewPolicy(configReview, route);
 }
 
 // ── Model resolution (auto-fallback through SOTA chain) ────────────────────
@@ -168,6 +218,34 @@ async function resolveModel(ctx: any, config: AdvisorConfig): Promise<{ model: a
   return null;
 }
 
+async function classifyRoute(pi: ExtensionAPI, ctx: any, config: AdvisorConfig, input: AdvisorRouteInput): Promise<AdvisorRouteDecision> {
+  const heuristic = heuristicRoute(input);
+  if (!shouldQueryClassifier(heuristic)) {
+    appendRouteLog(heuristic);
+    return heuristic;
+  }
+
+  const resolved = await resolveModel(ctx, config);
+  if (!resolved) {
+    appendRouteLog(heuristic);
+    return heuristic;
+  }
+
+  const messages = [
+    { role: "user", content: buildRouterPrompt(input), timestamp: new Date().toISOString() },
+  ] as any[];
+  const resp = await completeSimple(resolved.model, { systemPrompt: ROUTER_SYSTEM, messages: messages as any }, {
+    apiKey: resolved.auth.apiKey,
+    headers: resolved.auth.headers,
+    maxTokens: 120,
+    reasoning: "low" as ThinkingLevel,
+  });
+  const parsed = parseRouterResponse(input.phase, responseText(resp));
+  const route = parsed ? mergeClassifierDecision(input, parsed, "llm") : heuristic;
+  appendRouteLog(route);
+  return route;
+}
+
 async function askAdvisor(pi: ExtensionAPI, ctx: any, question: string, scope: string, includeWork: boolean) {
   const config = loadConfig();
   const state = loadState();
@@ -180,16 +258,15 @@ async function askAdvisor(pi: ExtensionAPI, ctx: any, question: string, scope: s
   const resolved = await resolveModel(ctx, config);
   if (!resolved) return { text: "No model available. Install one via pi config.", error: "no_model" };
 
-  const msgs: Message[] = [
-    { role: "system", content: ADVISOR_SYSTEM },
-    { role: "user", content: [ `Question: ${question}`, scope ? `Scope: ${scope}` : "", includeWork && brief(state) ? `Session:\n${brief(state)}` : "" ].filter(Boolean).join("\n") },
-  ];
+  const msgs = [
+    { role: "user", content: [ `Question: ${question}`, scope ? `Scope: ${scope}` : "", includeWork && brief(state) ? `Session:\n${brief(state)}` : "" ].filter(Boolean).join("\n"), timestamp: new Date().toISOString() },
+  ] as any[];
 
-  const resp = await completeSimple(resolved.model, { systemPrompt: ADVISOR_SYSTEM, messages: msgs }, {
+  const resp = await completeSimple(resolved.model, { systemPrompt: ADVISOR_SYSTEM, messages: msgs as any }, {
     apiKey: resolved.auth.apiKey, headers: resolved.auth.headers,
     maxTokens: 600, reasoning: "medium" as ThinkingLevel,
   });
-  const text = resp.content.filter((b: any) => b.type === "text").map((b: any) => b.text).join("\n").trim() || "(empty)";
+  const text = responseText(resp) || "(empty)";
   if (text && text !== "(empty)") { cache[ck] = text; saveCache(cache); }
   state.advisorCalls++;
   saveState(state);
@@ -201,30 +278,52 @@ async function doReview(pi: ExtensionAPI, ctx: any, trigger: string, delta: stri
   if (config.review === "off") return;
   const state = loadState();
 
-  // light: only on file changes or errors
-  // strict: also review every 3 turns + always on agent_end
-  if (config.review === "light" && !meta.fileChanged && !meta.failed) return;
-  if (config.review === "strict" && !meta.fileChanged && !meta.failed && !meta.isAgentEnd && state.turns % 3 !== 0) return;
+  const phase: AdvisorRouteInput["phase"] = meta.isAgentEnd ? "closeout" : "review";
+  const reviewInput: AdvisorRouteInput = {
+    phase,
+    text: delta || "(none)",
+    brief: brief(state),
+    fileChanged: meta.fileChanged,
+    failed: meta.failed,
+  };
+  const reviewRoute = await classifyRoute(pi, ctx, config, reviewInput);
+  state.router.review = reviewRoute;
+  saveState(state);
 
-  if (!delta && !meta.fileChanged && !meta.failed) return;
+  const effectiveReview = mergeRouteReview(config.review, state.router.preflight?.review);
+  const finalReview = mergeReviewPolicy(effectiveReview, reviewRoute.review);
+  if (finalReview === "off") return;
+
+  const shouldRun =
+    finalReview === "strict"
+      ? meta.isAgentEnd || meta.fileChanged || meta.failed || reviewRoute.label !== "abstain" || state.turns % 3 === 0
+      : meta.fileChanged || meta.failed;
+  if (!shouldRun) return;
+
   const b = brief(state);
   if (!b) return;
 
-  const rk = hash("rev", trigger, b, delta, String(meta.fileChanged), String(meta.failed));
+  const rk = hash("rev", trigger, b, delta, String(meta.fileChanged), String(meta.failed), String(meta.isAgentEnd), String(reviewRoute.label));
   const cache = loadCache();
   if (cache[rk]) return; // already reviewed this
 
   const resolved = await resolveModel(ctx, config);
   if (!resolved) return;
   const msgs = [
-    { role: "system", content: REVIEW_SYSTEM },
-    { role: "user", content: [ `Trigger: ${trigger}`, `Task: ${state.lastTask || "(unknown)"}`, `Delta: ${delta || "(none)"}`, `Files: ${meta.fileChanged} Errors: ${meta.failed}`, `Brief:\n${b}` ].join("\n") },
-  ];
-  const resp = await completeSimple(resolved.model, { systemPrompt: REVIEW_SYSTEM, messages: msgs }, {
+    { role: "user", content: [
+      `Trigger: ${trigger}`,
+      `Task: ${state.lastTask || "(unknown)"}`,
+      `Delta: ${delta || "(none)"}`,
+      `Files: ${meta.fileChanged} Errors: ${meta.failed}`,
+      `Route: ${summarizeRoute(reviewRoute)}`,
+      `Brief:\n${b}`,
+    ].join("\n"), timestamp: new Date().toISOString() },
+  ] as any[];
+  const resp = await completeSimple(resolved.model, { systemPrompt: REVIEW_SYSTEM, messages: msgs as any }, {
     apiKey: resolved.auth.apiKey, headers: resolved.auth.headers,
     maxTokens: 400, reasoning: "low" as ThinkingLevel,
   });
-  const raw = resp.content.filter((b: any) => b.type === "text").map((b: any) => b.text).join("\n").trim();
+  const raw = responseText(resp);
   if (!raw) return;
 
   cache[rk] = raw;
@@ -267,25 +366,32 @@ export function registerAdvisor(pi: ExtensionAPI): void {
     }),
     async execute(_id, params, _signal, onUpdate, ctx) {
       const r = await askAdvisor(pi, ctx, String(params.question || ""), String(params.scope || ""), params.includeRecentWork !== false);
-      onUpdate?.({ content: [{ type: "text", text: r.cached ? "(cached)" : r.model ? `Consulting ${r.model}…` : "" }] });
+      onUpdate?.({ content: [{ type: "text", text: r.cached ? "(cached)" : r.model ? `Consulting ${r.model}…` : "" }], details: {} });
       return { content: [{ type: "text", text: r.text }], details: { cached: r.cached, error: r.error } };
     },
   });
 
   // ── Preflight ──────────────────────────────────────────────────────────
-  pi.on("before_agent_start", (event: any, ctx: any) => {
+  pi.on("before_agent_start", async (event: any, ctx: any) => {
     if (config.mode === "off" || config.mode === "manual") return { systemPrompt: event.systemPrompt };
     const state = loadState();
-    if (typeof event.prompt === "string" && event.prompt.trim()) state.lastTask = squish(event.prompt, 1000);
+    const prompt = typeof event.prompt === "string" && event.prompt.trim() ? squish(event.prompt, 1000) : "";
+    if (prompt) state.lastTask = prompt;
+    const briefText = brief(state);
+    const routeInput: AdvisorRouteInput = { phase: "preflight", text: prompt || event.systemPrompt || "", brief: briefText };
+    const route = await classifyRoute(pi, ctx, config, routeInput);
+    state.router.preflight = route;
     const follow = state.followUp;
-    if (follow) { state.followUp = ""; saveState(state); }
-    const b = brief(state);
+    if (follow) { state.followUp = ""; }
+    saveState(state);
+
+    const note = routeNote(route);
     return {
       systemPrompt: [
         event.systemPrompt,
         follow ? `Advisor follow-up:\n${follow}` : "",
-        PREFLIGHT,
-        b ? `Brief (cache-aware):\n${b}` : "",
+        note,
+        briefText ? `Brief (cache-aware):\n${briefText}` : "",
       ].filter(Boolean).join("\n\n"),
     };
   });
@@ -331,8 +437,10 @@ export function registerAdvisor(pi: ExtensionAPI): void {
       if (!a || cmd === "status") {
         const note = readText(CURRENT_PATH).trim();
         const resolved = await resolveModel(ctx, cfg);
+        const route = state.router.review ?? state.router.preflight;
         ctx.ui.notify([
           note ? `🧭 ${truncate(note, 200)}` : "",
+          route ? `Router: ${summarizeRoute(route)}${route.safety ? " · safety" : ""}` : "",
           "",
           `Mode: ${cfg.mode} | Review: ${cfg.review} | Model: ${resolved?.label || cfg.model || "auto"}`,
           `Turns: ${state.turns} | Calls: ${state.advisorCalls} | Cache hits: ${state.cacheHits}`,
@@ -343,7 +451,7 @@ export function registerAdvisor(pi: ExtensionAPI): void {
         return;
       }
 
-      if (cmd === "on" && cfg.mode === "off") { saveConfig({ ...cfg, mode: "auto" }); ctx.ui.notify("Advisor enabled (auto mode).", "success"); return; }
+      if (cmd === "on" && cfg.mode === "off") { saveConfig({ ...cfg, mode: "auto" }); ctx.ui.notify("Advisor enabled (auto mode).", "info"); return; }
       if (cmd === "off") { saveConfig({ ...cfg, mode: "off" }); ctx.ui.notify("Advisor disabled.", "info"); return; }
       if (cmd === "mode") {
         const v = rest[0];
@@ -376,6 +484,7 @@ export function registerAdvisor(pi: ExtensionAPI): void {
           `  review: "${cfg.review}" — light (changes/errors) | strict (every 3) | off`,
           `  model: "${cfg.model || "auto"}" — optional override`,
           "",
+          "Router logs: evals/advisor-router.jsonl",
           "Run /advisor <question> for immediate advice.",
         ].join("\n"), "info");
         return;

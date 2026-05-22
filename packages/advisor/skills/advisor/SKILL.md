@@ -1,6 +1,6 @@
 ---
 name: advisor
-description: Zero-config strategic advisor for Pi. Auto-detects best model, preflight + post-review + cache. Use for architecture, tradeoffs, planning.
+description: Zero-config strategic advisor for Pi. Auto-detects best model, phase-aware routing, preflight + post-review + cache. Use for architecture, tradeoffs, planning.
 ---
 
 # Advisor
@@ -16,6 +16,8 @@ Works out of the box. Just install and use `/advisor`.
 - `/advisor on|off` — enable/disable
 
 Zero config needed. Falls back through SOTA models (gpt-5.5 → claude-opus-4-6 → sonnet-4-6) automatically.
+
+The router is phase-aware: it keeps tiny edits cheap, escalates complex/high-risk work to SOTA, and writes compact routing logs for future classifier training.
 
 ## When to call
 

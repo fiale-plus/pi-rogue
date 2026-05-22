@@ -22,7 +22,7 @@ describe("normalizeGuardrailsConfig", () => {
   it("normalizes llmReview.enabled to boolean", () => {
     expect(normalizeGuardrailsConfig({ llmReview: { enabled: true } }).llmReview.enabled).toBe(true);
     expect(normalizeGuardrailsConfig({ llmReview: { enabled: false } }).llmReview.enabled).toBe(false);
-    expect(normalizeGuardrailsConfig({ llmReview: {} }).llmReview.enabled).toBe(false);
+    expect(normalizeGuardrailsConfig({ llmReview: {} as any }).llmReview.enabled).toBe(false);
   });
 
   it("deduplicates and trims extra fragments", () => {
