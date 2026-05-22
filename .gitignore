@@ -8,3 +8,8 @@ coverage
 # Autoresearch cycles (generated)
 .autoresearch/
 
+# Routing miner output (generated)
+data/routing/*.jsonl
+data/routing/*.json
+data/routing/*.md
+

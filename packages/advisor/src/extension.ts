@@ -5,6 +5,7 @@ import { Type } from "typebox";
 import { featureFile, readText, truncate, writeText } from "@fiale-plus/pi-core";
 import {
   appendRouteLog,
+  binaryGatePredict,
   heuristicRoute,
   mergeReviewPolicy,
   routeNote,
@@ -346,7 +347,27 @@ export function registerAdvisor(pi: ExtensionAPI): void {
     if (prompt) state.lastTask = prompt;
     const briefText = brief(state);
     const routeInput: AdvisorRouteInput = { phase: "preflight", text: prompt || event.systemPrompt || "", brief: briefText };
-    const route = heuristicRoute(routeInput);
+
+    // Binary gate model — fast local classifier for continue/escalate decisions
+    const gatePrediction = binaryGatePredict(routeInput.text);
+    let route: AdvisorRouteDecision;
+    if (gatePrediction && gatePrediction.confidence >= 0.55) {
+      const binLabel = gatePrediction.decision === "continue" ? "continue" as const : "escalate_to_advisor" as const;
+      const heuristic = heuristicRoute(routeInput);
+      route = {
+        ...heuristic,
+        label: binLabel,
+        confidence: gatePrediction.confidence,
+        reason: gatePrediction.decision === "continue"
+          ? "Binary gate: local classifier predicts continue (no advisor needed)."
+          : "Binary gate: local classifier predicts escalate (advisor recommended).",
+        source: "heuristic",
+        preflight: binLabel === "continue" ? "off" as const : "full" as const,
+        escalate: binLabel === "escalate_to_advisor",
+      };
+    } else {
+      route = heuristicRoute(routeInput);
+    }
     appendRouteLog(route);
     state.router.preflight = route;
     const follow = state.followUp;
