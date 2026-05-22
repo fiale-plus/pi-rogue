@@ -23,6 +23,14 @@ Examples:
 - “set up local package install” → `ops`
 - “continue after compact” → `handoff`
 
+`check` is not a review label by itself. Route by object:
+- “check diff / PR / code / my work” → `review`
+- “check stats / status / logs / config” → `ops`
+- “check why this failed / error / broken flow” → `debugging`
+- “check what this tool is / is it safe / GitHub package” → `research`
+
+Command-like prompts (`run`, `test`, `build`, `deploy`, `status`, `logs`) are `ops` unless the user asks for judgment on the result.
+
 ## Output format
 
 The miner writes JSONL rows:

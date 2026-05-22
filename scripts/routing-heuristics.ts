@@ -12,11 +12,16 @@ export interface RoutingPrediction {
 }
 
 const QUICK_EDIT_RE = /\b(quick edit|small edit|tiny edit|rename|format(?:ting)?|lint|style|doc(?:s)?|comment|typo|readme|spell|spacing|cleanup|one[- ]?liner)\b/i;
-const COMPLEX_RE = /\b(architecture|architectural|refactor|design|trade[- ]?off|concurrency|security|auth|migration|performance|scale|scalability|framework|system design|review|schema|data model|protocol)\b/i;
 const DEBUG_RE = /\b(debug|bug|error|stack trace|traceback|fail(?:ed|ure)?|broken|investigate|why is|cannot|can't|crash)\b/i;
 const CONTEXT_RE = /\b(need more context|missing context|clarify|not enough info|unspecified|unknown|ambiguous)\b/i;
 const OPS_RE = /\b(install|configure|settings?|theme|cmux|ghostty|setup|enable|disable|update|deploy|shell|terminal|environment|path)\b/i;
-const RESEARCH_RE = /\b(research|docs?|documentation|compare|benchmark|look up|find out|what is|how does)\b/i;
+const OPS_COMMAND_RE = /^\s*(?:go run|npm run|pnpm|yarn|bun|cargo|pytest|vitest|make|hermes status|[^\n]{1,80}\b(?:status|stats|logs?|test|tests|build|deploy)\b)\b/i;
+const CHECK_DEBUG_RE = /\bcheck\b[^.!?\n]*(?:why|error|errors|failure|failing|failed|bug|broken|crash|trace|stack|stuck)/i;
+const CHECK_OPS_RE = /\bcheck\b[^.!?\n]*(?:stats?|status|logs?|output|config|settings?|install(?:ation|ed)?|version|env|environment|theme|terminal|model list|provider|api key)/i;
+const CHECK_RESEARCH_RE = /\bcheck(?: on)?\b[^.!?\n]*(?:what is|what's|is it safe|safe to use|tool|library|repo|github|package|model|docs?|documentation|availability|family)/i;
+const CHECK_REVIEW_RE = /\bcheck\b[^.!?\n]*(?:diff|pr|pull request|changes?|code|implementation|patch|branch|work|tests? pass|looks good)/i;
+const REVIEW_RE = /\b(review|pr|pull request|inspect (?:the )?(?:diff|code|changes?|pr)|audit|looks good|approve|merge)\b/i;
+const RESEARCH_RE = /\b(research|docs?|documentation|compare|benchmark|look up|find out|what is|how does|is it safe|safe to use)\b/i;
 const HANDOFF_RE = /\b(\/compact|compact|resume|continue|handoff|pick up|move on|wrap up|carry on)\b/i;
 const PLANNING_RE = /\b(plan|scope|architecture|design|strategy|next step|what should|should we|roadmap)\b/i;
 const IMPLEMENTATION_RE = /\b(implement|build|create|write|add|edit|refactor|change|make|code|script)\b/i;
@@ -53,13 +58,25 @@ export function classifyRoutingText(text: unknown, cwd?: string): RoutingPredict
   if (HANDOFF_RE.test(lower)) {
     return { label: "handoff", confidence: 0.96, reason: classReason("handoff"), source: "explicit" };
   }
+  if (CHECK_DEBUG_RE.test(lower)) {
+    return { label: "debugging", confidence: 0.88, reason: "check/debug signal", source: "heuristic" };
+  }
+  if (CHECK_OPS_RE.test(lower)) {
+    return { label: "ops", confidence: 0.86, reason: "check/ops signal", source: "heuristic" };
+  }
+  if (CHECK_RESEARCH_RE.test(lower)) {
+    return { label: "research", confidence: 0.86, reason: "check/research signal", source: "heuristic" };
+  }
+  if (CHECK_REVIEW_RE.test(lower) || REVIEW_RE.test(lower)) {
+    return { label: "review", confidence: 0.88, reason: classReason("review"), source: "heuristic" };
+  }
   if (RESEARCH_RE.test(lower)) {
     return { label: "research", confidence: 0.85, reason: classReason("research"), source: "heuristic" };
   }
   if (DEBUG_RE.test(lower)) {
     return { label: "debugging", confidence: 0.9, reason: classReason("debugging"), source: "heuristic" };
   }
-  if (OPS_RE.test(lower) || /cmux|ghostty/.test(cwdLower)) {
+  if (OPS_COMMAND_RE.test(raw) || OPS_RE.test(lower) || /cmux|ghostty/.test(cwdLower)) {
     return { label: "ops", confidence: 0.84, reason: classReason("ops"), source: "heuristic" };
   }
   if (PLANNING_RE.test(lower)) {

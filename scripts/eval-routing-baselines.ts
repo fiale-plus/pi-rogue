@@ -107,6 +107,13 @@ function main() {
     predicted: classifyRoutingText(row.text, row.cwd).label || "(none)",
   }));
 
+  const sourceCounts = rows.reduce<Record<string, number>>((acc, row) => {
+    const source = row.confidenceSource || "unknown";
+    acc[source] = (acc[source] || 0) + 1;
+    return acc;
+  }, {});
+  const heuristicLabelShare = (sourceCounts.heuristic || 0) / rows.length;
+
   const report = {
     input: args.input,
     total: rows.length,
@@ -114,6 +121,10 @@ function main() {
     train: train.length,
     test: test.length,
     trainLabel,
+    labelSources: sourceCounts,
+    caveat: heuristicLabelShare > 0.5
+      ? "Most labels are heuristic-generated; heuristic baseline is a rule-consistency sanity check, not independent model quality."
+      : undefined,
     labels: LABELS.reduce<Record<string, number>>((acc, label) => {
       acc[label] = rows.filter((row) => row.label === label).length;
       return acc;
@@ -143,6 +154,7 @@ function main() {
     console.log(`train majority: ${report.trainLabel}`);
     console.log(`majority acc: ${(report.majority.accuracy * 100).toFixed(1)}% (${report.majority.correct}/${report.majority.total})`);
     console.log(`heuristic acc: ${(report.heuristic.accuracy * 100).toFixed(1)}% (${report.heuristic.correct}/${report.heuristic.total})`);
+    if (report.caveat) console.log(`caveat: ${report.caveat}`);
     console.log(`report: ${args.output}`);
     console.log("label counts:");
     for (const label of LABELS) {

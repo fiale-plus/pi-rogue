@@ -1,15 +1,11 @@
 #!/usr/bin/env tsx
 import fs from "node:fs";
 import path from "node:path";
+import { LABELS, classifyRoutingText, type ConfidenceSource, type Label } from "./routing-heuristics.js";
 
 const DEFAULT_HOME = process.env.HOME || process.env.USERPROFILE || "/tmp";
 const DEFAULT_INPUT_DIR = path.join(DEFAULT_HOME, ".pi", "agent", "sessions");
 const DEFAULT_OUTPUT_DIR = path.join(process.cwd(), "data", "routing");
-
-const LABELS = ["planning", "implementation", "debugging", "review", "research", "ops", "handoff"] as const;
-type Label = (typeof LABELS)[number];
-
-type ConfidenceSource = "explicit" | "heuristic";
 
 interface ExampleRow {
   text: string;
@@ -132,24 +128,7 @@ function extractSessionMeta(lines: any[]): SessionMeta {
 }
 
 function classify(text: string, cwd?: string): { label?: Label; confidence: number; reason: string; source: ConfidenceSource } {
-  const t = text.toLowerCase();
-  const c = (cwd || "").toLowerCase();
-
-  const rules: Array<{ label: Label; re: RegExp; reason: string; confidence: number; source: ConfidenceSource }> = [
-    { label: "handoff", re: /\b(\/compact|compact|resume|continue|handoff|pick up|move on|wrap up|carry on)\b/i, reason: "handoff/compact signal", confidence: 0.96, source: "explicit" },
-    { label: "review", re: /\b(review|pr|pull request|check|inspect|audit|looks good|approve|merge)\b/i, reason: "review signal", confidence: 0.92, source: "heuristic" },
-    { label: "debugging", re: /\b(debug|bug|error|fail|failing|broken|stuck|fix(?:ing)?|traceback|investigate)\b/i, reason: "debugging signal", confidence: 0.9, source: "heuristic" },
-    { label: "research", re: /\b(research|docs?|documentation|compare|benchmark|look up|find out|what is|how does)\b/i, reason: "research/question signal", confidence: 0.85, source: "heuristic" },
-    { label: "ops", re: /\b(install|configure|settings?|theme|cmux|ghostty|setup|enable|disable|update|deploy|shell|terminal|environment|path)\b/i, reason: "ops/config signal", confidence: 0.84, source: "heuristic" },
-    { label: "implementation", re: /\b(implement|build|create|write|add|edit|refactor|change|make|code|script)\b/i, reason: "implementation signal", confidence: 0.81, source: "heuristic" },
-    { label: "planning", re: /\b(plan|scope|architecture|design|strategy|next step|what should|should we|roadmap)\b/i, reason: "planning signal", confidence: 0.8, source: "heuristic" },
-  ];
-
-  for (const rule of rules) {
-    if (rule.re.test(t) || (rule.label === "ops" && /cmux|ghostty/.test(c))) return rule;
-  }
-
-  return { confidence: 0.2, reason: "ambiguous", source: "heuristic" };
+  return classifyRoutingText(text, cwd);
 }
 
 function ensureDir(dir: string): void {
