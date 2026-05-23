@@ -370,7 +370,9 @@ export function registerAdvisor(pi: ExtensionAPI): void {
     const prompt = typeof event.prompt === "string" && event.prompt.trim() ? squish(event.prompt, 1000) : "";
     if (prompt) state.lastTask = prompt;
     const briefText = brief(state);
-    const routeInput: AdvisorRouteInput = { phase: "preflight", text: prompt || event.systemPrompt || "", brief: briefText };
+    // Enrich preflight text with session brief so the binary gate has more context
+    const enrichedText = [prompt, event.systemPrompt || "", briefText ? `Brief: ${briefText}` : ""].filter(Boolean).join(" ");
+    const routeInput: AdvisorRouteInput = { phase: "preflight", text: enrichedText || prompt || event.systemPrompt || briefText || "", brief: briefText };
 
     // Binary gate model — fast local classifier for continue/escalate decisions
     const gatePrediction = binaryGatePredict(routeInput.text);
