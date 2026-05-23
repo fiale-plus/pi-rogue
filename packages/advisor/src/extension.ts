@@ -175,6 +175,34 @@ function squish(t: unknown, max = 200): string {
   return s.length <= max ? s : s.slice(0, max - 1).trimEnd() + "…";
 }
 
+/** Extract readable text from message content (handles both string and content-block arrays) */
+function contentText(content: unknown): string {
+  if (typeof content === "string") return content.trim();
+  if (!Array.isArray(content)) return String(content ?? "").trim();
+  const parts: string[] = [];
+  for (const item of content) {
+    if (!item) continue;
+    if (typeof item === "string") { parts.push(item); continue; }
+    const obj = item as Record<string, unknown>;
+    if (obj.type === "text" && typeof obj.text === "string") parts.push(obj.text);
+    else if (typeof obj.text === "string") parts.push(obj.text);
+  }
+  return parts.join("\n").replace(/\s+/g, " ").trim();
+}
+
+/** Check if a tool result or message indicates an actual execution failure */
+function isActualFailure(tool: any): boolean {
+  // Check explicit status/error flags
+  if (tool?.isError === true) return true;
+  if (tool?.status === "error" || tool?.status === "failure") return true;
+  if (tool?.error && String(tool.error).length > 0) return true;
+  // Check tool result output for exception-level signals only
+  const text = String(tool?.result ?? tool?.output ?? tool?.content ?? "").toLowerCase();
+  if (/^error:|^failed:|^exception:|^typeerror:|^referenceerror:/i.test(text)) return true;
+  if (/cannot read property|cannot find module|is not a function|is not defined|unexpected token/i.test(text)) return true;
+  return false;
+}
+
 function responseText(resp: { content?: Array<{ type?: string; text?: string }> } | null | undefined): string {
   return (resp?.content ?? []).filter((b: any) => b?.type === "text").map((b: any) => b.text).join("\n").trim();
 }
@@ -392,7 +420,7 @@ export function registerAdvisor(pi: ExtensionAPI): void {
     state.turns++;
     const tools = (event.toolResults || []).map((t: any) => String(t?.toolName || t?.name || "tool"));
     const fileChanged = tools.some((t: string) => /^(edit|write)$/i.test(t));
-    const failed = tools.some((t: string) => /error|fail/i.test(t));
+    const failed = (event.toolResults || []).some((t: any) => isActualFailure(t));
     const text = squish(event.message?.content || "");
     if (text && text !== state.notes[state.notes.length - 1]) state.notes.push(text);
     saveState(state);
@@ -408,9 +436,9 @@ export function registerAdvisor(pi: ExtensionAPI): void {
     const state = loadState();
     const msgs = (event.messages || []).filter((m: any) => m.role === "assistant" || m.role === "toolResult");
     const last = msgs[msgs.length - 1];
-    const delta = squish(last?.content || "(none)");
+    const delta = contentText(last?.content) || "(none)";
     const fileChanged = msgs.some((m: any) => /(?:write|edit)/i.test(JSON.stringify(m)));
-    const failed = msgs.some((m: any) => /error|fail/i.test(JSON.stringify(m)));
+    const failed = msgs.some((m: any) => isActualFailure(m));
     await doReview(pi, ctx, "agent-end", delta, { fileChanged, failed, isAgentEnd: true });
   });
 
