@@ -1,5 +1,7 @@
 import { createHash } from "node:crypto";
-import { existsSync, readFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, readFileSync, statSync } from "node:fs";
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { appendText, featureFile, truncate } from "@fiale-plus/pi-core";
 
 export type AdvisorPhase = "preflight" | "review" | "closeout";
@@ -43,6 +45,7 @@ const ROUTER_VERSION = 1;
 
 // ── Binary gate model (trained from local session data) ──────────────────
 const BINARY_GATE_PATH = featureFile("advisor", "binary-gate-model.json");
+const BINARY_GATE_SOURCE_PATH = resolve(dirname(fileURLToPath(import.meta.url)), "../../../data/routing/binary-gate-model.json");
 const BINARY_GATE_THRESHOLD = 0.55;
 
 interface BinaryGateModel {
@@ -56,9 +59,25 @@ interface BinaryGateModel {
 
 let _binaryGateCache: BinaryGateModel | null | undefined = undefined;
 
+function ensureBinaryGateSeeded(): void {
+  try {
+    if (!existsSync(BINARY_GATE_SOURCE_PATH)) return;
+    const sourceStat = statSync(BINARY_GATE_SOURCE_PATH);
+    if (existsSync(BINARY_GATE_PATH)) {
+      const installedStat = statSync(BINARY_GATE_PATH);
+      if (installedStat.mtimeMs >= sourceStat.mtimeMs && installedStat.size === sourceStat.size) return;
+    }
+    mkdirSync(dirname(BINARY_GATE_PATH), { recursive: true });
+    copyFileSync(BINARY_GATE_SOURCE_PATH, BINARY_GATE_PATH);
+  } catch {
+    // best effort: if the seed copy fails, fall back to the installed path if present
+  }
+}
+
 function loadBinaryGate(): BinaryGateModel | null {
   if (_binaryGateCache !== undefined) return _binaryGateCache;
   try {
+    ensureBinaryGateSeeded();
     if (!existsSync(BINARY_GATE_PATH)) return null;
     _binaryGateCache = JSON.parse(readFileSync(BINARY_GATE_PATH, "utf8")) as BinaryGateModel;
     if (_binaryGateCache.kind !== "binary-logreg-v1") { _binaryGateCache = null; return null; }
