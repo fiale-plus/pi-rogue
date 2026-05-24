@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { Box, Text } from "@earendil-works/pi-tui";
 import { completeSimple, type ThinkingLevel } from "@earendil-works/pi-ai";
 import { Type } from "typebox";
 import { featureFile, readText, truncate, writeText } from "@fiale-plus/pi-core";
@@ -177,6 +178,49 @@ function squish(t: unknown, max = 200): string {
   return s.length <= max ? s : s.slice(0, max - 1).trimEnd() + "…";
 }
 
+type AdvisorHintDetails = {
+  decision?: "call" | "skip" | "defer";
+  reason?: string;
+  summary?: string;
+  actions?: string[];
+};
+
+function sendAdvisorHint(pi: ExtensionAPI, decision: "call" | "skip" | "defer", reason: string, summary: string, actions: string[] = []) {
+  pi.sendMessage(
+    {
+      customType: "advisor:llm",
+      content: reason,
+      display: true,
+      details: { decision, reason, summary, actions: actions.slice(0, 2) },
+    },
+    { deliverAs: "followUp" },
+  );
+}
+
+function renderAdvisorHint(message: any, options: { expanded?: boolean }, theme: any) {
+  const details = (message?.details ?? {}) as AdvisorHintDetails;
+  const customType = String(message?.customType ?? "advisor:rules");
+  const decision = details.decision ?? "defer";
+  const sourceColor = customType === "advisor:llm" ? "success" : customType === "advisor:model" ? "accent" : "muted";
+  const decisionColor = decision === "call" ? "accent" : decision === "skip" ? "muted" : "dim";
+  const source = theme.bold(theme.fg(sourceColor, `[${customType}]`));
+  const verdict = theme.bold(theme.fg(decisionColor, decision));
+  const glyph = decision === "call" ? "↗" : decision === "defer" ? "…" : "·";
+  const reason = squish(details.reason || contentText(message?.content) || "no extra detail", 180);
+
+  const box = new Box(1, 1, (s: string) => theme.bg("customMessageBg", s));
+  box.addChild(new Text(`${theme.bold(theme.fg(decisionColor, glyph))} ${source} ${verdict} · ${theme.fg("dim", "reason: ")}${reason}`, 0, 0));
+
+  if (options.expanded && details.summary) {
+    box.addChild(new Text(theme.fg("dim", `summary: ${squish(details.summary, 220)}`), 0, 0));
+  }
+  if (options.expanded && details.actions?.length) {
+    box.addChild(new Text(theme.fg("dim", `actions: ${details.actions.map((a) => squish(a, 80)).join(" • ")}`), 0, 0));
+  }
+
+  return box;
+}
+
 /** Extract readable text from message content (handles both string and content-block arrays) */
 function contentText(content: unknown): string {
   if (typeof content === "string") return content.trim();
@@ -350,10 +394,7 @@ async function doReview(pi: ExtensionAPI, ctx: any, trigger: string, delta: stri
   const explanation = (json.reason || reviewRoute.reason || json.summary || "review result").slice(0, 120);
   const display = formatAdvisorDisplay("advisor:llm", decision, explanation);
   writeText(CURRENT_PATH, `${display}\n`);
-  ctx.ui?.notify?.(
-    display,
-    json.verdict === "course_correct" ? "warning" : "info",
-  );
+  sendAdvisorHint(pi, decision, explanation, json.summary || "", json.actions || []);
 
   if (json.verdict !== "on_track") {
     state.followUp = [json.summary, ...(json.actions?.slice(0, 2) || [])].filter(Boolean).join(" — ");
@@ -365,6 +406,10 @@ async function doReview(pi: ExtensionAPI, ctx: any, trigger: string, delta: stri
 
 export function registerAdvisor(pi: ExtensionAPI): void {
   const config = loadConfig();
+
+  for (const customType of ["advisor:model", "advisor:rules", "advisor:llm"] as const) {
+    pi.registerMessageRenderer(customType, renderAdvisorHint);
+  }
 
   // ── Tool ───────────────────────────────────────────────────────────────
   pi.registerTool({

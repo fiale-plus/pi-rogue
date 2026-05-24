@@ -481,7 +481,7 @@ function displayTag(route: AdvisorRouteDecision | AdvisorDisplayTag): AdvisorDis
 
 export function formatAdvisorDisplay(tag: AdvisorDisplayTag, decision: AdvisorDisplayDecision, explanation: string): string {
   const text = squish(explanation || "no extra detail", 140).toLowerCase();
-  return `[${tag}: ${decision}, ${text}]`;
+  return `[${tag}: ${decision}, reason: ${text}]`;
 }
 
 export function routeNote(route: AdvisorRouteDecision): string {
