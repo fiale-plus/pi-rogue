@@ -1,5 +1,5 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { registerAdvisor } from "@fiale-plus/pi-advisor";
+import { registerAdvisor } from "@fiale-plus/pi-rogue-advisor";
 import { registerBrain } from "@fiale-plus/pi-brain";
 import { registerGoal } from "@fiale-plus/pi-goal";
 import { registerGuardrails } from "@fiale-plus/pi-guardrails";

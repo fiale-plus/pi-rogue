@@ -1,4 +1,4 @@
-# @fiale-plus/pi-guardrails
+# PiRogue Guardrails
 
 Shell command risk checks and approvals for Pi.
 

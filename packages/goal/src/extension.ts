@@ -19,7 +19,7 @@ function clearGoal(ctx: any): void {
 }
 
 function goalBlock(goal: string): string {
-  return [`## Fiale Plus Goal`, `Current goal: ${goal}`].join("\n");
+  return [`## PiRogue Goal`, `Current goal: ${goal}`].join("\n");
 }
 
 function historyEntries(): Array<{ at: string; goal: string }> {

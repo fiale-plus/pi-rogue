@@ -1,4 +1,4 @@
-# @fiale-plus/pi-goal
+# PiRogue Goal
 
 Session goal tracking for Pi.
 

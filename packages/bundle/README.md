@@ -1,6 +1,6 @@
-# @fiale-plus/pi
+# @fiale-plus/pi-rogue
 
-Bundle package for the Fiale Plus Pi suite.
+Internal PiRogue bundle for local workspace use.
 
 Install locally from this repo root: `npm install`
 

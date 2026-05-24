@@ -1,5 +1,5 @@
-# @fiale-plus/pi-core
+# PiRogue Core
 
-Shared helpers for the Fiale Plus Pi suite.
+Shared helpers for the PiRogue workspace.
 
 Install locally from this repo root: `npm install`

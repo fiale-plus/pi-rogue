@@ -1,12 +1,13 @@
 {
   "name": "@fiale-plus/pi-core",
   "version": "0.1.0",
-  "description": "Shared helpers for the Fiale Plus Pi suite.",
+  "description": "Shared helpers for the PiRogue workspace.",
   "type": "module",
   "license": "MIT",
   "keywords": [
     "pi-package"
   ],
+  "private": true,
   "main": "./src/index.ts",
   "exports": {
     ".": "./src/index.ts"

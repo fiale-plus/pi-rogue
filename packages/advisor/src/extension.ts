@@ -3,7 +3,7 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Box, Text } from "@earendil-works/pi-tui";
 import { completeSimple, type ThinkingLevel } from "@earendil-works/pi-ai";
 import { Type } from "typebox";
-import { featureFile, readText, truncate, writeText } from "@fiale-plus/pi-core";
+import { featureFile, readText, truncate, writeText } from "./internal.js";
 import {
   appendRouteLog,
   binaryGatePredict,
@@ -391,7 +391,7 @@ async function doReview(pi: ExtensionAPI, ctx: any, trigger: string, delta: stri
     : json.verdict === "course_correct" ? "review"
       : json.verdict === "not_done" ? "review"
         : "defer";
-  const explanation = (json.reason || reviewRoute.reason || json.summary || "review result").slice(0, 120);
+  const explanation = (json.reason || json.summary || "review result").slice(0, 120);
   const display = formatAdvisorDisplay("advisor:llm", decision, explanation);
   writeText(CURRENT_PATH, `${display}\n`);
   sendAdvisorHint(pi, decision, explanation, json.summary || "", json.actions || []);

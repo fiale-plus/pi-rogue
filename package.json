@@ -1,8 +1,8 @@
 {
-  "name": "pi-fiale-plus",
+  "name": "pi-rogue",
   "version": "0.1.0",
   "private": true,
-  "description": "Fiale Plus Pi extensions, skills, and workflow plugins.",
+  "description": "PiRogue advisor extension repo and internal workspaces.",
   "type": "module",
   "workspaces": [
     "packages/*"

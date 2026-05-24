@@ -180,7 +180,7 @@ export function mergeBranch(state: BrainState, sourceBranch: string, targetBranc
 
 export function brainStatus(state: BrainState): string {
   const last = state.lastCommit ? truncate(state.lastCommit.summary, 80) : "no commits yet";
-  return `Brain: ${state.activeBranch} · ${last}`;
+  return `PiRogue Brain: ${state.activeBranch} · ${last}`;
 }
 
 export function brainPrompt(state: BrainState): string {
@@ -189,7 +189,7 @@ export function brainPrompt(state: BrainState): string {
     : "none";
 
   return [
-    "## Fiale Plus Brain",
+    "## PiRogue Brain",
     `Active branch: ${state.activeBranch}`,
     `Last commit: ${last}`,
     `Tracked sessions: ${Object.keys(state.sessions).length}`,
