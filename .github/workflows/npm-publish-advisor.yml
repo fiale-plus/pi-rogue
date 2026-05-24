@@ -43,6 +43,32 @@ jobs:
       - name: Verify publication
         run: |
           set -euo pipefail
+
+          PKG="$(node -p "require('./packages/advisor/package.json').name")"
           VERSION="$(node -p "require('./packages/advisor/package.json').version")"
-          PKG="@fiale-plus/pi-rogue-advisor"
-          npm view "$PKG@$VERSION" version
+          DEADLINE=$((SECONDS + 300))
+          DELAY=5
+          MAX_DELAY=60
+
+          mkdir -p "$RUNNER_TEMP/npm-verify-cache"
+          echo "Verifying $PKG@$VERSION is visible on npm"
+
+          while (( SECONDS < DEADLINE )); do
+            SEEN="$(npm view "$PKG@$VERSION" version --registry=https://registry.npmjs.org/ --prefer-online --cache="$RUNNER_TEMP/npm-verify-cache" 2>/dev/null || true)"
+            if [[ "$SEEN" == "$VERSION" ]]; then
+              echo "Published $VERSION verified"
+              exit 0
+            fi
+
+            REMAINING=$((DEADLINE - SECONDS))
+            SLEEP_FOR=$(( DELAY < REMAINING ? DELAY : REMAINING ))
+            echo "Not visible yet; retrying in ${SLEEP_FOR}s..."
+            sleep "$SLEEP_FOR"
+            DELAY=$(( DELAY * 2 ))
+            if (( DELAY > MAX_DELAY )); then
+              DELAY=$MAX_DELAY
+            fi
+          done
+
+          echo "Timed out waiting for $PKG@$VERSION to appear on npm"
+          exit 1
