@@ -449,23 +449,23 @@ export function appendRouteLog(route: AdvisorRouteDecision): void {
   appendText(ROUTER_LOG_PATH, `${JSON.stringify(routeLogEntry(route))}\n`);
 }
 
-export type AdvisorDisplayDecision = "call" | "skip" | "defer";
+export type AdvisorDisplayDecision = "continue" | "review" | "defer";
 export type AdvisorDisplayTag = "advisor:model" | "advisor:rules" | "advisor:llm";
 
 function displayDecision(route: AdvisorRouteDecision): AdvisorDisplayDecision {
   if (route.phase === "preflight") {
     switch (route.label as PreflightLabel) {
-      case "continue": return "skip";
-      case "escalate_to_advisor": return "call";
+      case "continue": return "continue";
+      case "escalate_to_advisor": return "review";
       case "need_more_context": return "defer";
       case "low_confidence": return "defer";
     }
   }
 
   switch (route.label as ReviewLabel) {
-    case "on_track": return "skip";
-    case "course_correct": return "call";
-    case "not_done": return "call";
+    case "on_track": return "continue";
+    case "course_correct": return "review";
+    case "not_done": return "review";
     case "abstain": return "defer";
   }
 }
@@ -489,16 +489,16 @@ export function routeNote(route: AdvisorRouteDecision): string {
     ? route.label === "continue"
       ? "routine work can continue without advisor attention"
       : route.label === "escalate_to_advisor"
-        ? "complex or high-risk work needs advisor help"
+        ? "complex or high-risk work needs advisor review"
         : route.label === "need_more_context"
           ? "more context is needed before routing confidently"
           : "signal is mixed, so defer the decision"
     : route.label === "on_track"
       ? "work looks on track and can continue"
       : route.label === "course_correct"
-        ? "work is progressing but needs adjustment"
+        ? "work is progressing but needs review"
         : route.label === "not_done"
-          ? "work is incomplete or failing"
+          ? "work is incomplete or failing and needs review"
           : "review signal is too weak to decide");
   return formatAdvisorDisplay(displayTag(route), displayDecision(route), explanation);
 }

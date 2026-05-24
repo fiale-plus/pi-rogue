@@ -179,13 +179,13 @@ function squish(t: unknown, max = 200): string {
 }
 
 type AdvisorHintDetails = {
-  decision?: "call" | "skip" | "defer";
+  decision?: "continue" | "review" | "defer";
   reason?: string;
   summary?: string;
   actions?: string[];
 };
 
-function sendAdvisorHint(pi: ExtensionAPI, decision: "call" | "skip" | "defer", reason: string, summary: string, actions: string[] = []) {
+function sendAdvisorHint(pi: ExtensionAPI, decision: "continue" | "review" | "defer", reason: string, summary: string, actions: string[] = []) {
   pi.sendMessage(
     {
       customType: "advisor:llm",
@@ -202,10 +202,10 @@ function renderAdvisorHint(message: any, options: { expanded?: boolean }, theme:
   const customType = String(message?.customType ?? "advisor:rules");
   const decision = details.decision ?? "defer";
   const sourceColor = customType === "advisor:llm" ? "success" : customType === "advisor:model" ? "accent" : "muted";
-  const decisionColor = decision === "call" ? "accent" : decision === "skip" ? "muted" : "dim";
+  const decisionColor = decision === "review" ? "accent" : decision === "continue" ? "muted" : "dim";
   const source = theme.bold(theme.fg(sourceColor, `[${customType}]`));
   const verdict = theme.bold(theme.fg(decisionColor, decision));
-  const glyph = decision === "call" ? "↗" : decision === "defer" ? "…" : "·";
+  const glyph = decision === "review" ? "↗" : decision === "defer" ? "…" : "·";
   const reason = squish(details.reason || contentText(message?.content) || "no extra detail", 180);
 
   const box = new Box(1, 1, (s: string) => theme.bg("customMessageBg", s));
@@ -331,8 +331,8 @@ async function doReview(pi: ExtensionAPI, ctx: any, trigger: string, delta: stri
       ...reviewHeuristic,
       source: "model",
       reason: gatePrediction.decision === "continue"
-        ? "Binary gate: local classifier predicts continue (skip review)."
-        : "Binary gate: local classifier predicts escalate (advisor review recommended).",
+        ? "local gate predicts continue"
+        : "local gate predicts review",
       review: binLabel === "continue" ? "off" as const : reviewHeuristic.review,
       escalate: binLabel === "escalate_to_advisor",
     };
@@ -387,9 +387,9 @@ async function doReview(pi: ExtensionAPI, ctx: any, trigger: string, delta: stri
 
   if (json.verdict === "on_track" && json.notify !== true) return;
   if (json.verdict === "skip") return;
-  const decision = json.verdict === "on_track" ? "skip"
-    : json.verdict === "course_correct" ? "call"
-      : json.verdict === "not_done" ? "call"
+  const decision = json.verdict === "on_track" ? "continue"
+    : json.verdict === "course_correct" ? "review"
+      : json.verdict === "not_done" ? "review"
         : "defer";
   const explanation = (json.reason || reviewRoute.reason || json.summary || "review result").slice(0, 120);
   const display = formatAdvisorDisplay("advisor:llm", decision, explanation);
@@ -457,8 +457,8 @@ export function registerAdvisor(pi: ExtensionAPI): void {
           label: binLabel,
           confidence: gatePrediction.confidence,
           reason: gatePrediction.decision === "continue"
-            ? "Binary gate: local classifier predicts continue (no advisor needed)."
-            : "Binary gate: local classifier predicts escalate (advisor recommended).",
+            ? "local gate predicts continue"
+            : "local gate predicts review",
           source: "model",
           preflight: binLabel === "continue" ? "off" as const : "full" as const,
           escalate: binLabel === "escalate_to_advisor",

@@ -12,7 +12,7 @@ describe("advisor router heuristics", () => {
     expect(route.escalate).toBe(false);
     expect(route.safety).toBe(false);
     expect(shouldQueryClassifier(route)).toBe(false);
-    expect(routeNote(route)).toMatch(/^\[advisor:rules: skip, reason: [a-z0-9 ,.'-]+\]$/);
+    expect(routeNote(route)).toMatch(/^\[advisor:rules: continue, reason: [a-z0-9 ,.'-]+\]$/);
   });
 
   it("escalates complex architecture work", () => {
@@ -24,7 +24,7 @@ describe("advisor router heuristics", () => {
     expect(route.review).toBe("light");
     expect(route.escalate).toBe(true);
     expect(summarizeRoute(route)).toContain("preflight:escalate_to_advisor");
-    expect(routeNote(route)).toMatch(/^\[advisor:rules: call, reason: [a-z0-9 ,.'-]+\]$/);
+    expect(routeNote(route)).toMatch(/^\[advisor:rules: review, reason: [a-z0-9 ,.'-]+\]$/);
   });
 
   it("escalates strategy and decision prompts", () => {
@@ -33,7 +33,7 @@ describe("advisor router heuristics", () => {
 
     expect(route.label).toBe("escalate_to_advisor");
     expect(route.escalate).toBe(true);
-    expect(routeNote(route)).toMatch(/^\[advisor:rules: call, reason: [a-z0-9 ,.'-]+\]$/);
+    expect(routeNote(route)).toMatch(/^\[advisor:rules: review, reason: [a-z0-9 ,.'-]+\]$/);
   });
 
   it("flags safety-sensitive prompts", () => {
@@ -42,7 +42,7 @@ describe("advisor router heuristics", () => {
 
     expect(route.safety).toBe(true);
     expect(route.label).toBe("escalate_to_advisor");
-    expect(routeNote(route)).toMatch(/^\[advisor:rules: call, reason: [a-z0-9 ,.'-]+\]$/);
+    expect(routeNote(route)).toMatch(/^\[advisor:rules: review, reason: [a-z0-9 ,.'-]+\]$/);
   });
 
   it("reviews incomplete work as not done", () => {
@@ -52,7 +52,7 @@ describe("advisor router heuristics", () => {
     expect(route.label).toBe("not_done");
     expect(route.review).toBe("strict");
     expect(route.escalate).toBe(true);
-    expect(routeNote(route)).toMatch(/^\[advisor:rules: call, reason: [a-z0-9 ,.'-]+\]$/);
+    expect(routeNote(route)).toMatch(/^\[advisor:rules: review, reason: [a-z0-9 ,.'-]+\]$/);
   });
 
   it("abstains when review signal is weak", () => {
@@ -69,10 +69,10 @@ describe("advisor router heuristics", () => {
     const input: AdvisorRouteInput = { phase: "preflight", text: "what would you choose as a strategy for this decision" };
     const route = { ...heuristicRoute(input), source: "model" as const };
 
-    expect(routeNote(route)).toMatch(/^\[advisor:model: call, reason: [a-z0-9 ,.'-]+\]$/);
+    expect(routeNote(route)).toMatch(/^\[advisor:model: review, reason: [a-z0-9 ,.'-]+\]$/);
   });
 
   it("formats llm advisor messages with the llm tag", () => {
-    expect(formatAdvisorDisplay("advisor:llm", "call", "All set and reviewed")).toBe("[advisor:llm: call, reason: all set and reviewed]");
+    expect(formatAdvisorDisplay("advisor:llm", "review", "All set and reviewed")).toBe("[advisor:llm: review, reason: all set and reviewed]");
   });
 });
