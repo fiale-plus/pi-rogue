@@ -1,11 +1,13 @@
 import { createHash } from "node:crypto";
-import { existsSync, readFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, readFileSync, statSync } from "node:fs";
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { appendText, featureFile, truncate } from "@fiale-plus/pi-core";
 
 export type AdvisorPhase = "preflight" | "review" | "closeout";
 export type PreflightLabel = "continue" | "escalate_to_advisor" | "need_more_context" | "low_confidence";
 export type ReviewLabel = "on_track" | "course_correct" | "not_done" | "abstain";
-export type RouterSource = "heuristic" | "llm";
+export type RouterSource = "heuristic" | "model" | "llm";
 export type PreflightPolicy = "off" | "light" | "full" | "direct";
 export type ReviewPolicy = "off" | "light" | "strict";
 
@@ -43,6 +45,7 @@ const ROUTER_VERSION = 1;
 
 // ── Binary gate model (trained from local session data) ──────────────────
 const BINARY_GATE_PATH = featureFile("advisor", "binary-gate-model.json");
+const BINARY_GATE_SOURCE_PATH = resolve(dirname(fileURLToPath(import.meta.url)), "../assets/binary-gate-model.json");
 const BINARY_GATE_THRESHOLD = 0.55;
 
 interface BinaryGateModel {
@@ -56,9 +59,25 @@ interface BinaryGateModel {
 
 let _binaryGateCache: BinaryGateModel | null | undefined = undefined;
 
+function ensureBinaryGateSeeded(): void {
+  try {
+    if (!existsSync(BINARY_GATE_SOURCE_PATH)) return;
+    const sourceStat = statSync(BINARY_GATE_SOURCE_PATH);
+    if (existsSync(BINARY_GATE_PATH)) {
+      const installedStat = statSync(BINARY_GATE_PATH);
+      if (installedStat.mtimeMs >= sourceStat.mtimeMs && installedStat.size === sourceStat.size) return;
+    }
+    mkdirSync(dirname(BINARY_GATE_PATH), { recursive: true });
+    copyFileSync(BINARY_GATE_SOURCE_PATH, BINARY_GATE_PATH);
+  } catch {
+    // best effort: if the seed copy fails, fall back to the installed path if present
+  }
+}
+
 function loadBinaryGate(): BinaryGateModel | null {
   if (_binaryGateCache !== undefined) return _binaryGateCache;
   try {
+    ensureBinaryGateSeeded();
     if (!existsSync(BINARY_GATE_PATH)) return null;
     _binaryGateCache = JSON.parse(readFileSync(BINARY_GATE_PATH, "utf8")) as BinaryGateModel;
     if (_binaryGateCache.kind !== "binary-logreg-v1") { _binaryGateCache = null; return null; }
@@ -136,12 +155,18 @@ export function binaryGatePredict(text: string): { decision: "continue" | "escal
 }
 
 const QUICK_EDIT_RE = /\b(quick edit|small edit|tiny edit|rename|format(?:ting)?|lint|style|doc(?:s)?|comment|typo|readme|spell|spacing|cleanup|one[- ]?liner)\b/i;
-const COMPLEX_RE = /\b(architecture|architectural|refactor|design|trade[- ]?off|concurrency|security|auth|migration|performance|scale|scalability|framework|system design|review|schema|data model|protocol)\b/i;
-const DEBUG_RE = /\b(debug|bug|error|stack trace|traceback|fail(?:ed|ure)?|broken|investigate|why is|cannot|can't|crash)\b/i;
+const ROUTINE_CLEANUP_RE = /\b(routine docs?|docs? and formatting|formatting cleanup|generated changes|large diff|docs?\/formatting)\b/i;
+const COMPLEX_RE = /\b(architecture|architectural|refactor|design|trade[- ]?off|concurrency|security|auth|migration|performance|scale|scalability|framework|system design|schema|data model|protocol|advisor routing|advisor flow|router logic|call vs skip|skip vs call|compare|recommend|benchmark|evaluate|experiment|train|strategy|choose|make sense|worth(?: it)?|kpi|kpis|how it works|where it comes from|what would you choose|what do you think|next step|pick between|buy|usage|sustained speed|available models|running model kpis)\b/i;
+const DEBUG_RE = /\b(debug|bug|error|stack trace|traceback|fail(?:ed|ure)?|broken|investigate|why is|cannot|can't|crash|regression)\b/i;
 const CONTEXT_RE = /\b(need more context|missing context|clarify|not enough info|unspecified|unknown|ambiguous)\b/i;
 const SAFETY_RE = /\b(rm\s+-rf|sudo\b|shutdown\b|reboot\b|mkfs(?:\.[\w-]+)?\b|chmod\s+-R\b|chown\b|git\s+push\b[\s\S]*--force(?:-with-lease)?|curl\b[\s\S]*\|\s*(?:sh|bash)\b|wget\b[\s\S]*\|\s*(?:sh|bash)\b|drop\s+table\b|delete\s+database\b|secret\b|token\b|credential\b|password\b)\b/i;
+const COMPACTION_RE = /\b(compact(?:ed|ion)?|missing history|history might flip|prior constraint|resume(?:d)? after compaction)\b/i;
+const REASSURANCE_RE = /\b(reassurance|confidence|increase confidence|already know the likely answer|just for reassurance|main model already gives a solid answer|solid answer)\b/i;
+const CHECKPOINT_RE = /\b(checkpoint|multi-step implementation|clearer boundary|interrupt now|wait until there is a clearer boundary|mid implementation)\b/i;
+const CHEAP_SIGNAL_RE = /\b(cheap extra signal|exact diff plus exact error|exact diff|exact error|recent error in the session history|recent history)\b/i;
+const CLOSEOUT_RE = /\b(closeout|on[- ]?track|course[- ]?correct|not[- ]?done|should this be marked|mostly done|mostly complete|needs changes before closeout|needs changes|needs correction|review judgment)\b/i;
+const REVIEW_NEEDS_WORK_RE = /\b(todo|wip|incomplete|missing|broken|fails?|error|bug|revise|adjust|fix(?:ed)?\s+needed|not done|still open|needs changes|needs correction|course[- ]?correct)\b/i;
 const DONE_RE = /\b(done|complete(?:d)?|fixed|implemented|works?|passing tests?|tests pass|verified|looks good|merged)\b/i;
-const NEEDS_WORK_RE = /\b(todo|wip|incomplete|missing|broken|fails?|error|bug|revise|adjust|fix(?:ed)?\s+needed|not done|still open)\b/i;
 
 function squish(text: unknown, max = 220): string {
   const value = String(text ?? "").replace(/\s+/g, " ").trim();
@@ -196,8 +221,32 @@ function hasQuickEditSignal(text: string): boolean {
   return QUICK_EDIT_RE.test(text);
 }
 
+function hasRoutineCleanupSignal(text: string): boolean {
+  return ROUTINE_CLEANUP_RE.test(text);
+}
+
 function hasComplexSignal(text: string): boolean {
   return COMPLEX_RE.test(text) || DEBUG_RE.test(text);
+}
+
+function hasCompactionLowRiskSignal(text: string): boolean {
+  return COMPACTION_RE.test(text) && /\blow[- ]?risk\b/i.test(text);
+}
+
+function hasReassuranceOnlySignal(text: string): boolean {
+  return REASSURANCE_RE.test(text) && !/\b(material|flip|decision|risk|uncertain|flip the decision)\b/i.test(text);
+}
+
+function hasCheckpointSignal(text: string): boolean {
+  return CHECKPOINT_RE.test(text) && !/\b(risky|security|irreversible|unknown dependency|hidden dependency)\b/i.test(text);
+}
+
+function hasCheapSignalMaterialSignal(text: string): boolean {
+  return CHEAP_SIGNAL_RE.test(text) && /\b(materially|flip the decision|decision-changing|materially changes|could change|main model is useless|main model already gives a solid answer|solid answer)\b/i.test(text);
+}
+
+function hasCheapSignalIrrelevantSignal(text: string): boolean {
+  return CHEAP_SIGNAL_RE.test(text) && /\b(should not change|shouldn'?t change|not materially|already gives a solid answer|solid answer)\b/i.test(text);
 }
 
 function needsContext(text: string): boolean {
@@ -209,7 +258,10 @@ function reviewSignals(input: AdvisorRouteInput): { label: ReviewLabel; confiden
   if (input.failed) {
     return { label: "not_done", confidence: 0.95, reason: "Turn reported failure." };
   }
-  if (NEEDS_WORK_RE.test(text)) {
+  if (input.phase === "closeout" && CLOSEOUT_RE.test(text)) {
+    return { label: /\bnot[- ]?done\b/i.test(text) ? "not_done" : "course_correct", confidence: 0.86, reason: "Closeout judgment requested." };
+  }
+  if (REVIEW_NEEDS_WORK_RE.test(text)) {
     return { label: /\b(not done|incomplete|wip|todo|still open)\b/i.test(text) ? "not_done" : "course_correct", confidence: 0.83, reason: "Needs-work signal detected." };
   }
   if (input.fileChanged && DONE_RE.test(text)) {
@@ -226,8 +278,17 @@ function preflightSignals(input: AdvisorRouteInput): { label: PreflightLabel; co
   if (isSafetySensitive(text)) {
     return { label: "escalate_to_advisor", confidence: 0.98, reason: "Safety-sensitive keywords detected.", safety: true };
   }
-  if (hasQuickEditSignal(text) && !hasComplexSignal(text)) {
-    return { label: "continue", confidence: 0.9, reason: "Small-edit signal detected.", safety: false };
+  if (hasRoutineCleanupSignal(text) || (hasQuickEditSignal(text) && !hasComplexSignal(text))) {
+    return { label: "continue", confidence: 0.9, reason: "Small-edit or routine-cleanup signal detected.", safety: false };
+  }
+  if (hasCompactionLowRiskSignal(text)) {
+    return { label: "continue", confidence: 0.84, reason: "Low-risk compaction boundary; advisor not needed.", safety: false };
+  }
+  if (hasReassuranceOnlySignal(text) || hasCheckpointSignal(text) || hasCheapSignalIrrelevantSignal(text)) {
+    return { label: "continue", confidence: 0.82, reason: "Main model should handle this without advisor.", safety: false };
+  }
+  if (hasCheapSignalMaterialSignal(text) || /\b(advisor-router|advisor flow|advisor routing|router logic|call vs skip|skip vs call|compare|recommend|benchmark|evaluate|experiment|train|research)\b/i.test(text)) {
+    return { label: "escalate_to_advisor", confidence: 0.88, reason: "Advisor-specific or decision-changing work detected.", safety: false };
   }
   if (hasComplexSignal(text)) {
     return { label: "escalate_to_advisor", confidence: 0.88, reason: "Complex or high-uncertainty work detected.", safety: false };
@@ -388,22 +449,58 @@ export function appendRouteLog(route: AdvisorRouteDecision): void {
   appendText(ROUTER_LOG_PATH, `${JSON.stringify(routeLogEntry(route))}\n`);
 }
 
-export function routeNote(route: AdvisorRouteDecision): string {
+export type AdvisorDisplayDecision = "call" | "skip" | "defer";
+export type AdvisorDisplayTag = "advisor:model" | "advisor:rules" | "advisor:llm";
+
+function displayDecision(route: AdvisorRouteDecision): AdvisorDisplayDecision {
   if (route.phase === "preflight") {
     switch (route.label as PreflightLabel) {
-      case "continue": return "";
-      case "escalate_to_advisor": return "Advisor router: complex/high-risk work detected — call /advisor if you need SOTA guidance.";
-      case "need_more_context": return "Advisor router: ask for the missing details before proceeding.";
-      case "low_confidence": return "Advisor router: low confidence — proceed cautiously and consult /advisor if needed.";
+      case "continue": return "skip";
+      case "escalate_to_advisor": return "call";
+      case "need_more_context": return "defer";
+      case "low_confidence": return "defer";
     }
   }
 
   switch (route.label as ReviewLabel) {
-    case "on_track": return "";
-    case "course_correct": return "Advisor review: course correction needed before closing this out.";
-    case "not_done": return "Advisor review: work appears incomplete — do not mark as done yet.";
-    case "abstain": return "";
+    case "on_track": return "skip";
+    case "course_correct": return "call";
+    case "not_done": return "call";
+    case "abstain": return "defer";
   }
+}
+
+function displayTag(route: AdvisorRouteDecision | AdvisorDisplayTag): AdvisorDisplayTag {
+  if (typeof route === "string") return route;
+  switch (route.source) {
+    case "model": return "advisor:model";
+    case "llm": return "advisor:llm";
+    default: return "advisor:rules";
+  }
+}
+
+export function formatAdvisorDisplay(tag: AdvisorDisplayTag, decision: AdvisorDisplayDecision, explanation: string): string {
+  const text = squish(explanation || "no extra detail", 140).toLowerCase();
+  return `[${tag}: ${decision}, ${text}]`;
+}
+
+export function routeNote(route: AdvisorRouteDecision): string {
+  const explanation = route.reason || (route.phase === "preflight"
+    ? route.label === "continue"
+      ? "routine work can continue without advisor attention"
+      : route.label === "escalate_to_advisor"
+        ? "complex or high-risk work needs advisor help"
+        : route.label === "need_more_context"
+          ? "more context is needed before routing confidently"
+          : "signal is mixed, so defer the decision"
+    : route.label === "on_track"
+      ? "work looks on track and can continue"
+      : route.label === "course_correct"
+        ? "work is progressing but needs adjustment"
+        : route.label === "not_done"
+          ? "work is incomplete or failing"
+          : "review signal is too weak to decide");
+  return formatAdvisorDisplay(displayTag(route), displayDecision(route), explanation);
 }
 
 export function mergeReviewPolicy(base: ReviewPolicy, route: ReviewPolicy): ReviewPolicy {
