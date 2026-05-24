@@ -1,12 +1,13 @@
 {
   "name": "@fiale-plus/pi-guardrails",
   "version": "0.1.0",
-  "description": "Command-risk guardrails for Pi.",
+  "description": "Command-risk guardrails for PiRogue.",
   "type": "module",
   "license": "MIT",
   "keywords": [
     "pi-package"
   ],
+  "private": true,
   "main": "./src/index.ts",
   "exports": {
     ".": "./src/index.ts"

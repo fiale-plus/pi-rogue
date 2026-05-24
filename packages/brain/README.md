@@ -1,4 +1,4 @@
-# @fiale-plus/pi-brain
+# PiRogue Brain
 
 Local project memory for Pi.
 

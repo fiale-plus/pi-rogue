@@ -1,37 +1,34 @@
-# pi-fiale-plus
+# PiRogue
 
-Fiale Plus Pi extensions, skills, and workflow plugins.
+[![CI](https://github.com/fiale-plus/pi-rogue/actions/workflows/check.yml/badge.svg?branch=main)](https://github.com/fiale-plus/pi-rogue/actions/workflows/check.yml)
+[![npm](https://img.shields.io/npm/v/%40fiale-plus%2Fpi-rogue-advisor?logo=npm)](https://www.npmjs.com/package/@fiale-plus/pi-rogue-advisor)
 
-## Packages
+PiRogue is an advisor-first Pi extension repo. **Only the advisor package is public right now**; everything else is internal workspace code for later.
 
-- `@fiale-plus/pi` — bundle install for the full suite
-- `@fiale-plus/pi-advisor` — phase-aware strategic advisor and advisor-coach replacement (SOTA escalation: gpt-5.5, claude-opus-4-6)
-- `@fiale-plus/pi-goal` — session goal tracking
-- `@fiale-plus/pi-guardrails` — shell risk checks and approvals with optional LLM review
-- `@fiale-plus/pi-brain` — local project memory with branch tracking
-- `@fiale-plus/pi-repo-arch` — repo-arch CLI integration bridge
-- `@fiale-plus/pi-core` — shared helpers
+## Published package
+
+- `@fiale-plus/pi-rogue-advisor` — phase-aware strategic advisor and advisor-coach replacement (SOTA escalation: gpt-5.5, claude-opus-4-6)
 
 ## Install (local checkout)
 
-This repo is not published yet. Use the local workspace checkout:
+This repo is not published as a bundle yet. Use the local workspace checkout:
 
 ```bash
 npm install
 ```
 
-If you only want specific workspaces while developing:
+If you only want the advisor workspace while developing:
 
 ```bash
-npm install --workspace packages/advisor --workspace packages/goal
+npm install --workspace packages/advisor
 ```
 
 ## Repo layout
 
 ```txt
 packages/
-  core/
   advisor/
+  core/
   goal/
   guardrails/
   brain/
@@ -40,7 +37,7 @@ packages/
 .autoresearch/     # optimization cycles (test coverage, quality)
 ```
 
-Each feature package can be installed on its own, or through the bundle.
+The published surface is advisor-only for now. Bundle/umbrella packaging may come later.
 
 If you’re migrating from advisor-coach, wire the local `packages/advisor` workspace in and remove the old package.
 

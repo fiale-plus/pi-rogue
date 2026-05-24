@@ -1,12 +1,13 @@
 {
   "name": "@fiale-plus/pi-goal",
   "version": "0.1.0",
-  "description": "Session goal tracking extension for Pi.",
+  "description": "Session goal tracking extension for PiRogue.",
   "type": "module",
   "license": "MIT",
   "keywords": [
     "pi-package"
   ],
+  "private": true,
   "main": "./src/index.ts",
   "exports": {
     ".": "./src/index.ts"

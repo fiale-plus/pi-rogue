@@ -1,12 +1,13 @@
 {
-  "name": "@fiale-plus/pi",
+  "name": "@fiale-plus/pi-rogue",
   "version": "0.1.0",
-  "description": "Bundle package for the Fiale Plus Pi suite.",
+  "description": "Internal PiRogue bundle for local workspace use.",
   "type": "module",
   "license": "MIT",
   "keywords": [
     "pi-package"
   ],
+  "private": true,
   "main": "./src/index.ts",
   "exports": {
     ".": "./src/index.ts"
@@ -20,7 +21,7 @@
     "@earendil-works/pi-coding-agent": "^0.74.0"
   },
   "dependencies": {
-    "@fiale-plus/pi-advisor": "^0.1.0",
+    "@fiale-plus/pi-rogue-advisor": "^0.1.0",
     "@fiale-plus/pi-brain": "^0.1.0",
     "@fiale-plus/pi-goal": "^0.1.0",
     "@fiale-plus/pi-guardrails": "^0.1.0",

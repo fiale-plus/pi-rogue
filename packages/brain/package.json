@@ -1,12 +1,13 @@
 {
   "name": "@fiale-plus/pi-brain",
   "version": "0.1.0",
-  "description": "Local memory extension for Pi.",
+  "description": "Local memory extension for PiRogue.",
   "type": "module",
   "license": "MIT",
   "keywords": [
     "pi-package"
   ],
+  "private": true,
   "main": "./src/index.ts",
   "exports": {
     ".": "./src/index.ts"
