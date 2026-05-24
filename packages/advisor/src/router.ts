@@ -45,10 +45,7 @@ const ROUTER_VERSION = 1;
 
 // ── Binary gate model (trained from local session data) ──────────────────
 const BINARY_GATE_PATH = featureFile("advisor", "binary-gate-model.json");
-const BINARY_GATE_SOURCE_PATHS = [
-  resolve(dirname(fileURLToPath(import.meta.url)), "../assets/binary-gate-model.json"),
-  resolve(dirname(fileURLToPath(import.meta.url)), "../../../data/routing/binary-gate-model.json"),
-];
+const BINARY_GATE_SOURCE_PATH = resolve(dirname(fileURLToPath(import.meta.url)), "../assets/binary-gate-model.json");
 const BINARY_GATE_THRESHOLD = 0.55;
 
 interface BinaryGateModel {
@@ -64,15 +61,14 @@ let _binaryGateCache: BinaryGateModel | null | undefined = undefined;
 
 function ensureBinaryGateSeeded(): void {
   try {
-    const sourcePath = BINARY_GATE_SOURCE_PATHS.find((p) => existsSync(p));
-    if (!sourcePath) return;
-    const sourceStat = statSync(sourcePath);
+    if (!existsSync(BINARY_GATE_SOURCE_PATH)) return;
+    const sourceStat = statSync(BINARY_GATE_SOURCE_PATH);
     if (existsSync(BINARY_GATE_PATH)) {
       const installedStat = statSync(BINARY_GATE_PATH);
       if (installedStat.mtimeMs >= sourceStat.mtimeMs && installedStat.size === sourceStat.size) return;
     }
     mkdirSync(dirname(BINARY_GATE_PATH), { recursive: true });
-    copyFileSync(sourcePath, BINARY_GATE_PATH);
+    copyFileSync(BINARY_GATE_SOURCE_PATH, BINARY_GATE_PATH);
   } catch {
     // best effort: if the seed copy fails, fall back to the installed path if present
   }
@@ -454,7 +450,7 @@ export function appendRouteLog(route: AdvisorRouteDecision): void {
 }
 
 export type AdvisorDisplayDecision = "call" | "skip" | "defer";
-export type AdvisorDisplayTag = "advisor:rules" | "advisor:llm";
+export type AdvisorDisplayTag = "advisor:model" | "advisor:rules" | "advisor:llm";
 
 function displayDecision(route: AdvisorRouteDecision): AdvisorDisplayDecision {
   if (route.phase === "preflight") {
@@ -477,6 +473,7 @@ function displayDecision(route: AdvisorRouteDecision): AdvisorDisplayDecision {
 function displayTag(route: AdvisorRouteDecision | AdvisorDisplayTag): AdvisorDisplayTag {
   if (typeof route === "string") return route;
   switch (route.source) {
+    case "model": return "advisor:model";
     case "llm": return "advisor:llm";
     default: return "advisor:rules";
   }

@@ -12,6 +12,7 @@ describe("advisor router heuristics", () => {
     expect(route.escalate).toBe(false);
     expect(route.safety).toBe(false);
     expect(shouldQueryClassifier(route)).toBe(false);
+    expect(routeNote(route)).toMatch(/^\[advisor:rules: skip, [a-z0-9 ,.'-]+\]$/);
   });
 
   it("escalates complex architecture work", () => {
@@ -24,7 +25,6 @@ describe("advisor router heuristics", () => {
     expect(route.escalate).toBe(true);
     expect(summarizeRoute(route)).toContain("preflight:escalate_to_advisor");
     expect(routeNote(route)).toMatch(/^\[advisor:rules: call, [a-z0-9 ,.'-]+\]$/);
-    expect(routeNote(route)).toBe(routeNote(route).toLowerCase());
   });
 
   it("escalates strategy and decision prompts", () => {
@@ -63,7 +63,13 @@ describe("advisor router heuristics", () => {
     expect(route.review).toBe("off");
     expect(shouldQueryClassifier(route)).toBe(true);
     expect(routeNote(route)).toMatch(/^\[advisor:rules: defer, [a-z0-9 ,.'-]+\]$/);
-    expect(routeNote(route)).toBe(routeNote(route).toLowerCase());
+  });
+
+  it("tags model-routed notes explicitly", () => {
+    const input: AdvisorRouteInput = { phase: "preflight", text: "what would you choose as a strategy for this decision" };
+    const route = { ...heuristicRoute(input), source: "model" as const };
+
+    expect(routeNote(route)).toMatch(/^\[advisor:model: call, [a-z0-9 ,.'-]+\]$/);
   });
 
   it("formats llm advisor messages with the llm tag", () => {

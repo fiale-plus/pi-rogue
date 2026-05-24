@@ -278,7 +278,21 @@ async function doReview(pi: ExtensionAPI, ctx: any, trigger: string, delta: stri
     fileChanged: meta.fileChanged,
     failed: meta.failed,
   };
-  const reviewRoute = heuristicRoute(reviewInput);
+  const reviewHeuristic = heuristicRoute(reviewInput);
+  const gatePrediction = binaryGatePredict(reviewInput.text);
+  let reviewRoute = reviewHeuristic;
+  if (gatePrediction && gatePrediction.confidence >= 0.55 && !reviewHeuristic.safety) {
+    const binLabel = gatePrediction.decision === "continue" ? "continue" as const : "escalate_to_advisor" as const;
+    reviewRoute = {
+      ...reviewHeuristic,
+      source: "model",
+      reason: gatePrediction.decision === "continue"
+        ? "Binary gate: local classifier predicts continue (skip review)."
+        : "Binary gate: local classifier predicts escalate (advisor review recommended).",
+      review: binLabel === "continue" ? "off" as const : reviewHeuristic.review,
+      escalate: binLabel === "escalate_to_advisor",
+    };
+  }
   appendRouteLog(reviewRoute);
   state.router.review = reviewRoute;
   saveState(state);
