@@ -23,6 +23,17 @@ describe("advisor router heuristics", () => {
     expect(route.review).toBe("light");
     expect(route.escalate).toBe(true);
     expect(summarizeRoute(route)).toContain("preflight:escalate_to_advisor");
+    expect(routeNote(route)).toMatch(/^\[advisor: call, [a-z0-9 ,.'-]+\]$/);
+    expect(routeNote(route)).toBe(routeNote(route).toLowerCase());
+  });
+
+  it("escalates strategy and decision prompts", () => {
+    const input: AdvisorRouteInput = { phase: "preflight", text: "does it make sense to buy 3x usage 2x higher sustained speed? what would you choose as a strategy" };
+    const route = heuristicRoute(input);
+
+    expect(route.label).toBe("escalate_to_advisor");
+    expect(route.escalate).toBe(true);
+    expect(routeNote(route)).toMatch(/^\[advisor: call, [a-z0-9 ,.'-]+\]$/);
   });
 
   it("flags safety-sensitive prompts", () => {
@@ -31,7 +42,7 @@ describe("advisor router heuristics", () => {
 
     expect(route.safety).toBe(true);
     expect(route.label).toBe("escalate_to_advisor");
-    expect(routeNote(route)).toContain("complex/high-risk");
+    expect(routeNote(route)).toMatch(/^\[advisor: call, [a-z0-9 ,.'-]+\]$/);
   });
 
   it("reviews incomplete work as not done", () => {
@@ -41,6 +52,7 @@ describe("advisor router heuristics", () => {
     expect(route.label).toBe("not_done");
     expect(route.review).toBe("strict");
     expect(route.escalate).toBe(true);
+    expect(routeNote(route)).toMatch(/^\[advisor: call, [a-z0-9 ,.'-]+\]$/);
   });
 
   it("abstains when review signal is weak", () => {
@@ -50,5 +62,8 @@ describe("advisor router heuristics", () => {
     expect(route.label).toBe("abstain");
     expect(route.review).toBe("off");
     expect(shouldQueryClassifier(route)).toBe(true);
+    expect(routeNote(route)).toMatch(/^\[advisor: defer, [a-z0-9 ,.'-]+\]$/);
+    expect(routeNote(route)).toBe(routeNote(route).toLowerCase());
   });
+
 });

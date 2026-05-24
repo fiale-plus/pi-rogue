@@ -6,6 +6,7 @@ import { featureFile, readText, truncate, writeText } from "@fiale-plus/pi-core"
 import {
   appendRouteLog,
   binaryGatePredict,
+  formatAdvisorDisplay,
   heuristicRoute,
   mergeReviewPolicy,
   routeNote,
@@ -328,11 +329,15 @@ async function doReview(pi: ExtensionAPI, ctx: any, trigger: string, delta: stri
 
   if (json.verdict === "on_track" && json.notify !== true) return;
   if (json.verdict === "skip") return;
-  const verdictLabel = json.verdict === "not_done" ? "not called" : json.verdict?.replace("_", " ") || "?";
-  const reason = json.reason || reviewRoute.reason || "";
-  const reasonSuffix = reason ? ` — ${reason.slice(0, 120)}` : "";
+  const decision = json.verdict === "on_track" ? "skip"
+    : json.verdict === "course_correct" ? "call"
+      : json.verdict === "not_done" ? "call"
+        : "defer";
+  const explanation = (json.reason || reviewRoute.reason || json.summary || "review result").slice(0, 120);
+  const display = formatAdvisorDisplay(decision, explanation);
+  writeText(CURRENT_PATH, `${display}\n`);
   ctx.ui?.notify?.(
-    `advisor: ${verdictLabel}${reasonSuffix}`,
+    display,
     json.verdict === "course_correct" ? "warning" : "info",
   );
 
@@ -381,23 +386,32 @@ export function registerAdvisor(pi: ExtensionAPI): void {
 
     // Binary gate model — fast local classifier for continue/escalate decisions
     const gatePrediction = binaryGatePredict(routeInput.text);
+    const heuristic = heuristicRoute(routeInput);
     let route: AdvisorRouteDecision;
     if (gatePrediction && gatePrediction.confidence >= 0.55) {
       const binLabel = gatePrediction.decision === "continue" ? "continue" as const : "escalate_to_advisor" as const;
-      const heuristic = heuristicRoute(routeInput);
-      route = {
-        ...heuristic,
-        label: binLabel,
-        confidence: gatePrediction.confidence,
-        reason: gatePrediction.decision === "continue"
-          ? "Binary gate: local classifier predicts continue (no advisor needed)."
-          : "Binary gate: local classifier predicts escalate (advisor recommended).",
-        source: "heuristic",
-        preflight: binLabel === "continue" ? "off" as const : "full" as const,
-        escalate: binLabel === "escalate_to_advisor",
-      };
+      const heuristicWins =
+        heuristic.phase === "preflight" &&
+        heuristic.label === "escalate_to_advisor" &&
+        binLabel === "continue" &&
+        gatePrediction.confidence < 0.7;
+      if (heuristicWins) {
+        route = heuristic;
+      } else {
+        route = {
+          ...heuristic,
+          label: binLabel,
+          confidence: gatePrediction.confidence,
+          reason: gatePrediction.decision === "continue"
+            ? "Binary gate: local classifier predicts continue (no advisor needed)."
+            : "Binary gate: local classifier predicts escalate (advisor recommended).",
+          source: "heuristic",
+          preflight: binLabel === "continue" ? "off" as const : "full" as const,
+          escalate: binLabel === "escalate_to_advisor",
+        };
+      }
     } else {
-      route = heuristicRoute(routeInput);
+      route = heuristic;
     }
     appendRouteLog(route);
     state.router.preflight = route;
@@ -406,6 +420,7 @@ export function registerAdvisor(pi: ExtensionAPI): void {
     saveState(state);
 
     const note = routeNote(route);
+    writeText(CURRENT_PATH, `${note}\n`);
     return {
       systemPrompt: [
         event.systemPrompt,
