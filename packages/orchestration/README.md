@@ -1,6 +1,6 @@
 # PiRogue Orchestration
 
-Session orchestration for PiRogue: loop, goal, and autoresearch controls.
+Session orchestration for PiRogue: scheduled loop, goal, and autoresearch controls.
 
 Install from npm:
 
