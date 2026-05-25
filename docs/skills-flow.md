@@ -11,7 +11,7 @@ This repo keeps the existing skill logic intact and routes it into the orchestra
 ## Orchestration core
 
 - `loop` → primitive tick/heartbeat layer
-- `goal` → session objective, retargeting, side-quest recovery, completion checks
+- `goal` → session objective, retargeting, side-quest recovery, completion
 
 ## Research
 
@@ -37,6 +37,14 @@ This repo keeps the existing skill logic intact and routes it into the orchestra
   - evaluator checkpoint
   - merge/cherry-pick discipline
   - wave-based redesign when plateauing
+
+## Auto-detection and confirmation
+
+- Auto-detect candidate orchestration modes from the user request and project context.
+- Present a proposal first (`goal`, `autoresearch`, or `autoresearch-lab`) instead of silently starting a long run.
+- In interactive mode, ask for explicit confirmation before writing or launching a long-lived flow.
+- In unattended mode, only auto-run if policy explicitly allows the detected command and budget.
+- Never auto-escalate from `autoresearch` to `autoresearch-lab` without approval.
 
 ## No flattening guarantee
 
