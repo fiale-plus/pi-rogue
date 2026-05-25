@@ -9,6 +9,27 @@ export function truncate(text: string, max: number): string {
   return `${text.slice(0, Math.max(0, max - 1))}…`;
 }
 
+export function contentText(content: unknown): string {
+  if (typeof content === "string") return content.trim();
+  if (!Array.isArray(content)) return String(content ?? "").trim();
+
+  const parts: string[] = [];
+  for (const item of content) {
+    if (!item) continue;
+    if (typeof item === "string") {
+      parts.push(item);
+      continue;
+    }
+
+    const block = item as Record<string, unknown>;
+    if (typeof block.text === "string") {
+      parts.push(block.text);
+    }
+  }
+
+  return parts.join("\n").replace(/\s+/g, " ").trim();
+}
+
 function ensureParent(filePath: string): string {
   mkdirSync(dirname(filePath), { recursive: true });
   return filePath;

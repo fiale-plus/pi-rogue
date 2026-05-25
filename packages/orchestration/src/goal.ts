@@ -1,5 +1,6 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { appendText, featureFile, readText, sessionFile, truncate, writeText } from "./internal.js";
+import { appendText, contentText, featureFile, readText, sessionFile, truncate, writeText } from "./internal.js";
+import { endGoalCheck, goalCheckResult, hasGoalCheckPending } from "./goal-resolution.js";
 
 const FEATURE = "orchestration";
 const CURRENT_FILE = "goal.md";
@@ -17,6 +18,7 @@ function activeGoal(ctx: any): string {
 function setGoal(ctx: any, goal: string): void {
   const note = goal.trim();
   writeText(sessionFile(FEATURE, ctx, CURRENT_FILE), `${note}\n`);
+  endGoalCheck(ctx);
   appendText(HISTORY_FILE, `${JSON.stringify({ at: new Date().toISOString(), goal: note })}\n`);
 }
 
@@ -25,7 +27,11 @@ function clearGoal(ctx: any): void {
 }
 
 function goalBlock(goal: string): string {
-  return ["## PiRogue Goal", `Current goal: ${goal}`].join("\n");
+  return [
+    "## PiRogue Goal",
+    `Current goal: ${goal}`,
+    "When a loop tick asks whether the goal is done, answer exactly with `GOAL_DONE: ...` or `GOAL_CONTINUE: ...`.",
+  ].join("\n");
 }
 
 function setGoalStatus(ctx: any, goal: string | null): void {
@@ -49,9 +55,39 @@ function historyEntries(): GoalHistoryEntry[] {
     });
 }
 
+function assistantText(event: any): string {
+  const messages = Array.isArray(event?.messages) ? event.messages : [];
+  const lastAssistant = [...messages].reverse().find((m: any) => m?.role === "assistant");
+  return contentText(lastAssistant?.content);
+}
+
 export function registerGoal(pi: ExtensionAPI): void {
   pi.on("session_start", (_event, ctx) => {
+    endGoalCheck(ctx);
     setGoalStatus(ctx, activeGoal(ctx) || null);
+  });
+
+  pi.on("session_shutdown", (_event, ctx) => {
+    endGoalCheck(ctx);
+  });
+
+  pi.on("agent_end", async (event, ctx) => {
+    const goal = activeGoal(ctx);
+    if (!goal || !hasGoalCheckPending(ctx)) {
+      return;
+    }
+
+    const text = assistantText(event);
+    const result = goalCheckResult(text);
+    endGoalCheck(ctx);
+
+    if (result !== "done") {
+      return;
+    }
+
+    clearGoal(ctx);
+    setGoalStatus(ctx, null);
+    ctx.ui.notify(`🎯 Goal completed: ${truncate(goal, 160)}`, "info");
   });
 
   pi.on("before_agent_start", async (event, ctx) => {
@@ -83,6 +119,7 @@ export function registerGoal(pi: ExtensionAPI): void {
       if (resolved === "clear") {
         const goal = activeGoal(ctx);
         clearGoal(ctx);
+        endGoalCheck(ctx);
         setGoalStatus(ctx, null);
         ctx.ui.notify(goal ? "Goal cleared." : "No goal to clear.", "info");
         return;

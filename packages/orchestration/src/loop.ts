@@ -1,9 +1,11 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { sessionKey, truncate } from "./internal.js";
+import { buildGoalCheckPrompt, beginGoalCheck, hasGoalCheckPending } from "./goal-resolution.js";
+import { readText, sessionFile, sessionKey, truncate } from "./internal.js";
 import { readSessionJson, writeSessionJson } from "./state.js";
 
 const FEATURE = "orchestration";
 const LOOP_FILE = "loop.json";
+const GOAL_FILE = "goal.md";
 const MIN_INTERVAL_MS = 60_000;
 const loopTimers = new Map<string, NodeJS.Timeout>();
 
@@ -21,6 +23,10 @@ function defaultLoopState(): LoopState {
     instruction: "",
     updatedAt: "",
   };
+}
+
+function activeGoal(ctx: any): string {
+  return readText(sessionFile(FEATURE, ctx, GOAL_FILE)).trim();
 }
 
 function readLoopState(ctx: any): LoopState {
@@ -105,11 +111,21 @@ function syncLoopTimer(pi: ExtensionAPI, ctx: any): void {
       return;
     }
 
-    ctx.ui.notify(`↻ Loop tick: ${truncate(current.instruction, 80)}`, "info");
+    if (activeGoal(ctx) && hasGoalCheckPending(ctx)) {
+      return;
+    }
+
+    const goal = activeGoal(ctx);
+    const prompt = goal ? buildGoalCheckPrompt(goal, current.instruction) : current.instruction;
+    ctx.ui.notify(goal ? `🎯 Goal check: ${truncate(goal, 80)}` : `↻ Loop tick: ${truncate(current.instruction, 80)}`, "info");
+    if (goal) {
+      beginGoalCheck(ctx);
+    }
+
     if (ctx.isIdle()) {
-      pi.sendUserMessage(current.instruction);
+      pi.sendUserMessage(prompt);
     } else {
-      pi.sendUserMessage(current.instruction, { deliverAs: "followUp" });
+      pi.sendUserMessage(prompt, { deliverAs: "followUp" });
     }
   };
 

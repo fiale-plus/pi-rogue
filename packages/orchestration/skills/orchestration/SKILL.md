@@ -18,13 +18,13 @@ Use this skill to manage the current session workflow.
 ## Goal
 
 - `/goal` — show current goal (and refresh the goal status badge)
-- `/goal set <text>` — set the goal
+- `/goal set <text>` — set the goal; loop ticks will ask whether it is done
 - `/goal clear` — clear it
 - `/goal list` — recent history
 
 ## Loop
 
-- `/loop <interval> <instruction>` — record a loop cadence and instruction; minimum interval is 1m; the extension schedules the first tick after the interval and announces each tick
+- `/loop <interval> <instruction>` — record a loop cadence and instruction; minimum interval is 1m; the extension schedules the first tick after the interval and uses goal checks on each tick when a goal is active
 - `/loop status` — show loop status
 - `/loop off` — clear the loop
 
