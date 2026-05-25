@@ -114,7 +114,7 @@ function loadState(): SessionState {
   return {
     turns: raw.turns ?? 0,
     lastTask: raw.lastTask ?? "",
-    notes: (raw.notes ?? []).slice(-MAX_NOTES),
+    notes: (raw.notes ?? []).map(noteText).filter(Boolean).slice(-MAX_NOTES),
     files: (raw.files ?? []).slice(-MAX_FILES),
     errors: (raw.errors ?? []).slice(-MAX_ERRORS),
     advisorCalls: raw.advisorCalls ?? 0,
@@ -176,6 +176,14 @@ function brief(s: SessionState): string {
 function squish(t: unknown, max = 200): string {
   const s = String(t ?? "").replace(/\s+/g, " ").trim();
   return s.length <= max ? s : s.slice(0, max - 1).trimEnd() + "…";
+}
+
+function noteText(note: unknown): string {
+  const text = contentText(note);
+  if (/^\[object Object\](,\[object Object\])*$/.test(text)) return "";
+  if (text) return squish(text, 500);
+  if (note && typeof note === "object") return squish(JSON.stringify(note), 500);
+  return text;
 }
 
 type AdvisorHintDetails = {
@@ -497,7 +505,7 @@ export function registerAdvisor(pi: ExtensionAPI): void {
     const tools = (event.toolResults || []).map((t: any) => String(t?.toolName || t?.name || "tool"));
     const fileChanged = tools.some((t: string) => /^(edit|write)$/i.test(t));
     const failed = (event.toolResults || []).some((t: any) => isActualFailure(t));
-    const text = squish(event.message?.content || "");
+    const text = squish(contentText(event.message?.content));
     if (text && text !== state.notes[state.notes.length - 1]) state.notes.push(text);
     saveState(state);
 
