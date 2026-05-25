@@ -5,6 +5,8 @@ coverage
 *.tsbuildinfo
 .DS_Store
 
+.pi/
+
 # Autoresearch cycles (generated)
 .autoresearch/
 
