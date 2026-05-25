@@ -1,4 +1,4 @@
-name: Publish Orchestration to npm
+name: Publish PiRogue Orchestration to npm
 
 on:
   release:
@@ -10,7 +10,7 @@ permissions:
 
 jobs:
   publish:
-    if: startsWith(github.event.release.tag_name, 'orchestration-')
+    if: startsWith(github.event.release.tag_name, 'pi-rogue-orchestration-')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -28,15 +28,15 @@ jobs:
           npm run check
           npm test
 
-      - name: Sync orchestration package version from release tag
+      - name: Sync pi-rogue orchestration package version from release tag
         working-directory: packages/orchestration
         run: |
-          RAW_TAG="${GITHUB_REF_NAME#orchestration-}"
+          RAW_TAG="${GITHUB_REF_NAME#pi-rogue-orchestration-}"
           VERSION="${RAW_TAG#v}"
           npm version "$VERSION" --no-git-tag-version --allow-same-version
           echo "Synced packages/orchestration/package.json to $VERSION"
 
-      - name: Publish orchestration package
+      - name: Publish pi-rogue orchestration package
         run: npm publish ./packages/orchestration --provenance --access public
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
