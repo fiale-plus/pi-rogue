@@ -42,7 +42,7 @@ Key behaviors to preserve:
 
 Commands:
 - `/autoresearch <instruction>` — start or update the solo research flow; this creates a research goal, starts a 5m loop, queues the first cycle immediately, and requires multiple/evidence-backed cycles before auto-completion
-- `/autoresearch status` — show research status and the underlying goal/loop backing
+- `/autoresearch status` — show research status, underlying goal/loop backing, cycle count, done attempts, and last goal-check result
 - `/autoresearch clear` — clear it and stop its underlying loop
 
 ## Autoresearch lab

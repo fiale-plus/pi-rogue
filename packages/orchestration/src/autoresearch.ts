@@ -10,7 +10,7 @@ const DEFAULT_INTERVAL = "5m";
 
 type ResearchKind = "autoresearch" | "autoresearch-lab";
 
-type ResearchState = {
+export type ResearchState = {
   kind: ResearchKind;
   instruction: string;
   goal?: string;
@@ -92,12 +92,15 @@ function buildResearchLoopInstruction(kind: ResearchKind, instruction: string): 
   ].join("\n");
 }
 
-function formatResearchState(state: ResearchState): string {
+export function formatResearchState(state: ResearchState): string {
   if (!state.instruction) {
     return `${label(state.kind)} is off.`;
   }
 
-  return `${label(state.kind)} active: ${truncate(state.instruction, 160)} — backed by /goal + /loop ${state.interval || DEFAULT_INTERVAL}`;
+  const cycles = state.cycles ?? 0;
+  const doneAttempts = state.doneAttempts ?? 0;
+  const last = state.lastResult ? `, last=${state.lastResult}` : "";
+  return `${label(state.kind)} active: ${truncate(state.instruction, 160)} — backed by /goal + /loop ${state.interval || DEFAULT_INTERVAL}; cycles=${cycles}, doneAttempts=${doneAttempts}${last}`;
 }
 
 function registerResearchCommand(pi: ExtensionAPI, commandName: ResearchKind): void {

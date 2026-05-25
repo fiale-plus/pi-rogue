@@ -20,7 +20,7 @@ This repo keeps the existing skill logic intact and routes it into the orchestra
 - Source skill: iterative optimization with measurement, implementation, checks, and stall detection
 - In flow: `packages/orchestration` command `/autoresearch`
 - Role: single-agent optimization over a measurable target
-- Runtime: facade over `/goal` + `/loop`; starting autoresearch writes a research-shaped goal, starts a 5m loop, queues the first cycle immediately, and guards against premature completion without multiple/evidence-backed cycles
+- Runtime: facade over `/goal` + `/loop`; starting autoresearch writes a research-shaped goal, starts a 5m loop, queues the first cycle immediately, guards against premature completion without multiple/evidence-backed cycles, and exposes cycle/done-attempt counters in status
 - Preserved goodness:
   - metric-first workflow
   - measurement + checks
