@@ -28,6 +28,10 @@ function goalBlock(goal: string): string {
   return ["## PiRogue Goal", `Current goal: ${goal}`].join("\n");
 }
 
+function setGoalStatus(ctx: any, goal: string | null): void {
+  ctx.ui.setStatus("orchestration-goal", goal ? `🎯 ${truncate(goal, 60)}` : undefined);
+}
+
 function historyEntries(): GoalHistoryEntry[] {
   const raw = readText(HISTORY_FILE).trim();
   if (!raw) return [];
@@ -46,8 +50,13 @@ function historyEntries(): GoalHistoryEntry[] {
 }
 
 export function registerGoal(pi: ExtensionAPI): void {
+  pi.on("session_start", (_event, ctx) => {
+    setGoalStatus(ctx, activeGoal(ctx) || null);
+  });
+
   pi.on("before_agent_start", async (event, ctx) => {
     const goal = activeGoal(ctx);
+    setGoalStatus(ctx, goal || null);
     if (!goal) {
       return { systemPrompt: event.systemPrompt };
     }
@@ -66,6 +75,7 @@ export function registerGoal(pi: ExtensionAPI): void {
 
       if (resolved === "show") {
         const goal = activeGoal(ctx);
+        setGoalStatus(ctx, goal || null);
         ctx.ui.notify(goal ? `🎯 ${truncate(goal, 160)}` : "No active goal.", "info");
         return;
       }
@@ -73,6 +83,7 @@ export function registerGoal(pi: ExtensionAPI): void {
       if (resolved === "clear") {
         const goal = activeGoal(ctx);
         clearGoal(ctx);
+        setGoalStatus(ctx, null);
         ctx.ui.notify(goal ? "Goal cleared." : "No goal to clear.", "info");
         return;
       }
@@ -97,6 +108,7 @@ export function registerGoal(pi: ExtensionAPI): void {
       }
 
       setGoal(ctx, text);
+      setGoalStatus(ctx, text);
       ctx.ui.notify(`🎯 Goal set: ${truncate(text, 160)}`, "info");
     },
   });

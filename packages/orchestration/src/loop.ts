@@ -60,6 +60,13 @@ function formatLoopState(state: LoopState): string {
   return `↻ Loop active: every ${state.interval}${target}`;
 }
 
+function setLoopStatus(ctx: any, state: LoopState): void {
+  ctx.ui.setStatus(
+    "orchestration-loop",
+    state.enabled ? `↻ ${state.interval}${state.instruction ? ` · ${truncate(state.instruction, 40)}` : ""}` : undefined,
+  );
+}
+
 function stopLoopTimer(key: string): void {
   const timer = loopTimers.get(key);
   if (timer) {
@@ -73,6 +80,7 @@ function syncLoopTimer(pi: ExtensionAPI, ctx: any): void {
   stopLoopTimer(key);
 
   const state = readLoopState(ctx);
+  setLoopStatus(ctx, state);
   if (!state.enabled || !state.instruction) {
     return;
   }
@@ -87,6 +95,7 @@ function syncLoopTimer(pi: ExtensionAPI, ctx: any): void {
     const current = readLoopState(ctx);
     if (!current.enabled || !current.instruction) {
       stopLoopTimer(key);
+      setLoopStatus(ctx, current);
       return;
     }
 
@@ -96,11 +105,12 @@ function syncLoopTimer(pi: ExtensionAPI, ctx: any): void {
       return;
     }
 
-    if (!ctx.isIdle()) {
-      return;
+    ctx.ui.notify(`↻ Loop tick: ${truncate(current.instruction, 80)}`, "info");
+    if (ctx.isIdle()) {
+      pi.sendUserMessage(current.instruction);
+    } else {
+      pi.sendUserMessage(current.instruction, { deliverAs: "followUp" });
     }
-
-    pi.sendUserMessage(current.instruction);
   };
 
   loopTimers.set(key, setInterval(tick, intervalMs));
@@ -113,6 +123,7 @@ export function registerLoop(pi: ExtensionAPI): void {
 
   pi.on("session_shutdown", (_event, ctx) => {
     stopLoopTimer(sessionKey(ctx));
+    setLoopStatus(ctx, defaultLoopState());
   });
 
   pi.registerCommand("loop", {
@@ -130,6 +141,7 @@ export function registerLoop(pi: ExtensionAPI): void {
       if (resolved === "off" || resolved === "clear" || resolved === "stop") {
         const next = clearLoopState(ctx);
         stopLoopTimer(sessionKey(ctx));
+        setLoopStatus(ctx, next);
         ctx.ui.notify(next.enabled ? formatLoopState(next) : "Loop cleared.", "info");
         return;
       }
@@ -147,6 +159,7 @@ export function registerLoop(pi: ExtensionAPI): void {
         instruction,
         updatedAt: "",
       });
+      setLoopStatus(ctx, next);
       syncLoopTimer(pi, ctx);
       ctx.ui.notify(formatLoopState(next), "info");
     },
