@@ -24,7 +24,7 @@ Use this skill to manage the current session workflow.
 
 ## Loop
 
-- `/loop <interval> <instruction>` — record a loop cadence and instruction
+- `/loop <interval> <instruction>` — record a loop cadence and instruction; the extension schedules the first tick after the interval
 - `/loop status` — show loop status
 - `/loop off` — clear the loop
 

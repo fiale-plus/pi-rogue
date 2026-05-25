@@ -1,7 +1,7 @@
 {
   "name": "@fiale-plus/pi-rogue-orchestration",
-  "version": "0.1.0",
-  "description": "Orchestration controls for PiRogue: loop, goal, and autoresearch.",
+  "version": "0.1.1",
+  "description": "Orchestration controls for PiRogue: scheduled loop, goal, and autoresearch.",
   "type": "module",
   "license": "MIT",
   "repository": {
