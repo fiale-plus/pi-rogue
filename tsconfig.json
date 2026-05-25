@@ -11,7 +11,7 @@
     "paths": {
       "@fiale-plus/pi-core": ["./packages/core/src"],
       "@fiale-plus/pi-advisor": ["./packages/advisor/src"],
-      "@fiale-plus/pi-orchestration": ["./packages/orchestration/src"],
+      "@fiale-plus/pi-rogue-orchestration": ["./packages/orchestration/src"],
       "@fiale-plus/pi-guardrails": ["./packages/guardrails/src"],
       "@fiale-plus/pi-brain": ["./packages/brain/src"],
       "@fiale-plus/pi-repo-arch": ["./packages/repo-arch/src"]

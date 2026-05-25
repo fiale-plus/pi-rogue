@@ -1,7 +1,7 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { registerAdvisor } from "@fiale-plus/pi-rogue-advisor";
 import { registerBrain } from "@fiale-plus/pi-brain";
-import { registerOrchestration } from "@fiale-plus/pi-orchestration";
+import { registerOrchestration } from "@fiale-plus/pi-rogue-orchestration";
 import { registerGuardrails } from "@fiale-plus/pi-guardrails";
 import { registerRepoArch } from "@fiale-plus/pi-repo-arch";
 
