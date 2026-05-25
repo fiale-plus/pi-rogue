@@ -26,9 +26,6 @@
   "peerDependencies": {
     "@earendil-works/pi-coding-agent": "^0.74.0"
   },
-  "dependencies": {
-    "@fiale-plus/pi-core": "^0.1.0"
-  },
   "publishConfig": {
     "access": "public"
   },

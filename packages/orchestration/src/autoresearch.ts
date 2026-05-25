@@ -1,5 +1,5 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { truncate } from "@fiale-plus/pi-core";
+import { truncate } from "./internal.js";
 import { readSessionJson, writeSessionJson } from "./state.js";
 
 const FEATURE = "orchestration";
