@@ -4,10 +4,13 @@
   "description": "Orchestration controls for PiRogue: loop, goal, and autoresearch.",
   "type": "module",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/fiale-plus/pi-rogue.git"
+  },
   "keywords": [
     "pi-package"
   ],
-  "private": true,
   "main": "./orchestration/index.ts",
   "exports": {
     ".": "./orchestration/index.ts"
