@@ -1,4 +1,4 @@
-import { readText, sessionFile, writeText } from "@fiale-plus/pi-core";
+import { readText, sessionFile, writeText } from "./internal.js";
 
 export function readSessionText(feature: string, ctx: any, file: string): string {
   return readText(sessionFile(feature, ctx, file)).trim();

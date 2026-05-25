@@ -1,6 +1,5 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { appendText, featureFile, truncate, readText } from "@fiale-plus/pi-core";
-import { readSessionText, writeSessionText } from "./state.js";
+import { appendText, featureFile, readText, sessionFile, truncate, writeText } from "./internal.js";
 
 const FEATURE = "orchestration";
 const CURRENT_FILE = "goal.md";
@@ -12,17 +11,17 @@ type GoalHistoryEntry = {
 };
 
 function activeGoal(ctx: any): string {
-  return readSessionText(FEATURE, ctx, CURRENT_FILE);
+  return readText(sessionFile(FEATURE, ctx, CURRENT_FILE)).trim();
 }
 
 function setGoal(ctx: any, goal: string): void {
   const note = goal.trim();
-  writeSessionText(FEATURE, ctx, CURRENT_FILE, note);
+  writeText(sessionFile(FEATURE, ctx, CURRENT_FILE), `${note}\n`);
   appendText(HISTORY_FILE, `${JSON.stringify({ at: new Date().toISOString(), goal: note })}\n`);
 }
 
 function clearGoal(ctx: any): void {
-  writeSessionText(FEATURE, ctx, CURRENT_FILE, "");
+  writeText(sessionFile(FEATURE, ctx, CURRENT_FILE), "");
 }
 
 function goalBlock(goal: string): string {
