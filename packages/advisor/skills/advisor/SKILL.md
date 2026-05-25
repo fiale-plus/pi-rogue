@@ -5,15 +5,17 @@ description: Zero-config strategic advisor for Pi. Auto-detects best model, phas
 
 # PiRogue Advisor
 
-Works out of the box. Just install and use `/advisor`.
+Works out of the box. Just install and use `/advisor` or `/pi-rogue`.
 
 > 96 strategic calls saved ~$53 on GPT-5.5 over 3,071 turns — see [`docs/savings.md`](../../docs/savings.md)
 
 ## Quick start
 
+- `/pi-rogue` — cockpit/status entry point
 - `/advisor` — status + config
 - `/advisor <question>` — get immediate advice
 - `/advisor on|off` — enable/disable
+- `/advisor checkins on|off|<minutes>` — configure low-power mid-hour check-ins
 
 Zero config needed. Falls back through SOTA models (gpt-5.5 → claude-opus-4-6 → sonnet-4-6) automatically.
 
@@ -34,14 +36,15 @@ Skip: reads, small edits, one-liners.
 | `/advisor off` | Disable |
 | `/advisor mode auto\|manual\|off` | Set advisor mode |
 | `/advisor model <provider/model>` | Set specific model (e.g. `openai-codex/gpt-5.5`) |
-| `/advisor status` | Full status with model info |
-| `/advisor config` | Show current 3-field config |
+| `/advisor status` | Full status with model and check-in info |
+| `/advisor config` | Show current config |
 | `/advisor review light\|strict\|off` | Set review aggressiveness |
+| `/advisor checkins on\|off\|<minutes>` | Configure low-power mid-hour check-ins |
 
-## Config (3 fields, all optional)
+## Config (5 fields, all optional)
 
-Defaults: `mode: auto, review: light`
+Defaults: `mode: auto, review: light, checkins: mid-hour, checkinIntervalMinutes: 30`
 
 ```json
-{ "mode": "auto", "review": "light" }
+{ "mode": "auto", "review": "light", "checkins": "mid-hour", "checkinIntervalMinutes": 30 }
 ```

@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { basename } from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Box, Text } from "@earendil-works/pi-tui";
 import { completeSimple, type ThinkingLevel } from "@earendil-works/pi-ai";
@@ -25,6 +26,10 @@ export interface AdvisorConfig {
   mode: "auto" | "manual" | "off";
   /** "light" (file changes/errors only) | "strict" (every 3 turns) | "off" */
   review: "light" | "strict" | "off";
+  /** Opportunistic advisor check-ins during long sessions. */
+  checkins: "mid-hour" | "off";
+  /** Minutes between check-ins; bounded and cheap-gated by recent activity. */
+  checkinIntervalMinutes: number;
   /** Optional model override. Auto-detects SOTA (gpt-5.5, claude-opus-4-6…) if unset */
   model?: string;
 }
@@ -32,6 +37,8 @@ export interface AdvisorConfig {
 const DEFAULT_CONFIG: AdvisorConfig = {
   mode: "auto",
   review: "light",
+  checkins: "mid-hour",
+  checkinIntervalMinutes: 30,
 };
 
 const CONFIG_PATH = featureFile("advisor", "config.json");
@@ -44,6 +51,12 @@ const MAX_CACHE = 64;
 const MAX_NOTES = 12;
 const MAX_FILES = 8;
 const MAX_ERRORS = 5;
+const CHECKIN_POLL_MS = 5 * 60_000;
+const MIN_CHECKIN_INTERVAL_MINUTES = 10;
+const MAX_CHECKIN_INTERVAL_MINUTES = 240;
+const checkinTimers = new Map<string, NodeJS.Timeout>();
+const checkinStartedAt = new Map<string, number>();
+const checkinLocks = new Set<string>();
 
 // ── SOTA models (ordered by preference) ───────────────────────────────────
 const SOTA_CHAIN: Array<{ provider: string; model: string; label: string }> = [
@@ -67,6 +80,11 @@ interface SessionState {
     preflight?: AdvisorRouteDecision;
     review?: AdvisorRouteDecision;
   };
+  checkin: {
+    lastAt?: string;
+    lastTurn?: number;
+    lastReason?: string;
+  };
 }
 
 function defaultState(): SessionState {
@@ -80,6 +98,7 @@ function defaultState(): SessionState {
     cacheHits: 0,
     followUp: "",
     router: {},
+    checkin: {},
   };
 }
 
@@ -96,13 +115,19 @@ function writeJson(path: string, v: unknown) {
   writeText(path, JSON.stringify(v, null, 2) + "\n");
 }
 
-function loadConfig(): AdvisorConfig {
-  const raw = readJson<Partial<AdvisorConfig>>(CONFIG_PATH, {});
+export function normalizeAdvisorConfig(raw: Partial<AdvisorConfig> = {}): AdvisorConfig {
+  const interval = Number(raw.checkinIntervalMinutes ?? DEFAULT_CONFIG.checkinIntervalMinutes);
   return {
     mode: (raw.mode === "manual" || raw.mode === "off") ? raw.mode : "auto",
     review: (raw.review === "strict" || raw.review === "off") ? raw.review : "light",
+    checkins: raw.checkins === "off" ? "off" : "mid-hour",
+    checkinIntervalMinutes: Math.min(MAX_CHECKIN_INTERVAL_MINUTES, Math.max(MIN_CHECKIN_INTERVAL_MINUTES, Number.isFinite(interval) ? Math.round(interval) : DEFAULT_CONFIG.checkinIntervalMinutes)),
     model: raw.model || undefined,
   };
+}
+
+function loadConfig(): AdvisorConfig {
+  return normalizeAdvisorConfig(readJson<Partial<AdvisorConfig>>(CONFIG_PATH, {}));
 }
 
 function saveConfig(c: AdvisorConfig) {
@@ -123,6 +148,11 @@ function loadState(): SessionState {
     router: {
       preflight: raw.router?.preflight,
       review: raw.router?.review,
+    },
+    checkin: {
+      lastAt: raw.checkin?.lastAt,
+      lastTurn: raw.checkin?.lastTurn,
+      lastReason: raw.checkin?.lastReason,
     },
   };
 }
@@ -260,6 +290,97 @@ function mergeRouteReview(configReview: AdvisorConfig["review"], route?: ReviewP
   if (configReview === "off") return "off";
   if (!route) return configReview;
   return mergeReviewPolicy(configReview, route);
+}
+
+function sessionKey(ctx: any): string {
+  const sessionFile = ctx?.sessionManager?.getSessionFile?.();
+  if (!sessionFile) return "session";
+  return basename(String(sessionFile)).replace(/\.[^.]+$/, "");
+}
+
+function setPiRogueStatus(ctx: any, config = loadConfig(), state = loadState()): void {
+  const normalized = normalizeAdvisorConfig(config);
+  const checkin = normalized.checkins === "off" ? "checkins off" : `checkins ${normalized.checkinIntervalMinutes}m`;
+  const last = state.checkin.lastAt ? ` · last ${new Date(state.checkin.lastAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}` : "";
+  ctx.ui.setStatus("pi-rogue", `☠︎ advisor ${normalized.mode}/${normalized.review} · ${checkin}${last}`);
+}
+
+export function shouldRunCheckin(config: AdvisorConfig, state: SessionState, now = Date.now(), startedAt = now): string | null {
+  const normalized = normalizeAdvisorConfig(config);
+  if (normalized.mode === "off" || normalized.mode === "manual") return null;
+  if (normalized.checkins === "off") return null;
+  if (!state.lastTask && state.notes.length === 0) return null;
+  const lastTurn = state.checkin.lastTurn ?? 0;
+  if (state.turns <= lastTurn) return null;
+  const lastAt = state.checkin.lastAt ? Date.parse(state.checkin.lastAt) : 0;
+  const intervalMs = normalized.checkinIntervalMinutes * 60_000;
+  const since = lastAt || startedAt;
+  if (since && now - since < intervalMs) return null;
+  return `mid-hour check-in after ${state.turns - lastTurn} new turn(s)`;
+}
+
+function stopCheckinTimer(key: string): void {
+  const timer = checkinTimers.get(key);
+  if (timer) {
+    clearInterval(timer);
+    checkinTimers.delete(key);
+  }
+}
+
+async function maybeAdvisorCheckin(pi: ExtensionAPI, ctx: any, source: string): Promise<boolean> {
+  const key = sessionKey(ctx);
+  if (checkinLocks.has(key)) return false;
+
+  const config = loadConfig();
+  const state = loadState();
+  const startedAt = checkinStartedAt.get(key) ?? Date.now();
+  const reason = shouldRunCheckin(config, state, Date.now(), startedAt);
+  setPiRogueStatus(ctx, config, state);
+  if (!reason) return false;
+
+  checkinLocks.add(key);
+  try {
+    const response = await askAdvisor(
+      pi,
+      ctx,
+      `Mid-session check-in (${source}): briefly assess whether the current session is on track, stuck, or missing a higher-leverage next step. Return one concrete nudge.`,
+      "review",
+      true,
+    );
+    if (response.error) return false;
+
+    const next = loadState();
+    next.checkin = { lastAt: new Date().toISOString(), lastTurn: next.turns, lastReason: reason };
+    saveState(next);
+    setPiRogueStatus(ctx, config, next);
+    sendAdvisorHint(pi, "review", "mid-hour check-in", response.text, [response.text]);
+    return true;
+  } finally {
+    checkinLocks.delete(key);
+  }
+}
+
+function syncCheckinTimer(pi: ExtensionAPI, ctx: any): void {
+  const key = sessionKey(ctx);
+  stopCheckinTimer(key);
+  checkinStartedAt.set(key, Date.now());
+  setPiRogueStatus(ctx);
+  const config = loadConfig();
+  if (config.mode === "off" || config.mode === "manual" || config.checkins === "off") return;
+  checkinTimers.set(key, setInterval(() => { void maybeAdvisorCheckin(pi, ctx, "timer"); }, CHECKIN_POLL_MS));
+}
+
+function piRogueCockpitText(config: AdvisorConfig, state: SessionState, currentNote: string): string {
+  const normalized = normalizeAdvisorConfig(config);
+  return [
+    "☠︎ PiRogue cockpit",
+    currentNote ? `Advisor: ${truncate(currentNote, 220)}` : "Advisor: no current note",
+    `Mode: ${normalized.mode} | Review: ${normalized.review} | Check-ins: ${normalized.checkins === "off" ? "off" : `${normalized.checkinIntervalMinutes}m`}`,
+    `Turns: ${state.turns} | Advisor calls: ${state.advisorCalls} | Cache hits: ${state.cacheHits}`,
+    state.checkin.lastAt ? `Last check-in: ${new Date(state.checkin.lastAt).toLocaleString()} (${state.checkin.lastReason || "mid-hour"})` : "Last check-in: never",
+    "",
+    "Commands: /advisor status · /advisor checkins on|off|<minutes> · /goal · /loop status · /autoresearch status",
+  ].join("\n");
 }
 
 // ── Model resolution (auto-fallback through SOTA chain) ────────────────────
@@ -417,11 +538,21 @@ async function doReview(pi: ExtensionAPI, ctx: any, trigger: string, delta: stri
 // ── Extension entry point ──────────────────────────────────────────────────
 
 export function registerAdvisor(pi: ExtensionAPI): void {
-  const config = loadConfig();
-
   for (const customType of ["advisor:model", "advisor:rules", "advisor:llm"] as const) {
     pi.registerMessageRenderer(customType, renderAdvisorHint);
   }
+
+  pi.on("session_start", (_event, ctx) => {
+    syncCheckinTimer(pi, ctx);
+  });
+
+  pi.on("session_shutdown", (_event, ctx) => {
+    const key = sessionKey(ctx);
+    stopCheckinTimer(key);
+    checkinStartedAt.delete(key);
+    checkinLocks.delete(key);
+    ctx.ui.setStatus("pi-rogue", undefined);
+  });
 
   // ── Tool ───────────────────────────────────────────────────────────────
   pi.registerTool({
@@ -442,8 +573,10 @@ export function registerAdvisor(pi: ExtensionAPI): void {
 
   // ── Preflight (heuristics only — no LLM call, <1ms) ──────────────────
   pi.on("before_agent_start", async (event: any, ctx: any) => {
-    if (config.mode === "off" || config.mode === "manual") return { systemPrompt: event.systemPrompt };
+    const cfg = loadConfig();
+    if (cfg.mode === "off" || cfg.mode === "manual") return { systemPrompt: event.systemPrompt };
     const state = loadState();
+    setPiRogueStatus(ctx, cfg, state);
     const prompt = typeof event.prompt === "string" && event.prompt.trim() ? squish(event.prompt, 1000) : "";
     if (prompt) state.lastTask = prompt;
     const briefText = brief(state);
@@ -499,7 +632,8 @@ export function registerAdvisor(pi: ExtensionAPI): void {
 
   // ── Post-review (turn_end) ─────────────────────────────────────────────
   pi.on("turn_end", async (event: any, ctx: any) => {
-    if (config.mode === "off") return;
+    const cfg = loadConfig();
+    if (cfg.mode === "off") return;
     const state = loadState();
     state.turns++;
     const tools = (event.toolResults || []).map((t: any) => String(t?.toolName || t?.name || "tool"));
@@ -508,15 +642,18 @@ export function registerAdvisor(pi: ExtensionAPI): void {
     const text = squish(contentText(event.message?.content));
     if (text && text !== state.notes[state.notes.length - 1]) state.notes.push(text);
     saveState(state);
+    setPiRogueStatus(ctx, cfg, state);
+    void maybeAdvisorCheckin(pi, ctx, "turn_end");
 
-    if (config.review !== "off") {
+    if (cfg.review !== "off") {
       await doReview(pi, ctx, `turn-${state.turns}`, text, { fileChanged, failed, isAgentEnd: false });
     }
   });
 
   // ── Post-review (agent_end) ────────────────────────────────────────────
   pi.on("agent_end", async (event: any, ctx: any) => {
-    if (config.mode === "off" || config.review === "off") return;
+    const cfg = loadConfig();
+    if (cfg.mode === "off" || cfg.review === "off") return;
     const state = loadState();
     const msgs = (event.messages || []).filter((m: any) => m.role === "assistant" || m.role === "toolResult");
     const last = msgs[msgs.length - 1];
@@ -524,6 +661,17 @@ export function registerAdvisor(pi: ExtensionAPI): void {
     const fileChanged = msgs.some((m: any) => /(?:write|edit)/i.test(JSON.stringify(m)));
     const failed = msgs.some((m: any) => isActualFailure(m));
     await doReview(pi, ctx, "agent-end", delta, { fileChanged, failed, isAgentEnd: true });
+  });
+
+  // ── /pi-rogue cockpit ──────────────────────────────────────────────────
+  pi.registerCommand("pi-rogue", {
+    description: "Show PiRogue cockpit: advisor, check-ins, and orchestration command pointers",
+    handler: async (_args, ctx) => {
+      const cfg = loadConfig();
+      const state = loadState();
+      setPiRogueStatus(ctx, cfg, state);
+      ctx.ui.notify(piRogueCockpitText(cfg, state, readText(CURRENT_PATH).trim()), "info");
+    },
   });
 
   // ── /advisor command ───────────────────────────────────────────────────
@@ -543,21 +691,22 @@ export function registerAdvisor(pi: ExtensionAPI): void {
           note ? `🧭 ${truncate(note, 200)}` : "",
           route ? `Router: ${summarizeRoute(route)}${route.safety ? " · safety" : ""}` : "",
           "",
-          `Mode: ${cfg.mode} | Review: ${cfg.review} | Model: ${resolved?.label || cfg.model || "auto"}`,
+          `Mode: ${cfg.mode} | Review: ${cfg.review} | Check-ins: ${cfg.checkins === "off" ? "off" : `${cfg.checkinIntervalMinutes}m`} | Model: ${resolved?.label || cfg.model || "auto"}`,
           `Turns: ${state.turns} | Calls: ${state.advisorCalls} | Cache hits: ${state.cacheHits}`,
+          state.checkin.lastAt ? `Last check-in: ${new Date(state.checkin.lastAt).toLocaleString()} (${state.checkin.lastReason || "mid-hour"})` : "Last check-in: never",
           "",
-          "Commands: /advisor on|off | /advisor status | /advisor config | <question>",
+          "Commands: /advisor on|off | /advisor status | /advisor checkins on|off|<minutes> | /advisor config | <question>",
           "Tip: SOTA models auto-detected. No config needed.",
         ].filter(Boolean).join("\n"), "info");
         return;
       }
 
-      if (cmd === "on" && cfg.mode === "off") { saveConfig({ ...cfg, mode: "auto" }); ctx.ui.notify("Advisor enabled (auto mode).", "info"); return; }
-      if (cmd === "off") { saveConfig({ ...cfg, mode: "off" }); ctx.ui.notify("Advisor disabled.", "info"); return; }
+      if (cmd === "on" && cfg.mode === "off") { const next = { ...cfg, mode: "auto" as const }; saveConfig(next); syncCheckinTimer(pi, ctx); ctx.ui.notify("Advisor enabled (auto mode).", "info"); return; }
+      if (cmd === "off") { const next = { ...cfg, mode: "off" as const }; saveConfig(next); stopCheckinTimer(sessionKey(ctx)); setPiRogueStatus(ctx, next, state); ctx.ui.notify("Advisor disabled.", "info"); return; }
       if (cmd === "mode") {
         const v = rest[0];
-        if (v === "auto" || v === "manual") { saveConfig({ ...cfg, mode: v }); ctx.ui.notify(`Mode set to ${v}.`, "info"); return; }
-        if (v === "off") { saveConfig({ ...cfg, mode: "off" }); ctx.ui.notify("Advisor disabled.", "info"); return; }
+        if (v === "auto" || v === "manual") { const next: AdvisorConfig = { ...cfg, mode: v }; saveConfig(next); syncCheckinTimer(pi, ctx); ctx.ui.notify(`Mode set to ${v}.`, "info"); return; }
+        if (v === "off") { const next = { ...cfg, mode: "off" as const }; saveConfig(next); stopCheckinTimer(sessionKey(ctx)); setPiRogueStatus(ctx, next, state); ctx.ui.notify("Advisor disabled.", "info"); return; }
         ctx.ui.notify("Usage: /advisor mode auto|manual|off", "error");
         return;
       }
@@ -580,9 +729,11 @@ export function registerAdvisor(pi: ExtensionAPI): void {
       }
       if (cmd === "config") {
         ctx.ui.notify([
-          "Advisor config (3 fields, all optional):",
+          "Advisor config (5 fields, all optional):",
           `  mode: "${cfg.mode}" — auto (preflight+post+cache) | manual | off`,
           `  review: "${cfg.review}" — light (changes/errors) | strict (every 3) | off`,
+          `  checkins: "${cfg.checkins}" — mid-hour | off`,
+          `  checkinIntervalMinutes: ${cfg.checkinIntervalMinutes}`,
           `  model: "${cfg.model || "auto"}" — optional override`,
           "",
           "Router logs: evals/advisor-router.jsonl",
@@ -592,8 +743,36 @@ export function registerAdvisor(pi: ExtensionAPI): void {
       }
       if (cmd === "review") {
         const v = rest[0];
-        if (v === "light" || v === "strict" || v === "off") { saveConfig({ ...cfg, review: v }); ctx.ui.notify(`Review set to ${v}.`, "info"); return; }
+        if (v === "light" || v === "strict" || v === "off") { const next: AdvisorConfig = { ...cfg, review: v }; saveConfig(next); setPiRogueStatus(ctx, next, state); ctx.ui.notify(`Review set to ${v}.`, "info"); return; }
         ctx.ui.notify("Usage: /advisor review light|strict|off", "error");
+        return;
+      }
+      if (cmd === "checkins" || cmd === "checkin") {
+        const v = rest[0];
+        if (v === "off") {
+          const next = { ...cfg, checkins: "off" as const };
+          saveConfig(next);
+          stopCheckinTimer(sessionKey(ctx));
+          setPiRogueStatus(ctx, next, state);
+          ctx.ui.notify("Advisor mid-hour check-ins disabled.", "info");
+          return;
+        }
+        if (v === "on" || v === "mid-hour") {
+          const next = { ...cfg, checkins: "mid-hour" as const };
+          saveConfig(next);
+          syncCheckinTimer(pi, ctx);
+          ctx.ui.notify(`Advisor mid-hour check-ins enabled every ${next.checkinIntervalMinutes}m.`, "info");
+          return;
+        }
+        const minutes = Number(v);
+        if (Number.isFinite(minutes)) {
+          const next = normalizeAdvisorConfig({ ...cfg, checkins: "mid-hour", checkinIntervalMinutes: minutes });
+          saveConfig(next);
+          syncCheckinTimer(pi, ctx);
+          ctx.ui.notify(`Advisor mid-hour check-ins every ${next.checkinIntervalMinutes}m.`, "info");
+          return;
+        }
+        ctx.ui.notify("Usage: /advisor checkins on|off|<minutes>", "error");
         return;
       }
 
