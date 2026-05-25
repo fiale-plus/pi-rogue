@@ -1,4 +1,5 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { clearResearchState, hasActiveResearch } from "./autoresearch-state.js";
 import { buildGoalCheckPrompt, beginGoalCheck, hasGoalCheckPending } from "./goal-resolution.js";
 import { readText, sessionFile, sessionKey, truncate } from "./internal.js";
 import { readSessionJson, writeSessionJson } from "./state.js";
@@ -43,10 +44,13 @@ function clearLoopState(ctx: any): LoopState {
   return writeLoopState(ctx, defaultLoopState());
 }
 
-export function clearLoop(ctx: any): LoopState {
+export function clearLoop(ctx: any, options: { clearResearch?: boolean } = {}): LoopState {
   const next = clearLoopState(ctx);
   stopLoopTimer(sessionKey(ctx));
   setLoopStatus(ctx, next);
+  if (options.clearResearch) {
+    clearResearchState(ctx);
+  }
   return next;
 }
 
@@ -200,8 +204,9 @@ export function registerLoop(pi: ExtensionAPI): void {
       }
 
       if (resolved === "off" || resolved === "clear" || resolved === "stop") {
-        const next = clearLoop(ctx);
-        ctx.ui.notify(next.enabled ? formatLoopState(next) : "Loop cleared.", "info");
+        const clearedResearch = hasActiveResearch(ctx);
+        const next = clearLoop(ctx, { clearResearch: true });
+        ctx.ui.notify(next.enabled ? formatLoopState(next) : `Loop cleared${clearedResearch ? "; autoresearch status cleared" : ""}.`, "info");
         return;
       }
 

@@ -1,30 +1,17 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { appendText, contentText, featureFile, readText, sessionFile, truncate, writeText } from "./internal.js";
 import { shouldHoldResearchOpen, type ResearchCheckResult } from "./autoresearch-completion.js";
+import { clearResearchState, clearResearchStateForGoal, readResearchState, writeResearchState, type ResearchState } from "./autoresearch-state.js";
 import { endGoalCheck, goalCheckResult, hasGoalCheckPending } from "./goal-resolution.js";
 import { clearLoop, triggerLoopTick } from "./loop.js";
-import { readSessionJson, writeSessionJson } from "./state.js";
 
 const FEATURE = "orchestration";
 const CURRENT_FILE = "goal.md";
-const RESEARCH_FILE = "autoresearch.json";
 const HISTORY_FILE = featureFile(FEATURE, "goal-history.jsonl");
 
 type GoalHistoryEntry = {
   at: string;
   goal: string;
-};
-
-type ResearchState = {
-  kind?: "autoresearch" | "autoresearch-lab";
-  instruction?: string;
-  goal?: string;
-  loopInstruction?: string;
-  interval?: string;
-  cycles?: number;
-  doneAttempts?: number;
-  lastResult?: "done" | "continue" | "unknown";
-  updatedAt?: string;
 };
 
 export function activeGoal(ctx: any): string {
@@ -75,27 +62,6 @@ function assistantText(event: any): string {
   const messages = Array.isArray(event?.messages) ? event.messages : [];
   const lastAssistant = [...messages].reverse().find((m: any) => m?.role === "assistant");
   return contentText(lastAssistant?.content);
-}
-
-function readResearchState(ctx: any): ResearchState {
-  return readSessionJson<ResearchState>(FEATURE, ctx, RESEARCH_FILE, {});
-}
-
-function writeResearchState(ctx: any, state: ResearchState): void {
-  writeSessionJson(FEATURE, ctx, RESEARCH_FILE, { ...state, updatedAt: new Date().toISOString() });
-}
-
-function clearResearchState(ctx: any): void {
-  writeSessionJson(FEATURE, ctx, RESEARCH_FILE, {
-    kind: "autoresearch",
-    instruction: "",
-    goal: "",
-    loopInstruction: "",
-    interval: "5m",
-    cycles: 0,
-    doneAttempts: 0,
-    updatedAt: new Date().toISOString(),
-  });
 }
 
 function researchForGoal(ctx: any, goal: string): ResearchState | null {
@@ -186,10 +152,14 @@ export function registerGoal(pi: ExtensionAPI): void {
 
       if (resolved === "clear") {
         const goal = activeGoal(ctx);
+        const clearedResearch = goal ? clearResearchStateForGoal(ctx, goal) : false;
         clearGoal(ctx);
         endGoalCheck(ctx);
         setGoalStatus(ctx, null);
-        ctx.ui.notify(goal ? "Goal cleared." : "No goal to clear.", "info");
+        if (clearedResearch) {
+          clearLoop(ctx);
+        }
+        ctx.ui.notify(goal ? `Goal cleared${clearedResearch ? "; matching autoresearch status cleared" : ""}.` : "No goal to clear.", "info");
         return;
       }
 

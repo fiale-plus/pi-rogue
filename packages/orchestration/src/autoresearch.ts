@@ -1,57 +1,15 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { activeGoal, clearGoal, setGoal, setGoalStatus } from "./goal.js";
 import { clearLoop, startLoop } from "./loop.js";
-import { truncate } from "./internal.js";
-import { readSessionJson, writeSessionJson } from "./state.js";
-
-const FEATURE = "orchestration";
-const RESEARCH_FILE = "autoresearch.json";
-const DEFAULT_INTERVAL = "5m";
-
-type ResearchKind = "autoresearch" | "autoresearch-lab";
-
-export type ResearchState = {
-  kind: ResearchKind;
-  instruction: string;
-  goal?: string;
-  loopInstruction?: string;
-  interval?: string;
-  cycles?: number;
-  doneAttempts?: number;
-  lastResult?: "done" | "continue" | "unknown";
-  updatedAt: string;
-};
-
-function defaultResearchState(kind: ResearchKind): ResearchState {
-  return {
-    kind,
-    instruction: "",
-    goal: "",
-    loopInstruction: "",
-    interval: DEFAULT_INTERVAL,
-    cycles: 0,
-    doneAttempts: 0,
-    updatedAt: "",
-  };
-}
-
-function readResearchState(ctx: any): ResearchState {
-  return readSessionJson(FEATURE, ctx, RESEARCH_FILE, defaultResearchState("autoresearch"));
-}
-
-function writeResearchState(ctx: any, state: ResearchState): ResearchState {
-  const next: ResearchState = { ...state, updatedAt: new Date().toISOString() };
-  writeSessionJson(FEATURE, ctx, RESEARCH_FILE, next);
-  return next;
-}
-
-function clearResearchState(ctx: any): ResearchState {
-  return writeResearchState(ctx, defaultResearchState("autoresearch"));
-}
-
-function label(kind: ResearchKind): string {
-  return kind === "autoresearch-lab" ? "🧪 Autoresearch lab" : "🔎 Autoresearch";
-}
+import {
+  DEFAULT_RESEARCH_INTERVAL,
+  clearResearchState,
+  formatResearchState,
+  label,
+  readResearchState,
+  writeResearchState,
+  type ResearchKind,
+} from "./autoresearch-state.js";
 
 function buildResearchGoal(kind: ResearchKind, instruction: string): string {
   if (kind === "autoresearch-lab") {
@@ -90,17 +48,6 @@ function buildResearchLoopInstruction(kind: ResearchKind, instruction: string): 
     `User instruction: ${instruction}`,
     "Measure or define the target, inspect evidence, make the highest-leverage safe change, run checks/evaluation, record the result, and choose the next hypothesis. Do not declare GOAL_DONE before at least two autoresearch cycles have produced explicit check/evaluation evidence.",
   ].join("\n");
-}
-
-export function formatResearchState(state: ResearchState): string {
-  if (!state.instruction) {
-    return `${label(state.kind)} is off.`;
-  }
-
-  const cycles = state.cycles ?? 0;
-  const doneAttempts = state.doneAttempts ?? 0;
-  const last = state.lastResult ? `, last=${state.lastResult}` : "";
-  return `${label(state.kind)} active: ${truncate(state.instruction, 160)} — backed by /goal + /loop ${state.interval || DEFAULT_INTERVAL}; cycles=${cycles}, doneAttempts=${doneAttempts}${last}`;
 }
 
 function registerResearchCommand(pi: ExtensionAPI, commandName: ResearchKind): void {
@@ -143,7 +90,7 @@ function registerResearchCommand(pi: ExtensionAPI, commandName: ResearchKind): v
       const loopInstruction = buildResearchLoopInstruction(commandName, instruction);
       setGoal(ctx, goal);
       setGoalStatus(ctx, goal);
-      const loop = startLoop(pi, ctx, DEFAULT_INTERVAL, loopInstruction, { triggerNow: true });
+      const loop = startLoop(pi, ctx, DEFAULT_RESEARCH_INTERVAL, loopInstruction, { triggerNow: true });
       if (!loop) {
         ctx.ui.notify(`${prefix} could not start: invalid loop interval.`, "error");
         return;
