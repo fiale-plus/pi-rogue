@@ -62,6 +62,14 @@ Commands:
 - `/autoresearch-lab status` — show lab status
 - `/autoresearch-lab clear` — clear it
 
+## Auto-detection and safety
+
+- Detect likely `goal`, `autoresearch`, or `autoresearch-lab` opportunities from the user request and project context.
+- Present a proposal first instead of silently starting a long run.
+- In interactive mode, ask for explicit confirmation before launching long-running flows.
+- In unattended mode, only auto-run if policy explicitly allows the detected command and budget.
+- Never auto-escalate from solo research to lab mode without approval.
+
 ## Notes
 
 - Keep the loop primitive minimal.
