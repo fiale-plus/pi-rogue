@@ -14,8 +14,12 @@
     "routing:queue": "tsx scripts/build-routing-label-queue.ts",
     "routing:autolabel": "tsx scripts/auto-label-routing-queue.ts",
     "routing:advisor-log": "tsx scripts/mine-advisor-router-log.ts",
+    "sessions:model-outcomes": "tsx scripts/mine-session-model-outcomes.ts",
     "binary:build": "npx tsx scripts/build-binary-gate-dataset.ts",
     "binary:train": "npx tsx scripts/train-binary-gate.ts",
+    "binary:eval-sources": "npx tsx scripts/eval-binary-gate-sources.ts",
+    "binary:review-conflicts": "npx tsx scripts/review-binary-gate-conflicts.ts",
+    "binary:eval-candidates": "npx tsx scripts/eval-binary-gate-candidate-matrix.ts",
     "binary:benchmark": "npx tsx scripts/benchmark-binary-gate.ts",
     "routing:score": "tsx scripts/score-routing-active-learning.ts",
     "routing:eval": "tsx scripts/eval-routing-baselines.ts"

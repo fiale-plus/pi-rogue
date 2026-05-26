@@ -67,7 +67,7 @@ Better first training set:
 npm run routing:advisor-log
 ```
 
-This reads `~/.pi/agent/fiale-plus/advisor/evals/advisor-router.jsonl` and writes advisor-specific examples. These labels are **not** the same taxonomy as task-intent labels; use them for advisor phase/decision training and diagnostics only.
+By default this scans all local advisor router logs matching `~/.pi/agent/*/advisor/evals/advisor-router.jsonl` and writes advisor-specific examples. Pass `-- --input <file>` (or comma-separated files) to narrow the source. These labels are **not** the same taxonomy as task-intent labels; use them for advisor phase/decision training and diagnostics only.
 
 Current finding: failed-turn closeout rows like `Turn reported failure.` are diagnostic examples, not task-intent training examples.
 
@@ -87,6 +87,18 @@ npm run routing:score
 
 This ranks `data/routing/unlabeled.jsonl` by model uncertainty and writes `data/routing/active-learning-queue.jsonl` plus a report. Use this to pull the hardest examples back into gold if manual review becomes available.
 
+## Mine session model outcomes
+
+```bash
+npm run sessions:model-outcomes
+npm run sessions:model-outcomes -- --cwd-contains pi-rogue
+npm run sessions:model-outcomes -- --model-contains gpt-5.3-codex-spark
+```
+
+This is a read-only session miner for advisor-model research. It scans local Pi session JSONL files, extracts assistant model calls, stop reasons, tool-call counts, token/cost usage, nearby user intent, and context-length errors. It writes generated outputs under `data/routing/session-model-outcomes*.{json,jsonl}` for analysis only; it does not mutate session files or change routing behavior.
+
+Use this lane to evaluate when fast models such as `gpt-5.3-codex-spark` are good enough versus when larger advisor models are safer because of context pressure, length stops, or error patterns.
+
 ## Train the binary gate
 
 ```bash
@@ -95,6 +107,30 @@ npm run binary:train
 ```
 
 Builds the binary gate dataset from gold + Pi + Claude sessions, then trains TF-IDF + logistic regression. Model saved to `data/routing/binary-gate-model.json`.
+
+## Evaluate source holdout
+
+```bash
+npm run binary:eval-sources
+```
+
+This trains the binary gate on all but one data source and tests on the held-out source. Use this before replacing the shipped gate: random splits can look strong while source splits reveal overfitting to `gold`, `pi_session`, or `claude_history` wording.
+
+## Review exact binary conflicts
+
+```bash
+npm run binary:review-conflicts
+```
+
+Exports exact gold-vs-heuristic conflicts to ignored JSON/Markdown reports and evaluates an explicit source-priority review overlay against gold holdout. This is diagnostic only: it does not mutate gold labels, generated datasets, shipped model assets, or runtime routing.
+
+## Evaluate candidate training matrix
+
+```bash
+npm run binary:eval-candidates
+```
+
+This is an eval-only candidate matrix for advisor binary-gate training. It compares non-gold baseline, curated-gold calibration, and source-priority conflict weighting on held-out gold, held-out conflict rows, and random session-derived rows. Generated reports stay ignored under `data/routing/`; no shipped model or runtime routing is changed.
 
 ## Benchmark
 

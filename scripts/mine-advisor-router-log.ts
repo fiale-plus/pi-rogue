@@ -3,7 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 
 const DEFAULT_HOME = process.env.HOME || process.env.USERPROFILE || "/tmp";
-const DEFAULT_INPUT = path.join(DEFAULT_HOME, ".pi", "agent", "fiale-plus", "advisor", "evals", "advisor-router.jsonl");
+const FALLBACK_INPUT = path.join(DEFAULT_HOME, ".pi", "agent", "fiale-plus", "advisor", "evals", "advisor-router.jsonl");
 const DEFAULT_DIR = path.join(process.cwd(), "data", "routing");
 const DEFAULT_OUTPUT = path.join(DEFAULT_DIR, "advisor-router-examples.jsonl");
 const DEFAULT_REPORT = path.join(DEFAULT_DIR, "advisor-router-report.json");
@@ -23,6 +23,7 @@ interface RouterRow {
   promptHash?: string;
   prompt?: string;
   brief?: string;
+  sourceFile?: string;
 }
 
 interface AdvisorExample {
@@ -40,10 +41,21 @@ interface AdvisorExample {
   review?: string;
   prompt?: string;
   brief?: string;
+  sourceFile?: string;
   text: string;
   trainable: boolean;
   diagnosticOnly: boolean;
   issue?: string;
+}
+
+function discoverDefaultInputs(): string[] {
+  const agentRoot = path.join(DEFAULT_HOME, ".pi", "agent");
+  if (!fs.existsSync(agentRoot)) return fs.existsSync(FALLBACK_INPUT) ? [FALLBACK_INPUT] : [];
+  const found = fs.readdirSync(agentRoot, { withFileTypes: true })
+    .filter((entry) => entry.isDirectory())
+    .map((entry) => path.join(agentRoot, entry.name, "advisor", "evals", "advisor-router.jsonl"))
+    .filter((file) => fs.existsSync(file));
+  return Array.from(new Set(found)).sort();
 }
 
 function parseArgs(argv: string[]) {
@@ -60,8 +72,11 @@ function parseArgs(argv: string[]) {
       args[key] = true;
     }
   }
+  const inputs = typeof args.input === "string"
+    ? args.input.split(",").map((file) => file.trim()).filter(Boolean)
+    : discoverDefaultInputs();
   return {
-    input: String(args.input || DEFAULT_INPUT),
+    inputs,
     output: String(args.output || DEFAULT_OUTPUT),
     report: String(args.report || DEFAULT_REPORT),
   };
@@ -74,7 +89,7 @@ function readJsonl(file: string): RouterRow[] {
     .map((line) => line.trim())
     .filter(Boolean)
     .map((line) => {
-      try { return JSON.parse(line) as RouterRow; } catch { return null; }
+      try { return { ...(JSON.parse(line) as RouterRow), sourceFile: file }; } catch { return null; }
     })
     .filter((row): row is RouterRow => Boolean(row));
 }
@@ -125,6 +140,7 @@ function toExample(row: RouterRow): AdvisorExample {
     review: row.review,
     prompt: prompt || undefined,
     brief: brief || undefined,
+    sourceFile: row.sourceFile,
     text,
     trainable,
     diagnosticOnly,
@@ -134,14 +150,14 @@ function toExample(row: RouterRow): AdvisorExample {
 
 function main() {
   const args = parseArgs(process.argv.slice(2));
-  const rows = readJsonl(args.input);
+  const rows = args.inputs.flatMap((input) => readJsonl(input));
   const examples = rows.map(toExample);
   const trainable = examples.filter((row) => row.trainable);
   const diagnostics = examples.filter((row) => row.diagnosticOnly || row.issue);
   const failureRows = examples.filter((row) => row.issue === "failed-turn-closeout");
 
   const report = {
-    input: args.input,
+    inputFiles: args.inputs,
     rows: rows.length,
     output: args.output,
     trainable: trainable.length,
@@ -164,6 +180,8 @@ function main() {
   fs.writeFileSync(args.output, examples.map((row) => `${JSON.stringify(row)}\n`).join(""), "utf8");
   fs.writeFileSync(args.report, `${JSON.stringify(report, null, 2)}\n`, "utf8");
 
+  console.log(`input files: ${args.inputs.length}`);
+  for (const input of args.inputs) console.log(`- ${input}`);
   console.log(`router rows: ${rows.length}`);
   console.log(`trainable advisor examples: ${trainable.length}`);
   console.log(`diagnostic/issue rows: ${diagnostics.length}`);
