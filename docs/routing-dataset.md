@@ -140,6 +140,12 @@ npm run binary:eval-q1-q10
 
 This converts the Q1-Q10 conflict-labeling interview into resolved conflict examples with rule provenance, then evaluates whether adding those examples helps the binary model. The rules are used as labeling metadata only; this is not a runtime policy overlay and does not replace shipped advisor assets.
 
+To evaluate reviewed augmentation rows from JSONL files, pass one or more paths:
+
+```bash
+npm run binary:eval-q1-q10 -- --reviewed /tmp/q1-q10-reviewed-batch-1.jsonl,/tmp/q1-q10-reviewed-batch-2.jsonl
+```
+
 ## Build Q1-Q10 conflict-like review queue
 
 ```bash

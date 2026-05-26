@@ -17,6 +17,20 @@ type ResolvedConflict = Row & {
   action: "accept_gold" | "relabel_by_policy" | "manual_review_keep_current_gold_for_now";
 };
 
+type Args = { reviewed: string[] };
+
+function parseArgs(argv: string[]): Args {
+  const reviewed: string[] = [];
+  for (let i = 0; i < argv.length; i++) {
+    const arg = argv[i];
+    if (arg !== "--reviewed") continue;
+    const value = argv[++i];
+    if (!value) throw new Error("--reviewed requires a JSONL file path or comma-separated paths");
+    reviewed.push(...value.split(",").map((file) => file.trim()).filter(Boolean));
+  }
+  return { reviewed };
+}
+
 function readJsonl<T>(file: string): T[] {
   if (!fs.existsSync(file)) return [];
   return fs.readFileSync(file, "utf8").split(/\r?\n/).map((l) => l.trim()).filter(Boolean).map((l) => JSON.parse(l) as T);
@@ -33,6 +47,15 @@ function shuffle<T>(items: T[], seed: number): T[] {
 }
 function countBy<T>(rows: T[], key: (row: T) => string) {
   return rows.reduce<Record<string, number>>((acc, row) => { const k = key(row); acc[k] = (acc[k] || 0) + 1; return acc; }, {});
+}
+function readReviewedRows(files: string[]): Row[] {
+  return files.flatMap((file) => readJsonl<any>(file).map((row, index) => {
+    const label = row.label as Label;
+    if (!LABELS.includes(label)) throw new Error(`Invalid reviewed label in ${file}:${index + 1}: ${String(row.label)}`);
+    const text = String(row.text || "").replace(/\s+/g, " ").trim();
+    if (!text) throw new Error(`Missing reviewed text in ${file}:${index + 1}`);
+    return { id: row.id ? String(row.id) : `${path.basename(file)}:${index + 1}`, text, label, source: row.source ? String(row.source) : "q1_q10_reviewed" };
+  }));
 }
 
 function q1q10Policy(text: string): { label?: Label; rule: string } {
@@ -125,8 +148,10 @@ function evaluate(model: ReturnType<typeof train>, rows: Row[]) {
   return { accuracy: correct / rows.length, correct, total: rows.length };
 }
 
+const args = parseArgs(process.argv.slice(2));
 const binary = readJsonl<any>(path.join(DIR, "binary-gate.jsonl")).map((r) => ({ text: String(r.text), label: r.label as Label, source: String(r.source) }));
 const resolved = resolveConflicts();
+const reviewedRows = readReviewedRows(args.reviewed);
 const conflictKeys = new Set(resolved.map((r) => normalize(r.text)));
 const nonGold = binary.filter((r) => r.source !== "gold");
 const goldNonConflict = binary.filter((r) => r.source === "gold" && !conflictKeys.has(normalize(r.text))).map((r) => ({ ...r, source: "gold_non_conflict" }));
@@ -134,10 +159,11 @@ const conflictFolds = folds(resolved, 5, 1001);
 const goldFolds = folds(goldNonConflict, 5, 1002);
 const sessionTest = shuffle(nonGold, 1003).slice(0, 400);
 const policies = [
-  { name: "non_gold_only", gold: false, conflict: false },
-  { name: "gold_non_conflict_only", gold: true, conflict: false },
-  { name: "q1_q10_conflict_only", gold: false, conflict: true },
-  { name: "gold_plus_q1_q10_conflict", gold: true, conflict: true },
+  { name: "non_gold_only", gold: false, conflict: false, reviewed: false },
+  { name: "gold_non_conflict_only", gold: true, conflict: false, reviewed: false },
+  { name: "q1_q10_conflict_only", gold: false, conflict: true, reviewed: false },
+  { name: "gold_plus_q1_q10_conflict", gold: true, conflict: true, reviewed: false },
+  ...(reviewedRows.length ? [{ name: "gold_plus_q1_q10_conflict_plus_reviewed", gold: true, conflict: true, reviewed: true }] : []),
 ];
 const results = policies.map((policy) => {
   const folds = conflictFolds.map((conflictTest, i) => {
@@ -145,6 +171,7 @@ const results = policies.map((policy) => {
       ...nonGold,
       ...(policy.gold ? goldFolds.flatMap((f, j) => j === i ? [] : f) : []),
       ...(policy.conflict ? conflictFolds.flatMap((f, j) => j === i ? [] : f) : []),
+      ...(policy.reviewed ? reviewedRows : []),
     ];
     const model = train(trainRows);
     return { trainRows: trainRows.length, conflict: evaluate(model, conflictTest), gold: evaluate(model, goldFolds[i]), session: evaluate(model, sessionTest) };
@@ -153,12 +180,13 @@ const results = policies.map((policy) => {
   return { policy: policy.name, avgTrainRows: Math.round(folds.reduce((s, f) => s + f.trainRows, 0) / folds.length), conflictAccuracy: avg("conflict"), goldAccuracy: avg("gold"), sessionAccuracy: avg("session"), folds };
 });
 const outputRows = resolved.map((r) => ({ id: r.id, text: r.text, label: r.label, source: r.source, sourceLabel: r.currentGoldLabel, pair: r.pair, policyRule: r.policyRule, action: r.action }));
-const report = { rows: { nonGold: nonGold.length, goldNonConflict: goldNonConflict.length, conflicts: resolved.length }, resolution: { actionCounts: countBy(resolved, (r) => r.action), ruleCounts: countBy(resolved, (r) => r.policyRule), resolvedCounts: countBy(resolved, (r) => r.label) }, results };
+const report = { rows: { nonGold: nonGold.length, goldNonConflict: goldNonConflict.length, conflicts: resolved.length, reviewed: reviewedRows.length }, reviewed: { sourceCounts: countBy(reviewedRows, (r) => r.source), labelCounts: countBy(reviewedRows, (r) => r.label) }, resolution: { actionCounts: countBy(resolved, (r) => r.action), ruleCounts: countBy(resolved, (r) => r.policyRule), resolvedCounts: countBy(resolved, (r) => r.label) }, results };
 fs.writeFileSync(path.join(DIR, "binary-q1-q10-resolved-conflicts.jsonl"), outputRows.map((r) => JSON.stringify(r)).join("\n") + "\n", "utf8");
 fs.writeFileSync(path.join(DIR, "binary-q1-q10-augmentation-report.json"), JSON.stringify(report, null, 2) + "\n", "utf8");
 const md = [
   "# Binary Q1-Q10 augmentation report", "", "The Q1-Q10 rules are used as label-generation provenance only; the evaluated candidate trains the binary model on resolved labels rather than using a runtime policy overlay.", "",
   `- conflicts: ${resolved.length}`,
+  `- reviewed augmentation rows: ${reviewedRows.length}`,
   `- relabel by policy: ${report.resolution.actionCounts.relabel_by_policy || 0}`,
   `- no-rule kept as current gold: ${report.resolution.actionCounts.manual_review_keep_current_gold_for_now || 0}`,
   "", "| Policy | Avg train rows | Conflict CV acc | Gold non-conflict CV acc | Session sample acc |", "|---|---:|---:|---:|---:|",
