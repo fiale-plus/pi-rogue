@@ -10,11 +10,11 @@
   "scripts": {
     "check": "npm run check -ws --if-present",
     "test": "npm run test -ws --if-present",
-    "routing:mine": "tsx scripts/mine-routing-examples.ts",
-    "routing:queue": "tsx scripts/build-routing-label-queue.ts",
-    "routing:autolabel": "tsx scripts/auto-label-routing-queue.ts",
-    "routing:advisor-log": "tsx scripts/mine-advisor-router-log.ts",
-    "sessions:model-outcomes": "tsx scripts/mine-session-model-outcomes.ts",
+    "routing:mine": "npx tsx scripts/mine-routing-examples.ts",
+    "routing:queue": "npx tsx scripts/build-routing-label-queue.ts",
+    "routing:autolabel": "npx tsx scripts/auto-label-routing-queue.ts",
+    "routing:advisor-log": "npx tsx scripts/mine-advisor-router-log.ts",
+    "sessions:model-outcomes": "npx tsx scripts/mine-session-model-outcomes.ts",
     "binary:build": "npx tsx scripts/build-binary-gate-dataset.ts",
     "binary:train": "npx tsx scripts/train-binary-gate.ts",
     "binary:eval-sources": "npx tsx scripts/eval-binary-gate-sources.ts",
@@ -25,8 +25,8 @@
     "binary:q1-q10-hard-negatives": "npx tsx scripts/build-q1-q10-hard-negative-packet.ts",
     "binary:q1-q10-over-escalation": "npx tsx scripts/build-q1-q10-over-escalation-augmentation.ts",
     "binary:benchmark": "npx tsx scripts/benchmark-binary-gate.ts",
-    "routing:score": "tsx scripts/score-routing-active-learning.ts",
-    "routing:eval": "tsx scripts/eval-routing-baselines.ts"
+    "routing:score": "npx tsx scripts/score-routing-active-learning.ts",
+    "routing:eval": "npx tsx scripts/eval-routing-baselines.ts"
   },
   "engines": {
     "node": ">=22.5.0"
