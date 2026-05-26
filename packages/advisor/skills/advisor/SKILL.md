@@ -5,46 +5,44 @@ description: Zero-config strategic advisor for Pi. Auto-detects best model, phas
 
 # PiRogue Advisor
 
-Works out of the box. Just install and use `/advisor` or `/pi-rogue`.
-
-> 96 strategic calls saved ~$53 on GPT-5.5 over 3,071 turns — see [`docs/savings.md`](../../docs/savings.md)
+Use this skill for non-trivial decisions before/after significant edits.
 
 ## Quick start
 
-- `/pi-rogue` — cockpit/status entry point
-- `/advisor` — status + config
-- `/advisor <question>` — get immediate advice
-- `/advisor on|off` — enable/disable
-- `/advisor checkins on|off|<minutes>` — configure low-power mid-hour check-ins
+- `/pi-rogue` — open cockpit and command pointers
+- `/advisor status` — show current advisor settings and model route
+- `/advisor <question>` — ask immediate advice
+- `/advisor checkins on|off|<minutes>` — control low-power check-ins
 
-Zero config needed. Falls back through SOTA models (gpt-5.5 → claude-opus-4-6 → sonnet-4-6) automatically.
-
-The router is phase-aware: it keeps tiny edits cheap, escalates complex/high-risk work to SOTA, and writes compact routing logs for future classifier training.
-
-## When to call
-
-Agent should call `advisor` tool before: new frameworks, refactoring, API design, concurrency, security, tradeoffs.
-Skip: reads, small edits, one-liners.
-
-## Commands
+## Command surface
 
 | Command | What it does |
-|---------|-------------|
-| `/advisor` | Show status, config, cached note |
-| `/advisor <question>` | Get immediate strategic advice |
-| `/advisor on` | Enable auto mode (preflight+post+cache) |
-| `/advisor off` | Disable |
-| `/advisor mode auto\|manual\|off` | Set advisor mode |
-| `/advisor model <provider/model>` | Set specific model (e.g. `openai-codex/gpt-5.5`) |
-| `/advisor status` | Full status with model and check-in info |
-| `/advisor config` | Show current config |
-| `/advisor review light\|strict\|off` | Set review aggressiveness |
-| `/advisor checkins on\|off\|<minutes>` | Configure low-power mid-hour check-ins |
+|---|---|
+| `/advisor` | Show status + config summary |
+| `/advisor status` | Same as `/advisor` |
+| `/advisor on` | Enable auto mode |
+| `/advisor off` | Disable advisor |
+| `/advisor mode auto\|manual\|off` | Control when advisor auto-runs |
+| `/advisor review light\|strict\|off` | Set review threshold |
+| `/advisor checkins on\|off\|<minutes>` | Configure interval check-ins |
+| `/advisor config` | Dump full config |
+| `/advisor model <provider/model>` | Pin model explicitly |
+| `/advisor <question>` | Run one advisory response |
 
-## Config (5 fields, all optional)
+## Routing and safety
 
-Defaults: `mode: auto, review: light, checkins: mid-hour, checkinIntervalMinutes: 30`
+- Preflight is heuristics + quick local gate first.
+- Review runs after edits and/or at completion points by policy.
+- No hidden long-running background daemon: check-ins are interval-gated and lightweight.
 
-```json
-{ "mode": "auto", "review": "light", "checkins": "mid-hour", "checkinIntervalMinutes": 30 }
-```
+## Keep scope clear
+
+The advisor surface is separate from orchestration (`goal`/`loop`/`autoresearch`) and intentionally stays a small command set with explicit entries above.
+
+## Defaults
+
+- `mode: auto`
+- `review: light`
+- `checkins: mid-hour`
+- `checkinIntervalMinutes: 30`
+- `model: auto`
