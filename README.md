@@ -8,27 +8,14 @@ PiRogue is a modular Pi extension stack for **agentic session guidance** and **g
 
 ## Components and release status
 
-Published surface:
-
-| Surface | Package | NPM Version | NPM Downloads | What it is |
-|---|---|---|---|---|
-| Advisor | `@fiale-plus/pi-rogue-advisor` | [![advisor version](https://img.shields.io/npm/v/%40fiale-plus%2Fpi-rogue-advisor?style=flat-square)](https://www.npmjs.com/package/@fiale-plus/pi-rogue-advisor) | [![advisor downloads](https://img.shields.io/npm/dm/%40fiale-plus%2Fpi-rogue-advisor?style=flat-square)](https://www.npmjs.com/package/@fiale-plus/pi-rogue-advisor) | Strategic advisor + phase-aware routing + optional check-ins |
-| Orchestrator | `@fiale-plus/pi-rogue-orchestration` | [![orchestration version](https://img.shields.io/npm/v/%40fiale-plus%2Fpi-rogue-orchestration?style=flat-square)](https://www.npmjs.com/package/@fiale-plus/pi-rogue-orchestration) | [![orchestration downloads](https://img.shields.io/npm/dm/%40fiale-plus%2Fpi-rogue-orchestration?style=flat-square)](https://www.npmjs.com/package/@fiale-plus/pi-rogue-orchestration) | Loop, goal, and autoresearch controls |
-
-Upcoming surface:
-
-| Surface | Package | NPM Version | NPM Downloads | What it is |
-|---|---|---|---|---|
-| Bundle | `@fiale-plus/pi-rogue-bundle` | n/a *(not yet published)* | n/a | Umbrella package for advisor + orchestration |
-
-
-Lab / greenhouse (unreleased internal helper packages):
-
-| Surface | Package | Status | Notes |
-|---|---|---|---|
-| Guardrails | `@fiale-plus/pi-rogue-guardrails` | not published | internal helper |
-| Brain | `@fiale-plus/pi-rogue-brain` | not published | internal helper |
-| Repo-arch | `@fiale-plus/pi-rogue-repo-arch` | not published | internal helper |
+| Surface | Package | NPM Version | NPM Downloads | What it is | Scope |
+|---|---|---|---|---|---|
+| Published | `@fiale-plus/pi-rogue-advisor` | [![advisor version](https://img.shields.io/npm/v/%40fiale-plus%2Fpi-rogue-advisor?style=flat-square)](https://www.npmjs.com/package/@fiale-plus/pi-rogue-advisor) | [![advisor downloads](https://img.shields.io/npm/dm/%40fiale-plus%2Fpi-rogue-advisor?style=flat-square)](https://www.npmjs.com/package/@fiale-plus/pi-rogue-advisor) | Strategic advisor + phase-aware routing + optional check-ins | Public |
+| Published | `@fiale-plus/pi-rogue-orchestration` | [![orchestration version](https://img.shields.io/npm/v/%40fiale-plus%2Fpi-rogue-orchestration?style=flat-square)](https://www.npmjs.com/package/@fiale-plus/pi-rogue-orchestration) | [![orchestration downloads](https://img.shields.io/npm/dm/%40fiale-plus%2Fpi-rogue-orchestration?style=flat-square)](https://www.npmjs.com/package/@fiale-plus/pi-rogue-orchestration) | Loop, goal, and autoresearch controls | Public |
+| Upcoming (prepared) | `@fiale-plus/pi-rogue-bundle` | [![bundle version](https://img.shields.io/badge/bundle%20version-n%2Fa-lightgrey?style=flat-square)](https://img.shields.io/badge/bundle%20version-n%2Fa-lightgrey) | [![bundle downloads](https://img.shields.io/badge/bundle%20downloads-n%2Fa-lightgrey?style=flat-square)](https://img.shields.io/badge/bundle%20downloads-n%2Fa-lightgrey) | Umbrella package for advisor + orchestration | Prepared, not yet published |
+| Lab/greenhouse | `@fiale-plus/pi-rogue-guardrails` | n/a | n/a | Internal helper for command safety gates | Internal / not released |
+| Lab/greenhouse | `@fiale-plus/pi-rogue-brain` | n/a | n/a | Internal helper for session memory | Internal / not released |
+| Lab/greenhouse | `@fiale-plus/pi-rogue-repo-arch` | n/a | n/a | Internal helper for repo memory workflows | Internal / not released |
 
 ## Install
 
@@ -57,7 +44,8 @@ This exposes all workspace packages (`advisor`, `orchestration`, `bundle`, and i
 
 1. Install either the umbrella or individual packages.
 2. Start a Pi session.
-3. Use:
+3. Run `/advisor` (or `/advisor status`) first to let the quick main model establish session posture.
+4. Then use:
    - `/pi-rogue` — cockpit and command pointers
    - `/advisor` — strategic guidance
    - `/goal`, `/loop`, `/autoresearch`, `/autoresearch-lab` — orchestration primitives
@@ -95,7 +83,7 @@ This exposes all workspace packages (`advisor`, `orchestration`, `bundle`, and i
 - `packages/bundle/README.md` (Bundle surface)
 - `packages/advisor/skills/advisor/SKILL.md` (Pi skill surface)
 - `packages/orchestration/skills/orchestration/SKILL.md` (Pi skill surface)
-- `docs/agents.md` (agentic usage playbook)
+- `AGENTS.md` (agentic usage/playbook + repo-level agent instructions)
 - `docs/skills-flow.md` (how advisor/orchestration skills fit together)
 - `docs/release.md` and `.github/ISSUE_TEMPLATE/release.md` (release policy and naming)
 
