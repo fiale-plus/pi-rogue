@@ -106,8 +106,11 @@ function main() {
     .sort((a, b) => b.ambiguity - a.ambiguity || a.rule.localeCompare(b.rule) || a.text.localeCompare(b.text))
     .filter((row) => { const key = row.text.toLowerCase(); if (seen.has(key)) return false; seen.add(key); return true; });
   const queue: QueueRow[] = [];
+  let nextId = 1;
   for (const rule of Object.keys(countBy(deduped, (row) => row.rule)).sort()) {
-    queue.push(...deduped.filter((row) => row.rule === rule).slice(0, args.perRule).map((row) => ({ id: `q1q10-${String(queue.length + 1).padStart(3, "0")}`, ...row })));
+    for (const row of deduped.filter((candidate) => candidate.rule === rule).slice(0, args.perRule)) {
+      queue.push({ id: `q1q10-${String(nextId++).padStart(3, "0")}`, ...row });
+    }
   }
   fs.mkdirSync(path.dirname(args.output), { recursive: true });
   fs.writeFileSync(args.output, queue.map((row) => JSON.stringify(row)).join("\n") + "\n", "utf8");
