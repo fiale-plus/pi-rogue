@@ -1,7 +1,7 @@
 {
   "name": "@fiale-plus/pi-rogue",
   "version": "0.1.0",
-  "description": "Internal PiRogue bundle for local workspace use.",
+  "description": "PiRogue greenhouse bundle for local workspace use (internal, unreleased umbrella).",
   "type": "module",
   "license": "MIT",
   "keywords": [

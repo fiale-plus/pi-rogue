@@ -19,3 +19,17 @@ Use this when cutting a new release.
 - the GitHub release notes are prepared with a clear summary of changes
 
 Prefer the changelog entry to be done before the release is cut, not after.
+
+## Naming policy
+
+- Tag format: `<component>-<semver>`
+- Release title: `<semver>`
+- Keep the component prefix in the tag only.
+- Use the same note sections for every component release:
+  - `## Summary`
+  - `## Changes`
+  - `## Validation`
+
+## Greenhouse status
+
+Internal/experimental umbrella packaging is labeled as the PiRogue greenhouse and is not published as a release.

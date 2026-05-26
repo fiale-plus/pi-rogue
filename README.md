@@ -37,7 +37,7 @@ packages/
   bundle/
 ```
 
-The published surface includes advisor and orchestration. Bundle/umbrella packaging stays internal.
+The published surface includes advisor and orchestration. Bundle/umbrella packaging stays internal and is treated as the PiRogue greenhouse.
 
 The old `.autoresearch` scratch data has been archived under `~/.pi/archived-autoresearch/pi-rogue/`.
 

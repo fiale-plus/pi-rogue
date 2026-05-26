@@ -1,7 +1,12 @@
-# @fiale-plus/pi-rogue
+# PiRogue Greenhouse
 
-Internal PiRogue bundle for local workspace use.
+Internal/unreleased umbrella bundle for the PiRogue workspace.
 
-Install locally from this repo root: `npm install`
+Status: greenhouse (not published)
 
-Includes: advisor, goal, guardrails, brain, repo-arch bridge.
+It stitches together the published surfaces in this repo:
+- advisor
+- orchestration
+- guardrails
+- brain
+- repo-arch
