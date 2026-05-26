@@ -96,6 +96,14 @@ npm run binary:train
 
 Builds the binary gate dataset from gold + Pi + Claude sessions, then trains TF-IDF + logistic regression. Model saved to `data/routing/binary-gate-model.json`.
 
+## Train weighted candidate
+
+```bash
+npm run binary:train-weighted-candidate
+```
+
+This is an isolated candidate-training experiment. It keeps exact gold-vs-heuristic conflict rows in evaluation, but down-weights them during candidate training. Generated reports are ignored under `data/routing/` and no shipped advisor assets are changed.
+
 ## Benchmark
 
 ```bash
