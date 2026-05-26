@@ -45,6 +45,9 @@ function parseArgs(argv: string[]) {
     output: String(args.output || DEFAULT_OUTPUT),
     markdown: String(args.markdown || DEFAULT_MARKDOWN),
     report: String(args.report || DEFAULT_REPORT),
+    direction: args.direction ? String(args.direction) : undefined,
+    rule: args.rule ? String(args.rule) : undefined,
+    limit: args.limit ? Number(args.limit) : undefined,
   };
 }
 function readJsonl<T>(file: string): T[] {
@@ -70,8 +73,12 @@ function reviewPrompt(row: Miss) {
 function main() {
   const args = parseArgs(process.argv.slice(2));
   const misses = readJsonl<Miss>(args.input);
-  const rows: PacketRow[] = misses
-    .sort((a, b) => (a.policyRule || "unknown").localeCompare(b.policyRule || "unknown") || `${a.label}->${a.pred}`.localeCompare(`${b.label}->${b.pred}`) || a.text.localeCompare(b.text))
+  const filteredMisses = misses
+    .filter((miss) => !args.direction || `${miss.label}->${miss.pred}` === args.direction)
+    .filter((miss) => !args.rule || (miss.policyRule || "unknown") === args.rule)
+    .sort((a, b) => (a.policyRule || "unknown").localeCompare(b.policyRule || "unknown") || `${a.label}->${a.pred}`.localeCompare(`${b.label}->${b.pred}`) || a.text.localeCompare(b.text));
+  const selectedMisses = args.limit && args.limit > 0 ? filteredMisses.slice(0, args.limit) : filteredMisses;
+  const rows: PacketRow[] = selectedMisses
     .map((miss, index) => ({
       id: `hn-${String(index + 1).padStart(3, "0")}`,
       sourceId: miss.id,
@@ -87,6 +94,9 @@ function main() {
   fs.writeFileSync(args.output, rows.map((row) => JSON.stringify(row)).join("\n") + (rows.length ? "\n" : ""), "utf8");
   const report = {
     input: args.input,
+    filters: { direction: args.direction || null, rule: args.rule || null, limit: args.limit || null },
+    inputRows: misses.length,
+    filteredRows: filteredMisses.length,
     rows: rows.length,
     missDirectionCounts: countBy(rows, (row) => row.missDirection),
     ruleCounts: countBy(rows, (row) => row.policyRule),
@@ -97,7 +107,11 @@ function main() {
     "",
     "Purpose: inspect conflict CV misses and derive contrastive hard negatives without adding runtime policy overlay.",
     "",
-    `- Rows: ${rows.length}`,
+    `- Input rows: ${misses.length}`,
+    `- Filtered rows: ${filteredMisses.length}`,
+    `- Packet rows: ${rows.length}`,
+    `- Direction filter: ${args.direction || "<none>"}`,
+    `- Rule filter: ${args.rule || "<none>"}`,
     "",
     "## Miss directions",
     "",

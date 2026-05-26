@@ -171,6 +171,12 @@ npm run binary:q1-q10-hard-negatives
 
 This converts conflict-CV misses from `binary-q1-q10-conflict-misses.jsonl` into an ignored review packet for contrastive hard-negative work. The packet is for data review and augmentation planning only; it does not change runtime routing behavior.
 
+Use filters to focus a lane, for example current over-escalation misses:
+
+```bash
+npm run binary:q1-q10-hard-negatives -- --direction continue->escalate --output data/routing/binary-q1-q10-over-escalation-packet.jsonl --markdown data/routing/binary-q1-q10-over-escalation-packet.md --report data/routing/binary-q1-q10-over-escalation-packet-report.json
+```
+
 ## Benchmark
 
 ```bash
