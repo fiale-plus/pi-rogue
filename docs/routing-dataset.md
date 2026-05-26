@@ -114,6 +114,22 @@ Builds the binary gate dataset from gold + Pi + Claude sessions, then trains TF-
 npm run binary:eval-sources
 ```
 
+## Iterative deep improvement (autoresearch on the advisor gate)
+
+The binary gate (the fast local logreg that decides `continue` vs `escalate_to_advisor` for the full strategic LLM advisor) is the subject of ongoing targeted research.
+
+A portable measurement harness (`.autoresearch/autoresearch.sh` + checks) drives full cycles:
+- Fresh `binary:build` from local sessions (including high-value spark-class advisor runs)
+- `binary:train`
+- Key evals (`binary:eval-sources`, q1-q10 aug evals, conflict reviews, baselines)
+- Structured `METRIC escalate_f1=... continue_f1=... routing_acc=... tps=... over_escalation_rate=...` output for tracking.
+
+Recent baseline on 2346 rows (fresh local data): escalate F1 **0.884**, routing acc **89.3%**, ~50k TPS.
+
+All `routing:*` and `binary:*` scripts now consistently use `npx tsx` (this PR) so the harness (and future waves targeting hard q1-q10 / conflict / over-escalation cases) runs reliably in worktrees and varied environments.
+
+Run targeted lanes via the q1-q10 / hard-negative / over-escalation scripts, then re-train + measure. Goal: push hard-set F1 while keeping over-escalation low, for fewer wasted calls to the high-quality local advisor LLM.
+
 This trains the binary gate on all but one data source and tests on the held-out source. Use this before replacing the shipped gate: random splits can look strong while source splits reveal overfitting to `gold`, `pi_session`, or `claude_history` wording.
 
 ## Review exact binary conflicts
