@@ -19,17 +19,20 @@ Lab/greenhouse helper packages are currently internal and not listed as publishe
 
 ## Install
 
-### Published packages (recommended)
+### Recommended install (simplest)
 
 ```bash
-# individual surfaces
+pi install npm:@fiale-plus/pi-rogue-bundle
+```
+
+### Extra control (individual extensions)
+
+```bash
 pi install npm:@fiale-plus/pi-rogue-advisor
 pi install npm:@fiale-plus/pi-rogue-orchestration
 ```
 
-### Umbrella package
-
-`@fiale-plus/pi-rogue-bundle` is prepared as the umbrella package. It is currently available via the workspace package (`npm install` at repo root) and will be published as a dedicated release step.
+`@fiale-plus/pi-rogue-bundle` is now published and recommended as the default one-shot install.
 
 ### Local workspace / lab
 
@@ -42,7 +45,7 @@ This exposes all workspace packages (`advisor`, `orchestration`, `bundle`, and i
 
 ## Quick start
 
-1. Install either the umbrella or individual packages.
+1. Install `@fiale-plus/pi-rogue-bundle` (or individual extensions if preferred).
 2. Start a Pi session.
 3. Run `/advisor` (or `/advisor status`) first to let the quick main model establish session posture.
 4. Then use:
