@@ -2,7 +2,7 @@
   "name": "pi-rogue",
   "version": "0.1.0",
   "private": true,
-  "description": "PiRogue advisor extension repo and internal workspaces.",
+  "description": "Pi-Rogue advisor extension repo and internal workspaces.",
   "type": "module",
   "workspaces": [
     "packages/*"

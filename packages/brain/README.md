@@ -1,4 +1,4 @@
-# PiRogue Brain
+# Pi-Rogue Brain
 
 Local project memory for Pi.
 

@@ -1,7 +1,7 @@
 {
   "name": "@fiale-plus/pi-rogue-advisor",
   "version": "0.1.4",
-  "description": "PiRogue advisor extension for Pi — multi-model support, SOTA model suggestion, cache-aware session advisory.",
+  "description": "Pi-Rogue advisor extension for Pi — multi-model support, SOTA model suggestion, cache-aware session advisory.",
   "type": "module",
   "license": "MIT",
   "repository": {

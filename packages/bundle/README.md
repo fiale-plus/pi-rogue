@@ -1,4 +1,4 @@
-# PiRogue Bundle
+# Pi-Rogue Bundle
 
 `@fiale-plus/pi-rogue-bundle` is the prepared umbrella package that stitches together:
 

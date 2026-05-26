@@ -1,4 +1,4 @@
-# PiRogue Guardrails
+# Pi-Rogue Guardrails
 
 Shell command risk checks and approvals for Pi.
 

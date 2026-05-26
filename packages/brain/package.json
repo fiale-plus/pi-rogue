@@ -1,7 +1,7 @@
 {
   "name": "@fiale-plus/pi-rogue-brain",
   "version": "0.1.0",
-  "description": "Local memory extension for PiRogue.",
+  "description": "Local memory extension for Pi-Rogue.",
   "type": "module",
   "license": "MIT",
   "keywords": [

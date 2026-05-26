@@ -3,7 +3,7 @@ name: orchestration
 description: Session orchestration for Pi; use when you want to manage loop cadence, goals, or opt-in autoresearch in the current session.
 ---
 
-# PiRogue Orchestration
+# Pi-Rogue Orchestration
 
 Use this skill to run measurable, bounded workflow loops inside a Pi session.
 

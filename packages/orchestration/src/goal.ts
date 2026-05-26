@@ -32,7 +32,7 @@ export function clearGoal(ctx: any): void {
 
 function goalBlock(goal: string): string {
   return [
-    "## PiRogue Goal",
+    "## Pi-Rogue Goal",
     `Current goal: ${goal}`,
     "When a loop tick asks whether the goal is done, answer exactly with `GOAL_DONE: ...` or `GOAL_CONTINUE: ...`.",
   ].join("\n");

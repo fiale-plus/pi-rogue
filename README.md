@@ -1,10 +1,10 @@
-# PiRogue
+# Pi-Rogue
 
 [![CI](https://github.com/fiale-plus/pi-rogue/actions/workflows/check.yml/badge.svg?branch=main&style=flat-square)](https://github.com/fiale-plus/pi-rogue/actions/workflows/check.yml)
 [![License](https://img.shields.io/github/license/fiale-plus/pi-rogue?style=flat-square)](LICENSE)
 [![Tests](https://img.shields.io/github/actions/workflow/status/fiale-plus/pi-rogue/check.yml?branch=main&label=tests&style=flat-square)](https://github.com/fiale-plus/pi-rogue/actions/workflows/check.yml)
 
-PiRogue is a modular Pi extension stack for **agentic session guidance** and **goal/loop-based orchestration**.
+Pi-Rogue is a modular Pi extension stack for **agentic session guidance** and **goal/loop-based orchestration**.
 
 ## Components and release status
 

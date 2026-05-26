@@ -1,4 +1,4 @@
-# PiRogue repository agent instructions
+# Pi-Rogue repository agent instructions
 
 Use this file as the concise operating guidance for agent usage in this repo.
 

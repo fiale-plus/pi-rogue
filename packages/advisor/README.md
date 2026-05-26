@@ -21,7 +21,7 @@ npm install --workspace packages/advisor
 
 | Command | What it does |
 |---|---|
-| `/pi-rogue` | Show the PiRogue cockpit + command pointers |
+| `/pi-rogue` | Show the Pi-Rogue cockpit + command pointers |
 | `/advisor` | Show status (`/advisor status`) and quick hint |
 | `/advisor status` | Show mode, review policy, check-in status, model selection, counters |
 | `/advisor on` | Enable advisor (auto mode) |

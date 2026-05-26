@@ -1,4 +1,4 @@
-name: Publish PiRogue Bundle to npm
+name: Publish Pi-Rogue Bundle to npm
 
 on:
   release:

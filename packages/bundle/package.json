@@ -1,7 +1,7 @@
 {
   "name": "@fiale-plus/pi-rogue-bundle",
   "version": "0.1.0",
-  "description": "Public PiRogue bundle for advisor and orchestration.",
+  "description": "Public Pi-Rogue bundle for advisor and orchestration.",
   "type": "module",
   "license": "MIT",
   "repository": {

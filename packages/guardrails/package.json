@@ -1,7 +1,7 @@
 {
   "name": "@fiale-plus/pi-rogue-guardrails",
   "version": "0.1.0",
-  "description": "Command-risk guardrails for PiRogue.",
+  "description": "Command-risk guardrails for Pi-Rogue.",
   "type": "module",
   "license": "MIT",
   "keywords": [

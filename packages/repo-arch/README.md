@@ -1,4 +1,4 @@
-# PiRogue Repo Arch
+# Pi-Rogue Repo Arch
 
 Pi integration bridge for [repo-arch](https://github.com/fiale-plus/repo-arch), a CLI-first project-memory engine.
 

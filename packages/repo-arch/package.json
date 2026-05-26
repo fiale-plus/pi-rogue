@@ -1,7 +1,7 @@
 {
   "name": "@fiale-plus/pi-rogue-repo-arch",
   "version": "0.1.0",
-  "description": "PiRogue integration bridge for repo-arch (CLI-first project-memory engine).",
+  "description": "Pi-Rogue integration bridge for repo-arch (CLI-first project-memory engine).",
   "type": "module",
   "license": "MIT",
   "keywords": [

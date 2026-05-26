@@ -2,7 +2,7 @@
 
 ## What this package is
 
-Session orchestration for PiRogue built around three primitives:
+Session orchestration for Pi-Rogue built around three primitives:
 
 1. `goal` — define and track what success looks like
 2. `loop` — periodic execution and backpressure-safe scheduling

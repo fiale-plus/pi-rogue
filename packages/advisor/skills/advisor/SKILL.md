@@ -3,7 +3,7 @@ name: advisor
 description: Zero-config strategic advisor for Pi. Auto-detects best model, phase-aware routing, preflight + post-review + cache. Use for architecture, tradeoffs, planning.
 ---
 
-# PiRogue Advisor
+# Pi-Rogue Advisor
 
 Use this skill for non-trivial decisions before/after significant edits.
 

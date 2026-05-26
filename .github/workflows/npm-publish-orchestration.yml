@@ -1,4 +1,4 @@
-name: Publish PiRogue Orchestration to npm
+name: Publish Pi-Rogue Orchestration to npm
 
 on:
   release:

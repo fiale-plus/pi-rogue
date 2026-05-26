@@ -374,7 +374,7 @@ function syncCheckinTimer(pi: ExtensionAPI, ctx: any): void {
 function piRogueCockpitText(config: AdvisorConfig, state: SessionState, currentNote: string): string {
   const normalized = normalizeAdvisorConfig(config);
   return [
-    "☠︎ PiRogue cockpit",
+    "☠︎ Pi-Rogue cockpit",
     currentNote ? `Advisor: ${truncate(currentNote, 220)}` : "Advisor: no current note",
     `Mode: ${normalized.mode} | Review: ${normalized.review} | Check-ins: ${normalized.checkins === "off" ? "off" : `${normalized.checkinIntervalMinutes}m`}`,
     `Turns: ${state.turns} | Advisor calls: ${state.advisorCalls} | Cache hits: ${state.cacheHits}`,
@@ -666,7 +666,7 @@ export function registerAdvisor(pi: ExtensionAPI): void {
 
   // ── /pi-rogue cockpit ──────────────────────────────────────────────────
   pi.registerCommand("pi-rogue", {
-    description: "Show PiRogue cockpit: advisor, check-ins, and orchestration command pointers",
+    description: "Show Pi-Rogue cockpit: advisor, check-ins, and orchestration command pointers",
     getArgumentCompletions: (prefix: string) => piRogueArgumentCompletions(prefix),
     handler: async (args, ctx) => {
       const cfg = loadConfig();

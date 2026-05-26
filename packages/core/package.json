@@ -1,7 +1,7 @@
 {
   "name": "@fiale-plus/pi-core",
   "version": "0.1.0",
-  "description": "Shared helpers for the PiRogue workspace.",
+  "description": "Shared helpers for the Pi-Rogue workspace.",
   "type": "module",
   "license": "MIT",
   "keywords": [
