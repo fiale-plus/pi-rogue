@@ -1,34 +1,32 @@
-# PiRogue Greenhouse
+# PiRogue Bundle
 
-`packages/bundle` is the internal, unreleased PiRogue umbrella package.
+`@fiale-plus/pi-rogue-bundle` is the published umbrella package that stitches together:
 
-It is marked as **greenhouse** (internal workspace-only) and composes the published surfaces for local development and full-stack experimentation.
+- `@fiale-plus/pi-rogue-advisor`
+- `@fiale-plus/pi-rogue-orchestration`
 
-## What it stitches together
+It is a thin, official surface for local usage when you want one install and both command families together.
 
-- `@fiale-plus/pi-rogue-advisor` (published)
-- `@fiale-plus/pi-rogue-orchestration` (published)
-- `@fiale-plus/pi-guardrails` (internal helper)
-- `@fiale-plus/pi-brain` (internal helper)
-- `@fiale-plus/pi-repo-arch` (internal helper)
-
-## Why greenhouse?
-
-- Keeps local experimentation obvious and contained.
-- Prevents unreleased aggregator surfaces from being interpreted as released npm artifacts.
-- Gives a single install and extension hook while still documenting explicit published boundaries.
-
-## Installation and usage
+## Install
 
 ```bash
-# from repo root
-npm install
+pi install npm:@fiale-plus/pi-rogue-bundle
+# or
+npm install @fiale-plus/pi-rogue-bundle
 ```
 
-After workspace install, the umbrella registers all internal and published extension modules for local runs.
+## Scope boundaries
+
+- **Lab / internal helpers are excluded from this bundle.**
+- `@fiale-plus/pi-rogue-bundle` currently includes only the published logic surfaces.
+- Internal helper packages (`@fiale-plus/pi-rogue-guardrails`, `@fiale-plus/pi-rogue-brain`, `@fiale-plus/pi-rogue-repo-arch`) are maintained separately in the lab section.
+
+## Command surface
+
+- `/advisor`, `/goal`, `/loop`, `/autoresearch`, `/autoresearch-lab` plus status/config/command paths inherited from the two included packages.
 
 ## Status
 
-- **Published?** No (private workspace package)
-- **NPM version/downloads:** not published
-- **Stability:** internal, greenhouse, internal-use only
+- **Published?** Yes
+- **NPM version/downloads:** available via npm
+- **Stability:** public surface; no extra internal helper behavior

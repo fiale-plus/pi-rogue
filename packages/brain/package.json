@@ -1,5 +1,5 @@
 {
-  "name": "@fiale-plus/pi-brain",
+  "name": "@fiale-plus/pi-rogue-brain",
   "version": "0.1.0",
   "description": "Local memory extension for PiRogue.",
   "type": "module",

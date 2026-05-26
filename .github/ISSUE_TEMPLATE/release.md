@@ -31,6 +31,18 @@ Use this shape for component releases so notes stay consistent:
 ## Validation
 ```
 
+## Release scope
+
+List components touched in this release (and release in dependency order):
+
+- [ ] advisor (`advisor-<semver>`)
+- [ ] pi-rogue-orchestration (`pi-rogue-orchestration-<semver>`)
+- [ ] pi-rogue-bundle (`pi-rogue-bundle-<semver>`)
+
+When this release updates both logic packages and the bundle:
+- release logic packages first
+- then release `pi-rogue-bundle` so it captures latest versions
+
 ## Naming policy
 
 - Tag format: `<component>-<semver>`

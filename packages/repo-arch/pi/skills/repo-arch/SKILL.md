@@ -41,4 +41,4 @@ repo-arch similar "why auth middleware token-only?" --json
 
 ## Integration
 
-This package (`@fiale-plus/pi-repo-arch`) is the Pi integration bridge. The standalone CLI lives at `@fiale-plus/repo-arch`.
+This package (`@fiale-plus/pi-rogue-repo-arch`) is the Pi integration bridge. The standalone CLI lives at `@fiale-plus/repo-arch`.

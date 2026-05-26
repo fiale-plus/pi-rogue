@@ -1,13 +1,12 @@
 {
-  "name": "@fiale-plus/pi-rogue",
+  "name": "@fiale-plus/pi-rogue-bundle",
   "version": "0.1.0",
-  "description": "PiRogue greenhouse bundle for local workspace use (internal, unreleased umbrella).",
+  "description": "Public PiRogue bundle for advisor and orchestration.",
   "type": "module",
   "license": "MIT",
   "keywords": [
     "pi-package"
   ],
-  "private": true,
   "main": "./src/index.ts",
   "exports": {
     ".": "./src/index.ts"
@@ -22,10 +21,7 @@
   },
   "dependencies": {
     "@fiale-plus/pi-rogue-advisor": "^0.1.0",
-    "@fiale-plus/pi-brain": "^0.1.0",
-    "@fiale-plus/pi-rogue-orchestration": "^0.1.0",
-    "@fiale-plus/pi-guardrails": "^0.1.0",
-    "@fiale-plus/pi-repo-arch": "^0.1.0"
+    "@fiale-plus/pi-rogue-orchestration": "^0.1.0"
   },
   "publishConfig": {
     "access": "public"

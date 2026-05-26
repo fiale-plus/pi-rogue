@@ -1,5 +1,5 @@
 {
-  "name": "@fiale-plus/pi-guardrails",
+  "name": "@fiale-plus/pi-rogue-guardrails",
   "version": "0.1.0",
   "description": "Command-risk guardrails for PiRogue.",
   "type": "module",
