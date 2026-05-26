@@ -16,6 +16,7 @@
     "routing:advisor-log": "tsx scripts/mine-advisor-router-log.ts",
     "binary:build": "npx tsx scripts/build-binary-gate-dataset.ts",
     "binary:train": "npx tsx scripts/train-binary-gate.ts",
+    "binary:eval-conflicts": "npx tsx scripts/eval-binary-gate-conflict-ablation.ts",
     "binary:benchmark": "npx tsx scripts/benchmark-binary-gate.ts",
     "routing:score": "tsx scripts/score-routing-active-learning.ts",
     "routing:eval": "tsx scripts/eval-routing-baselines.ts"

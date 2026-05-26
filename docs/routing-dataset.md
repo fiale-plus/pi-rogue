@@ -96,6 +96,14 @@ npm run binary:train
 
 Builds the binary gate dataset from gold + Pi + Claude sessions, then trains TF-IDF + logistic regression. Model saved to `data/routing/binary-gate-model.json`.
 
+## Evaluate conflict ablation
+
+```bash
+npm run binary:eval-conflicts
+```
+
+This is a read-only ablation for label-noise analysis. It finds exact prompts that conflict between curated gold and heuristic Pi examples, removes those prompts from the binary dataset, and reruns gold/source holdout diagnostics. Use it to decide whether training weakness is mostly conflict-driven or whether broader feature/label work is needed.
+
 ## Benchmark
 
 ```bash
