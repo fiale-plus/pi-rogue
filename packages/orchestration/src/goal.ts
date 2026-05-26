@@ -4,6 +4,7 @@ import { shouldHoldResearchOpen, type ResearchCheckResult } from "./autoresearch
 import { clearResearchState, clearResearchStateForGoal, readResearchState, writeResearchState, type ResearchState } from "./autoresearch-state.js";
 import { endGoalCheck, goalCheckResult, hasGoalCheckPending } from "./goal-resolution.js";
 import { clearLoop, triggerLoopTick } from "./loop.js";
+import { goalArgumentCompletions } from "./completions.js";
 
 const FEATURE = "orchestration";
 const CURRENT_FILE = "goal.md";
@@ -136,6 +137,7 @@ export function registerGoal(pi: ExtensionAPI): void {
 
   pi.registerCommand("goal", {
     description: "Set, show, clear, or list the current session goal",
+    getArgumentCompletions: (prefix: string) => goalArgumentCompletions(prefix),
     handler: async (args, ctx) => {
       const input = String(args ?? "").trim();
       const [cmd, ...rest] = input.split(/\s+/);

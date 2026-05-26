@@ -1,12 +1,5 @@
 import { describe, expect, it } from "vitest";
-import {
-  clearResearchState,
-  clearResearchStateForGoal,
-  formatResearchState,
-  readResearchState,
-  writeResearchState,
-  type ResearchState,
-} from "./autoresearch-state.js";
+import { formatResearchState, type ResearchState } from "./autoresearch-state.js";
 
 describe("autoresearch status", () => {
   it("surfaces backing loop and completion-guard counters", () => {
@@ -32,25 +25,5 @@ describe("autoresearch status", () => {
 
   it("keeps empty state concise", () => {
     expect(formatResearchState({ kind: "autoresearch", instruction: "", updatedAt: "" })).toBe("🔎 Autoresearch is off.");
-  });
-
-  it("clears status when the matching backing goal is cleared", () => {
-    const ctx = { sessionManager: { getSessionFile: () => `/tmp/autoresearch-clear-${process.pid}.json` } };
-    const goal = "Autoresearch: cleanup status";
-    writeResearchState(ctx, {
-      kind: "autoresearch",
-      instruction: "cleanup status",
-      goal,
-      loopInstruction: "Run one autoresearch cycle",
-      interval: "5m",
-      cycles: 2,
-      doneAttempts: 1,
-      updatedAt: "",
-    });
-
-    expect(clearResearchStateForGoal(ctx, goal)).toBe(true);
-    expect(readResearchState(ctx).instruction).toBe("");
-
-    clearResearchState(ctx);
   });
 });

@@ -10,6 +10,7 @@ import {
   writeResearchState,
   type ResearchKind,
 } from "./autoresearch-state.js";
+import { autoresearchArgumentCompletions } from "./completions.js";
 
 function buildResearchGoal(kind: ResearchKind, instruction: string): string {
   if (kind === "autoresearch-lab") {
@@ -57,6 +58,7 @@ function registerResearchCommand(pi: ExtensionAPI, commandName: ResearchKind): v
     description: commandName === "autoresearch-lab"
       ? "Parallel multi-agent research mode backed by goal + loop"
       : "Iterative optimization/research mode backed by goal + loop",
+    getArgumentCompletions: (prefix: string) => autoresearchArgumentCompletions(prefix),
     handler: async (args, ctx) => {
       const input = String(args ?? "").trim();
       const [cmd] = input.split(/\s+/);

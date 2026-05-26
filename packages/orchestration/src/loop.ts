@@ -3,6 +3,7 @@ import { clearResearchState, hasActiveResearch } from "./autoresearch-state.js";
 import { buildGoalCheckPrompt, beginGoalCheck, hasGoalCheckPending } from "./goal-resolution.js";
 import { readText, sessionFile, sessionKey, truncate } from "./internal.js";
 import { readSessionJson, writeSessionJson } from "./state.js";
+import { loopArgumentCompletions } from "./completions.js";
 
 const FEATURE = "orchestration";
 const LOOP_FILE = "loop.json";
@@ -193,6 +194,7 @@ export function registerLoop(pi: ExtensionAPI): void {
 
   pi.registerCommand("loop", {
     description: "Record, show, or clear the current session loop cadence",
+    getArgumentCompletions: (prefix: string) => loopArgumentCompletions(prefix),
     handler: async (args, ctx) => {
       const input = String(args ?? "").trim();
       const [cmd, ...rest] = input.split(/\s+/);

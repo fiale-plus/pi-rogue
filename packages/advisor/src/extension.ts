@@ -5,6 +5,7 @@ import { Box, Text } from "@earendil-works/pi-tui";
 import { completeSimple, type ThinkingLevel } from "@earendil-works/pi-ai";
 import { Type } from "typebox";
 import { featureFile, readText, truncate, writeText } from "./internal.js";
+import { advisorArgumentCompletions, piRogueArgumentCompletions } from "./completions.js";
 import {
   appendRouteLog,
   binaryGatePredict,
@@ -666,10 +667,48 @@ export function registerAdvisor(pi: ExtensionAPI): void {
   // ── /pi-rogue cockpit ──────────────────────────────────────────────────
   pi.registerCommand("pi-rogue", {
     description: "Show PiRogue cockpit: advisor, check-ins, and orchestration command pointers",
-    handler: async (_args, ctx) => {
+    getArgumentCompletions: (prefix: string) => piRogueArgumentCompletions(prefix),
+    handler: async (args, ctx) => {
       const cfg = loadConfig();
       const state = loadState();
+      const arg = String(args ?? "").trim().toLowerCase();
       setPiRogueStatus(ctx, cfg, state);
+
+      if (!arg || arg === "status" || arg === "help") {
+        ctx.ui.notify(piRogueCockpitText(cfg, state, readText(CURRENT_PATH).trim()), "info");
+        return;
+      }
+
+      if (arg.startsWith("advisor")) {
+        ctx.ui.notify([
+          "Advisor surface:",
+          "  /advisor status",
+          "  /advisor config",
+          "  /advisor checkins on|off|<minutes>",
+          "  /advisor <question>",
+        ].join("\n"), "info");
+        return;
+      }
+
+      if (arg.startsWith("orchestration")) {
+        ctx.ui.notify([
+          "Orchestration surface:",
+          "  /goal show|clear|list|set <text>",
+          "  /loop status|off|clear|stop|<interval> <instruction>",
+          "  /autoresearch status|clear|<instruction>",
+          "  /autoresearch-lab status|clear|<instruction>",
+        ].join("\n"), "info");
+        return;
+      }
+
+      if (arg.startsWith("checkins")) {
+        ctx.ui.notify([
+          `Advisor check-ins: ${cfg.checkins === "off" ? "off" : `${cfg.checkinIntervalMinutes}m`}`,
+          "Use /advisor checkins on|off|<minutes> to change it.",
+        ].join("\n"), "info");
+        return;
+      }
+
       ctx.ui.notify(piRogueCockpitText(cfg, state, readText(CURRENT_PATH).trim()), "info");
     },
   });
@@ -677,6 +716,7 @@ export function registerAdvisor(pi: ExtensionAPI): void {
   // ── /advisor command ───────────────────────────────────────────────────
   pi.registerCommand("advisor", {
     description: "Senior engineering advisor. Usage: /advisor [on|off|status|config|question]",
+    getArgumentCompletions: (prefix: string) => advisorArgumentCompletions(prefix),
     handler: async (args, ctx) => {
       const a = String(args ?? "").trim().toLowerCase();
       const [cmd, ...rest] = a.split(/\s+/);
