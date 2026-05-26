@@ -1,27 +1,23 @@
 # PiRogue repository agent instructions
 
-## Scope and command discipline
+Use this file as the concise operating guidance for agent usage in this repo.
+
+## Core behavior for agents
 
 - Keep scope narrow. Do not expand command surfaces unless requested.
-- Keep command names and behavior unchanged unless there is explicit approval.
+- Keep command names and behavior unchanged unless explicitly approved.
 - Prefer explicit `/` command surfaces and avoid implicit/background-only behavior.
+- Start with `/advisor` (or `/advisor status`) at session start to establish quick posture before orchestration actions.
 
-## Merge policy
+## Safety / process
 
 - **Do not merge PRs without explicit user consent.**
 - Merge branches/PRs only after summary validation and user approval.
 
-## Naming and release conventions
+## Maintenance policy references
 
-- Published package names should follow the `@fiale-plus/pi-rogue-*` pattern.
-- Release tags are component-scoped: `<component>-<semver>` (e.g. `advisor-0.1.5`).
-
-## Surface tiers
-
-- **Published surface**: `@fiale-plus/pi-rogue-advisor`, `@fiale-plus/pi-rogue-orchestration`, `@fiale-plus/pi-rogue-bundle`.
-- **Lab / greenhouse (internal)**: `@fiale-plus/pi-rogue-guardrails`, `@fiale-plus/pi-rogue-brain`, `@fiale-plus/pi-rogue-repo-arch`.
-  - These are not to be marked as user-facing published alternatives.
-
-## Note
-
-- This file is for repo users and agent helpers (not maintainer-only process playbooks). For release workflow details, see `.github/ISSUE_TEMPLATE/release.md` and `docs/release.md`.
+This AGENTS file intentionally stays agentic (not maintainer process).
+- For release rules, naming, and checklists, see:
+  - `docs/release.md`
+  - `.github/ISSUE_TEMPLATE/release.md`
+  - `.github/workflows/*.yml`
