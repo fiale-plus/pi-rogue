@@ -1,17 +1,44 @@
-# PiRogue Orchestration
+# @fiale-plus/pi-rogue-orchestration
 
-Session orchestration for PiRogue: scheduled loop, goal, and autoresearch controls.
+## What this package is
 
-`/goal` updates the status badge and kicks off the first check immediately when a loop is active; subsequent loop ticks resolve it. `/loop` announces each tick, sends the instruction back into the session, and requires at least 1m cadence. `/autoresearch` is now a facade over both: it sets a research-shaped goal, starts a 5m loop, queues the first cycle immediately, guards against first-cycle premature `GOAL_DONE` without validation evidence, surfaces cycle/done-attempt counters in status, and clears stale status when the backing goal or loop is cleared.
+Session orchestration for PiRogue built around three primitives:
 
-Install from npm:
+1. `goal` — define and track what success looks like
+2. `loop` — periodic execution and backpressure-safe scheduling
+3. `autoresearch` / `autoresearch-lab` — goal+loop facades for iterative or parallelized optimization
 
-```bash
-npm install @fiale-plus/pi-rogue-orchestration
-```
-
-Or install locally from this repo root:
+## Install
 
 ```bash
-npm install
+# Published package
+pi install npm:@fiale-plus/pi-rogue-orchestration
+
+# Local package development
+npm install --workspace packages/orchestration
 ```
+
+## Commands
+
+| Command | What it does |
+|---|---|
+| `/goal set <text>` | Set/update current goal (auto-starts a first check when loop exists) |
+| `/goal show` | Show current goal |
+| `/goal clear` | Clear active goal |
+| `/goal list` | Show recent goal history |
+| `/loop <interval> <instruction>` | Create or reset periodic loop (`1m` minimum) |
+| `/loop status` | Show current loop state |
+| `/loop off` / `clear` / `stop` | Clear loop |
+| `/autoresearch <instruction>` | Start/update solo research flow (1+ cycles required before completion) |
+| `/autoresearch status` | Show autoresearch state/counters/status |
+| `/autoresearch clear` | Clear solo research + underlying loop |
+| `/autoresearch-lab <instruction>` | Start/update parallel research mode |
+| `/autoresearch-lab status` | Show lab state |
+| `/autoresearch-lab clear` | Clear lab + underlying loop |
+
+## Behavior notes
+
+- `loop` supports minimum interval `1m`.
+- `goal` checks are done through assistant loop ticks; `GOAL_DONE` / `GOAL_CONTINUE` are preserved.
+- `autoresearch` and `autoresearch-lab` are thin facades over `/goal + /loop`.
+- Stale research state is cleared when `goal` or `loop` are cleared.
