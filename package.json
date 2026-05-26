@@ -22,6 +22,7 @@
     "binary:eval-candidates": "npx tsx scripts/eval-binary-gate-candidate-matrix.ts",
     "binary:eval-q1-q10": "npx tsx scripts/eval-binary-gate-q1-q10-augmentation.ts",
     "binary:q1-q10-queue": "npx tsx scripts/build-q1-q10-conflict-like-queue.ts",
+    "binary:q1-q10-hard-negatives": "npx tsx scripts/build-q1-q10-hard-negative-packet.ts",
     "binary:benchmark": "npx tsx scripts/benchmark-binary-gate.ts",
     "routing:score": "tsx scripts/score-routing-active-learning.ts",
     "routing:eval": "tsx scripts/eval-routing-baselines.ts"

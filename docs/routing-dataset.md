@@ -154,6 +154,15 @@ npm run binary:q1-q10-queue
 
 This scans unlabeled and weakly labeled routing rows for Q1-Q10-like boundary cases and writes an ignored JSONL/Markdown review queue. Use it to add reviewed conflict-like examples so future binary-gate candidates can learn the policy from data rather than runtime rules.
 
+## Build Q1-Q10 hard-negative packet
+
+```bash
+npm run binary:eval-q1-q10 -- --reviewed /tmp/q1-q10-reviewed-all.jsonl
+npm run binary:q1-q10-hard-negatives
+```
+
+This converts conflict-CV misses from `binary-q1-q10-conflict-misses.jsonl` into an ignored review packet for contrastive hard-negative work. The packet is for data review and augmentation planning only; it does not change runtime routing behavior.
+
 ## Benchmark
 
 ```bash
