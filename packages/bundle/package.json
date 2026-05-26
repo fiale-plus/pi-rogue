@@ -4,6 +4,10 @@
   "description": "Public PiRogue bundle for advisor and orchestration.",
   "type": "module",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/fiale-plus/pi-rogue"
+  },
   "keywords": [
     "pi-package"
   ],
