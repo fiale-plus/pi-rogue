@@ -199,7 +199,37 @@ npm run binary:eval-file -- --input data/routing/binary-gate-bench-terminal-core
 tb run --agent oracle --dataset terminal-bench-core==0.1.1 --n-tasks 1 --output-path /tmp/tb_run_oracle --no-upload-results
 ```
 
-This environment currently fails in this workspace because Docker daemon is unavailable.
+### Promote benchmark-trained gate model to runtime (optional, explicit)
+
+If this lane has passed your acceptance checks and you want to activate the enhanced model in production:
+
+```bash
+RUNTIME="$HOME/.pi/agent/fiale-plus/advisor/binary-gate-model.json"
+CANDIDATE="data/routing/binary-gate-bench-terminal-core-model.json"
+BACKUP="${RUNTIME}.bak.$(date +%Y%m%d_%H%M%S)"
+
+cp "$RUNTIME" "$BACKUP"                             # rollback target
+cp "$CANDIDATE" "$RUNTIME"
+
+echo "promoted $CANDIDATE -> $RUNTIME"
+echo "rollback: cp \"$BACKUP\" \"$RUNTIME\""
+```
+
+Verify after promotion with an explicit full-file sanity check:
+
+```bash
+npm run binary:eval-file -- --input data/routing/binary-gate.jsonl
+```
+
+If needed, rollback with:
+
+```bash
+cp "$BACKUP" "$RUNTIME"
+```
+
+Notes:
+- Candidate artifacts are intentionally untracked (`data/routing/*.jsonl` / `data/routing/*.json`) and meant for reproducible local operations.
+- `#65` currently contains the hardened benchmark lane; model-file promotion is an operational step performed in your runtime profile, not a committed repo artifact.
 
 ## Training gate
 
