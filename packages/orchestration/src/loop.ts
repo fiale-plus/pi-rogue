@@ -56,13 +56,15 @@ function archiveLoopState(ctx: any, previous: LoopState): void {
   })}\n`);
 }
 
-export function clearLoop(ctx: any, options: { clearResearch?: boolean } = {}): LoopState {
+export function clearLoop(ctx: any, options: { clearResearch?: boolean; preserveCheckins?: boolean } = {}): LoopState {
   const current = readLoopState(ctx);
   archiveLoopState(ctx, current);
   const next = clearLoopState(ctx);
   stopLoopTimer(sessionKey(ctx));
   setLoopStatus(ctx, next);
-  setAdvisorCheckinsEnabled(false);
+  if (!options.preserveCheckins) {
+    setAdvisorCheckinsEnabled(false);
+  }
   if (options.clearResearch) {
     clearResearchState(ctx);
   }

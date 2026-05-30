@@ -11,6 +11,13 @@ export function truncate(text: string, max: number): string {
 
 export function contentText(content: unknown): string {
   if (typeof content === "string") return content.trim();
+  if (content && typeof content === "object" && !Array.isArray(content)) {
+    const block = content as Record<string, unknown>;
+    if (typeof block.text === "string") return block.text.trim();
+    if (block.content !== undefined) return contentText(block.content);
+    if (block.message !== undefined) return contentText(block.message);
+    return "";
+  }
   if (!Array.isArray(content)) return String(content ?? "").trim();
 
   const parts: string[] = [];
@@ -24,6 +31,12 @@ export function contentText(content: unknown): string {
     const block = item as Record<string, unknown>;
     if (typeof block.text === "string") {
       parts.push(block.text);
+    } else if (block.content !== undefined) {
+      const nested = contentText(block.content);
+      if (nested) parts.push(nested);
+    } else if (block.message !== undefined) {
+      const nested = contentText(block.message);
+      if (nested) parts.push(nested);
     }
   }
 

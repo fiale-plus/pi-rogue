@@ -267,9 +267,16 @@ function renderAdvisorHint(message: any, options: { expanded?: boolean }, theme:
   return box;
 }
 
-/** Extract readable text from message content (handles both string and content-block arrays) */
-function contentText(content: unknown): string {
+/** Extract readable text from message content (handles strings, blocks, and nested message payloads). */
+export function contentText(content: unknown): string {
   if (typeof content === "string") return content.trim();
+  if (content && typeof content === "object" && !Array.isArray(content)) {
+    const obj = content as Record<string, unknown>;
+    if (typeof obj.text === "string") return obj.text.trim();
+    if (obj.content !== undefined) return contentText(obj.content);
+    if (obj.message !== undefined) return contentText(obj.message);
+    return "";
+  }
   if (!Array.isArray(content)) return String(content ?? "").trim();
   const parts: string[] = [];
   for (const item of content) {
@@ -278,6 +285,14 @@ function contentText(content: unknown): string {
     const obj = item as Record<string, unknown>;
     if (obj.type === "text" && typeof obj.text === "string") parts.push(obj.text);
     else if (typeof obj.text === "string") parts.push(obj.text);
+    else if (obj.content !== undefined) {
+      const nested = contentText(obj.content);
+      if (nested) parts.push(nested);
+    }
+    else if (obj.message !== undefined) {
+      const nested = contentText(obj.message);
+      if (nested) parts.push(nested);
+    }
   }
   return parts.join("\n").replace(/\s+/g, " ").trim();
 }
@@ -333,11 +348,25 @@ function orchestrationSnapshotText(ctx: any): string {
       : "no active goal";
   return [
     "Orchestration:",
-    `- Goal: ${goalActive ? `active — ${truncate(snapshot.goal, 140)}` : "off"}`,
-    `- Autoresearch: ${researchActive ? `active — cycles=${snapshot.research.cycles ?? 0}, doneAttempts=${snapshot.research.doneAttempts ?? 0}${snapshot.research.lastResult ? `, last=${snapshot.research.lastResult}` : ""}` : "off"}`,
-    `- Loop: ${loopActive ? `active every ${snapshot.loop.interval || "?"} — ${truncate(snapshot.loop.instruction || "", 120)}` : "off"}`,
+    `- Goal: ${goalActive ? `active — ${truncate(snapshot.goal, 360)}` : "off"}`,
+    `- Autoresearch: ${researchActive ? `active — ${truncate(snapshot.research.instruction || "", 240)}; cycles=${snapshot.research.cycles ?? 0}, doneAttempts=${snapshot.research.doneAttempts ?? 0}${snapshot.research.lastResult ? `, last=${snapshot.research.lastResult}` : ""}` : "off"}`,
+    `- Loop: ${loopActive ? `active every ${snapshot.loop.interval || "?"} — ${truncate(snapshot.loop.instruction || "", 260)}` : "off"}`,
     `- Status: ${status}`,
   ].join("\n");
+}
+
+export function buildAdvisorCheckinPrompt(source: string, orchestration: string, sessionBrief: string): string {
+  return [
+    `Mid-session check-in (${source})`,
+    "Role: alignment reviewer for the active work. Do not create a new task, research direction, benchmark, script, artifact, or model switch unless the active goal explicitly asks for it.",
+    "Stay anchored to the active goal/autoresearch/loop. If autoresearch is active, preserve its research question and judge whether the latest work is gathering evidence toward that question.",
+    "Bad nudge examples: research the existence of weaknesses instead of solving the named weakness; create a script/report about weaknesses when the goal is to fix advisor behavior; swap to a shallower research mode.",
+    "Return exactly two short lines:",
+    "Status: on_track|stuck|off_track - <why, tied to the active goal>",
+    "Nudge: <one concrete next action that continues the active goal>",
+    orchestration,
+    sessionBrief ? `Session brief:\n${sessionBrief}` : "",
+  ].filter(Boolean).join("\n\n");
 }
 
 function setPiRogueStatus(ctx: any, config = loadConfig(), state = loadState()): void {
@@ -406,26 +435,19 @@ async function maybeAdvisorCheckin(pi: ExtensionAPI, ctx: any, source: string): 
 
   checkinLocks.add(key);
   try {
+    const prompt = buildAdvisorCheckinPrompt(source, orchestrationSnapshotText(ctx), brief(state));
     const completed = await completeWithHigherAdvisorModel(
       ctx,
       config,
-      [
-        `Mid-session check-in (${source}): briefly assess whether the current session is on track, stuck, or missing a higher-leverage next step.`,
-        orchestrationSnapshotText(ctx),
-        "If a goal exists but autoresearch/loop progression is off, call out the setup gap. Do not start or change orchestration; return one concrete nudge.",
-      ].join("\n\n"),
+      prompt,
       [
         {
           role: "user",
-          content: [
-            `Mid-session check-in (${source}): briefly assess whether the current session is on track, stuck, or missing a higher-leverage next step.`,
-            orchestrationSnapshotText(ctx),
-            "If a goal exists but autoresearch/loop progression is off, call out the setup gap. Do not start or change orchestration; return one concrete nudge.",
-          ].join("\n\n"),
+          content: prompt,
           timestamp: new Date().toISOString(),
         },
       ],
-      { maxTokens: 600, reasoning: "medium" as ThinkingLevel },
+      { maxTokens: 260, reasoning: "low" as ThinkingLevel },
     );
     if (!completed) return false;
 
@@ -585,15 +607,17 @@ async function doReview(pi: ExtensionAPI, ctx: any, trigger: string, delta: stri
   const gatePrediction = binaryGatePredict(reviewInput.text);
   let reviewRoute = reviewHeuristic;
   if (gatePrediction && gatePrediction.confidence >= 0.55 && !reviewHeuristic.safety) {
-    const binLabel = gatePrediction.decision === "continue" ? "continue" as const : "escalate_to_advisor" as const;
+    const gateContinues = gatePrediction.decision === "continue";
     reviewRoute = {
       ...reviewHeuristic,
+      label: gateContinues ? "abstain" : reviewHeuristic.label,
+      confidence: gatePrediction.confidence,
       source: "model",
-      reason: gatePrediction.decision === "continue"
+      reason: gateContinues
         ? "local gate predicts continue"
         : "local gate predicts review",
-      review: binLabel === "continue" ? "off" as const : reviewHeuristic.review,
-      escalate: binLabel === "escalate_to_advisor",
+      review: gateContinues ? "off" as const : reviewHeuristic.review,
+      escalate: gateContinues ? false : reviewHeuristic.escalate,
     };
   }
   appendRouteLog(reviewRoute);

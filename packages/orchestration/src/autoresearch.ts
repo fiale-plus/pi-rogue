@@ -3,7 +3,6 @@ import { activeGoal, clearGoal, setGoal, setGoalStatus } from "./goal.js";
 import { clearLoop, startLoop } from "./loop.js";
 import {
   DEFAULT_RESEARCH_INTERVAL,
-  clearResearchState,
   formatResearchState,
   label,
   readResearchState,
@@ -13,22 +12,29 @@ import {
 import { appendText, featureFile } from "./internal.js";
 import { autoresearchArgumentCompletions } from "./completions.js";
 
-function buildResearchGoal(kind: ResearchKind, instruction: string): string {
+export function buildResearchGoal(kind: ResearchKind, instruction: string): string {
   if (kind === "autoresearch-lab") {
     return [
       `Autoresearch lab: ${instruction}`,
+      "Setup gate before implementation:",
+      "- define the source seed/objective, hypotheses, measurement method, baseline/current state, durable artifacts, and stop condition",
+      "- split the scope into independent lanes with a hypothesis, eval method, and expected artifact for each lane",
+      "- do not simplify, re-aim, or replace the user objective unless the user explicitly asks",
       "Success criteria:",
-      "- split the scope into independent research lanes before changing code",
       "- preserve isolated/non-overlapping work where possible",
       "- evaluate candidate findings before merging them into the main path",
       "- run checks after integration and summarize winning/losing hypotheses",
+      "- write down convergent findings, rejected hypotheses, limitations, and follow-up seeds when complete",
     ].join("\n");
   }
 
   return [
     `Autoresearch: ${instruction}`,
+    "Setup gate before implementation:",
+    "- define the hypothesis/objective, measurable target, baseline/current state, benchmark/evaluation command, durable artifact/log, and stop condition",
+    "- if no metric or benchmark exists, the first concrete action is to inspect and create or identify one",
+    "- do not simplify, re-aim, or replace the user objective unless the user explicitly asks",
     "Success criteria:",
-    "- make the target measurable; identify or create the benchmark/evaluation command when useful",
     "- run iterative identify → implement → build/check → test/evaluate → sanity → log cycles",
     "- preserve the benchmark/evaluation script as the durable product",
     "- complete at least two loop cycles before declaring done unless the user manually clears it",
@@ -36,19 +42,24 @@ function buildResearchGoal(kind: ResearchKind, instruction: string): string {
   ].join("\n");
 }
 
-function buildResearchLoopInstruction(kind: ResearchKind, instruction: string): string {
+export function buildResearchLoopInstruction(kind: ResearchKind, instruction: string): string {
   if (kind === "autoresearch-lab") {
     return [
       "Run one autoresearch-lab cycle toward the active goal.",
       `User instruction: ${instruction}`,
+      "Before changing code, confirm or create the setup: source objective, hypotheses, lane split, measurement/eval method, baseline/current state, durable artifacts, and stop condition.",
       "Plan or update independent lanes, delegate/inspect where useful, evaluate candidate results, integrate only safe non-conflicting improvements, run checks, and log the next hypothesis.",
+      "Do not simplify or re-aim the objective unless the user explicitly asks; preserve the active research question.",
     ].join("\n");
   }
 
   return [
     "Run one autoresearch cycle toward the active goal.",
     `User instruction: ${instruction}`,
+    "Before changing code, confirm or create the setup: hypothesis/objective, measurable target, baseline/current state, benchmark/evaluation command, durable artifact/log, and stop condition.",
+    "If no metric or benchmark exists, inspect and create or identify one before implementation.",
     "Measure or define the target, inspect evidence, make the highest-leverage safe change, run checks/evaluation, record the result, and choose the next hypothesis. Do not declare GOAL_DONE before at least two autoresearch cycles have produced explicit check/evaluation evidence.",
+    "Do not simplify or re-aim the objective unless the user explicitly asks; preserve the active research question.",
   ].join("\n");
 }
 
@@ -80,8 +91,7 @@ function registerResearchCommand(pi: ExtensionAPI, commandName: ResearchKind): v
           })}\n`);
         }
 
-        clearResearchState(ctx);
-        clearLoop(ctx);
+        clearLoop(ctx, { clearResearch: true, preserveCheckins: true });
         const clearedGoal = Boolean(previous.goal && activeGoal(ctx) === previous.goal);
         if (clearedGoal) {
           clearGoal(ctx);
@@ -106,32 +116,25 @@ function registerResearchCommand(pi: ExtensionAPI, commandName: ResearchKind): v
         })}\n`);
       }
 
-      clearResearchState(ctx);
-      clearLoop(ctx, { clearResearch: true });
-      if (activeGoal(ctx)) {
-        clearGoal(ctx);
-      }
-
       const goal = buildResearchGoal(commandName, instruction);
       const loopInstruction = buildResearchLoopInstruction(commandName, instruction);
       setGoal(ctx, goal);
       setGoalStatus(ctx, goal);
-      const loop = startLoop(pi, ctx, DEFAULT_RESEARCH_INTERVAL, loopInstruction, { triggerNow: true });
-      if (!loop) {
-        ctx.ui.notify(`${prefix} could not start: invalid loop interval.`, "error");
-        return;
-      }
-
       const next = writeResearchState(ctx, {
         kind: commandName,
         instruction,
         goal,
         loopInstruction,
-        interval: loop.interval,
+        interval: DEFAULT_RESEARCH_INTERVAL,
         cycles: 0,
         doneAttempts: 0,
         updatedAt: "",
       });
+      const loop = startLoop(pi, ctx, DEFAULT_RESEARCH_INTERVAL, loopInstruction, { triggerNow: true });
+      if (!loop) {
+        ctx.ui.notify(`${prefix} could not start: invalid loop interval.`, "error");
+        return;
+      }
       ctx.ui.notify(`${formatResearchState(next)}. First cycle queued now.`, "info");
     },
   });

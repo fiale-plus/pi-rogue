@@ -1,7 +1,14 @@
 import { randomUUID } from "node:crypto";
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { resetAdvisorSessionContext } from "./advisor-checkins.js";
 import { endGoalCheck } from "./goal-resolution.js";
-import { setGoal, startGoalProcessing } from "./goal.js";
+import { clearGoal, setGoal, startGoalProcessing } from "./goal.js";
+
+vi.mock("./advisor-checkins.js", () => ({
+  resetAdvisorSessionContext: vi.fn(),
+}));
+
+const resetAdvisorSessionContextMock = vi.mocked(resetAdvisorSessionContext);
 
 function fakeCtx(id = randomUUID(), idle = true) {
   return {
@@ -17,6 +24,10 @@ function fakeCtx(id = randomUUID(), idle = true) {
 }
 
 describe("goal processing", () => {
+  beforeEach(() => {
+    resetAdvisorSessionContextMock.mockClear();
+  });
+
   it("starts an immediate standalone goal check when no loop is active", () => {
     const ctx = fakeCtx();
     const sent: Array<{ text: string; options?: unknown }> = [];
@@ -29,9 +40,11 @@ describe("goal processing", () => {
 
     expect(result).toBe("standalone");
     expect(sent).toHaveLength(1);
-    expect(sent[0].text).toContain("Goal check:");
+    expect(sent[0].text).toContain("Goal check and work request:");
     expect(sent[0].text).toContain("Current goal: ship a small fix");
     expect(sent[0].text).toContain("Start processing the goal immediately.");
+    expect(sent[0].text).toContain("Take the first concrete step now");
+    expect(sent[0].text).toContain("Do not only record, restate, or summarize the goal.");
     endGoalCheck(ctx);
   });
 
@@ -49,5 +62,13 @@ describe("goal processing", () => {
     expect(sent).toHaveLength(1);
     expect(sent[0].options).toEqual({ deliverAs: "followUp" });
     endGoalCheck(ctx);
+  });
+
+  it("resets advisor context when a goal is cleared", () => {
+    const ctx = fakeCtx();
+
+    clearGoal(ctx);
+
+    expect(resetAdvisorSessionContextMock).toHaveBeenCalledTimes(1);
   });
 });

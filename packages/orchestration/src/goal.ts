@@ -4,6 +4,7 @@ import { shouldHoldResearchOpen, type ResearchCheckResult } from "./autoresearch
 import { clearResearchStateForGoal, readResearchState, writeResearchState, type ResearchState } from "./autoresearch-state.js";
 import { beginGoalCheck, buildGoalCheckPrompt, endGoalCheck, goalCheckResult, hasGoalCheckPending } from "./goal-resolution.js";
 import { clearLoop, triggerLoopTick } from "./loop.js";
+import { resetAdvisorSessionContext } from "./advisor-checkins.js";
 import { goalArgumentCompletions } from "./completions.js";
 
 const FEATURE = "orchestration";
@@ -25,13 +26,16 @@ export function setGoal(ctx: any, goal: string): void {
   if (previous) {
     clearResearchStateForGoal(ctx, previous);
   }
+  clearLoop(ctx, { clearResearch: true, preserveCheckins: true });
   writeText(sessionFile(FEATURE, ctx, CURRENT_FILE), `${note}\n`);
+  resetAdvisorSessionContext();
   endGoalCheck(ctx);
   appendText(HISTORY_FILE, `${JSON.stringify({ at: new Date().toISOString(), goal: note })}\n`);
 }
 
 export function clearGoal(ctx: any): void {
   writeText(sessionFile(FEATURE, ctx, CURRENT_FILE), "");
+  resetAdvisorSessionContext();
 }
 
 function goalBlock(goal: string): string {
@@ -87,7 +91,10 @@ export function startGoalProcessing(pi: ExtensionAPI, ctx: any, goal: string): G
   }
 
   beginGoalCheck(ctx);
-  const prompt = buildGoalCheckPrompt(goal, "Start processing the goal immediately.");
+  const prompt = buildGoalCheckPrompt(
+    goal,
+    "Start processing the goal immediately. Take the first concrete step now: inspect, run, edit, or ask only if a specific blocker prevents action.",
+  );
   if (ctx.isIdle?.() === false) {
     pi.sendUserMessage(prompt, { deliverAs: "followUp" });
   } else {
@@ -144,9 +151,7 @@ export function registerGoal(pi: ExtensionAPI): void {
 
     clearGoal(ctx);
     setGoalStatus(ctx, null);
-    if (recordedResearch) {
-      clearLoop(ctx);
-    }
+    clearLoop(ctx, { clearResearch: true, preserveCheckins: true });
     ctx.ui.notify(`🎯 Goal completed: ${truncate(goal, 160)}`, "info");
   });
 
@@ -183,9 +188,7 @@ export function registerGoal(pi: ExtensionAPI): void {
         clearGoal(ctx);
         endGoalCheck(ctx);
         setGoalStatus(ctx, null);
-        if (clearedResearch) {
-          clearLoop(ctx);
-        }
+        clearLoop(ctx, { clearResearch: true, preserveCheckins: true });
         ctx.ui.notify(goal ? `Goal cleared${clearedResearch ? "; matching autoresearch status cleared" : ""}.` : "No goal to clear.", "info");
         return;
       }
