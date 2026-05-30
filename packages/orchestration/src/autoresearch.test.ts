@@ -1,8 +1,12 @@
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import { buildResearchGoal, buildResearchLoopInstruction } from "./autoresearch.js";
 import { formatResearchState, type ResearchState } from "./autoresearch-state.js";
 
 describe("autoresearch status", () => {
+  beforeEach(() => {
+    delete process.env.PI_ROGUE_AUTORESEARCH_MIN_CYCLES;
+  });
+
   it("surfaces backing loop and completion-guard counters", () => {
     const state: ResearchState = {
       kind: "autoresearch",
@@ -41,6 +45,14 @@ describe("autoresearch status", () => {
     expect(loop).toContain("Before changing code, confirm or create the setup");
     expect(loop).toContain("If no metric or benchmark exists");
     expect(loop).toContain("preserve the active research question");
+    expect(goal).toContain("at least 2 loop cycles");
+  });
+
+  it("respects configured minimum cycles in the generated goal", () => {
+    process.env.PI_ROGUE_AUTORESEARCH_MIN_CYCLES = "4";
+    const goal = buildResearchGoal("autoresearch", "improve model routing");
+
+    expect(goal).toContain("at least 4 loop cycles");
   });
 
   it("requires lane setup before autoresearch-lab integration", () => {

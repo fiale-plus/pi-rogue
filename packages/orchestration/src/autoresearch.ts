@@ -9,6 +9,7 @@ import {
   writeResearchState,
   type ResearchKind,
 } from "./autoresearch-state.js";
+import { getMinAutoresearchCycles } from "./autoresearch-completion.js";
 import { appendText, featureFile } from "./internal.js";
 import { autoresearchArgumentCompletions } from "./completions.js";
 
@@ -28,6 +29,7 @@ export function buildResearchGoal(kind: ResearchKind, instruction: string): stri
     ].join("\n");
   }
 
+  const minCycles = getMinAutoresearchCycles();
   return [
     `Autoresearch: ${instruction}`,
     "Setup gate before implementation:",
@@ -37,7 +39,7 @@ export function buildResearchGoal(kind: ResearchKind, instruction: string): stri
     "Success criteria:",
     "- run iterative identify → implement → build/check → test/evaluate → sanity → log cycles",
     "- preserve the benchmark/evaluation script as the durable product",
-    "- complete at least two loop cycles before declaring done unless the user manually clears it",
+    `- complete at least ${minCycles} loop cycles before declaring done unless the user manually clears it`,
     "- stop only when the metric/answer is materially improved and the result is summarized with evidence",
   ].join("\n");
 }

@@ -33,6 +33,7 @@ Use this skill to run measurable, bounded workflow loops inside a Pi session.
 - Loop activation enables scheduled advisor check-ins; stopping the loop disables them.
 - Check-ins belong to orchestration lifecycle, not the advisor command surface, and use higher/advanced advisor models first, with regular model fallback enabled by default.
 - `autoresearch` enforces multi-cycle + evidence-aware completion.
+- `PI_ROGUE_AUTORESEARCH_MIN_CYCLES` (optional env var) overrides the minimum completion cycles (default `2`).
 - Clearing goal/loop clears stale autoresearch state.
 
 ## Safety and agentic flow

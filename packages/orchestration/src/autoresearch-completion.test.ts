@@ -1,7 +1,11 @@
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import { hasResearchCompletionEvidence, shouldHoldResearchOpen } from "./autoresearch-completion.js";
 
 describe("autoresearch completion guard", () => {
+  beforeEach(() => {
+    delete process.env.PI_ROGUE_AUTORESEARCH_MIN_CYCLES;
+  });
+
   it("holds autoresearch open when the first cycle claims GOAL_DONE", () => {
     const reason = shouldHoldResearchOpen(
       { cycles: 1 },
@@ -30,6 +34,26 @@ describe("autoresearch completion guard", () => {
     );
 
     expect(reason).toBeNull();
+  });
+
+  it("is configurable via PI_ROGUE_AUTORESEARCH_MIN_CYCLES", () => {
+    process.env.PI_ROGUE_AUTORESEARCH_MIN_CYCLES = "3";
+
+    const tooSoon = shouldHoldResearchOpen(
+      { cycles: 2 },
+      "done",
+      "GOAL_DONE: released after npm run check and npm test",
+    );
+
+    expect(tooSoon).toMatch(/at least 3 cycles/);
+
+    const enough = shouldHoldResearchOpen(
+      { cycles: 3 },
+      "done",
+      "GOAL_DONE: released after npm run check and npm test",
+    );
+
+    expect(enough).toBeNull();
   });
 
   it("recognizes validation evidence terms", () => {

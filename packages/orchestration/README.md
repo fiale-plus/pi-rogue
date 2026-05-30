@@ -29,7 +29,7 @@ npm install --workspace packages/orchestration
 | `/loop <interval> <instruction>` | Create or reset periodic loop (`1m` minimum) |
 | `/loop status` | Show current loop state |
 | `/loop off` / `clear` / `stop` | Clear loop |
-| `/autoresearch <instruction>` | Start/update solo research flow (1+ cycles required before completion) |
+| `/autoresearch <instruction>` | Start/update solo research flow (minimum 2 cycles + explicit check/evidence before completion) |
 | `/autoresearch status` | Show autoresearch state/counters/status |
 | `/autoresearch clear` | Clear solo research + underlying loop |
 | `/autoresearch-lab <instruction>` | Start/update parallel research mode |
