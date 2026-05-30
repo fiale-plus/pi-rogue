@@ -16,11 +16,12 @@ export function endGoalCheck(ctx: any): void {
 
 export function buildGoalCheckPrompt(goal: string, instruction: string): string {
   return [
-    "Goal check:",
+    "Goal check and work request:",
     `Current goal: ${goal}`,
     "Are we done? Ignore step/phase details; judge only whether the goal itself is complete.",
     "If done, start your response with `GOAL_DONE: <short reason>` and summarize final state.",
     "If not done, start your response with `GOAL_CONTINUE: <short reason>` and then continue working.",
+    "After `GOAL_CONTINUE`, immediately take the next concrete action toward the goal. Do not only record, restate, or summarize the goal.",
     instruction ? `Current loop instruction: ${truncate(instruction, 400)}` : "",
   ]
     .filter(Boolean)

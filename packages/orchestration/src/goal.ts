@@ -90,7 +90,10 @@ export function startGoalProcessing(pi: ExtensionAPI, ctx: any, goal: string): G
   }
 
   beginGoalCheck(ctx);
-  const prompt = buildGoalCheckPrompt(goal, "Start processing the goal immediately.");
+  const prompt = buildGoalCheckPrompt(
+    goal,
+    "Start processing the goal immediately. Take the first concrete step now: inspect, run, edit, or ask only if a specific blocker prevents action.",
+  );
   if (ctx.isIdle?.() === false) {
     pi.sendUserMessage(prompt, { deliverAs: "followUp" });
   } else {

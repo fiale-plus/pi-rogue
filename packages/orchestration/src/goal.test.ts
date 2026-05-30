@@ -29,9 +29,11 @@ describe("goal processing", () => {
 
     expect(result).toBe("standalone");
     expect(sent).toHaveLength(1);
-    expect(sent[0].text).toContain("Goal check:");
+    expect(sent[0].text).toContain("Goal check and work request:");
     expect(sent[0].text).toContain("Current goal: ship a small fix");
     expect(sent[0].text).toContain("Start processing the goal immediately.");
+    expect(sent[0].text).toContain("Take the first concrete step now");
+    expect(sent[0].text).toContain("Do not only record, restate, or summarize the goal.");
     endGoalCheck(ctx);
   });
 

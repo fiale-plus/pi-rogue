@@ -1,6 +1,13 @@
 import { describe, expect, it, vi } from "vitest";
 import { completeSimple } from "@earendil-works/pi-ai";
-import { normalizeAdvisorConfig, shouldRunCheckin, type AdvisorConfig, completeWithHigherAdvisorModel, completeWithModelFallback } from "./extension.js";
+import {
+  buildAdvisorCheckinPrompt,
+  completeWithHigherAdvisorModel,
+  completeWithModelFallback,
+  normalizeAdvisorConfig,
+  shouldRunCheckin,
+  type AdvisorConfig,
+} from "./extension.js";
 
 vi.mock("@earendil-works/pi-ai", async () => {
   const actual = await vi.importActual<typeof import("@earendil-works/pi-ai")>("@earendil-works/pi-ai");
@@ -109,6 +116,26 @@ describe("mid-hour check-ins", () => {
         },
       })),
     ).toBe("queued mid-session check-in");
+  });
+
+  it("keeps check-in guidance anchored to the active goal", () => {
+    const prompt = buildAdvisorCheckinPrompt(
+      "loop_tick",
+      [
+        "Orchestration:",
+        "- Goal: active — Autoresearch: solve advisor weaknesses",
+        "- Autoresearch: active — solve advisor weaknesses; cycles=1, doneAttempts=0",
+        "- Loop: active every 5m — Run one autoresearch cycle toward the active goal.",
+      ].join("\n"),
+      "Task: solve advisor weaknesses\nNotes:\n- found shallow mid-hour feedback",
+    );
+
+    expect(prompt).toContain("alignment reviewer");
+    expect(prompt).toContain("Do not create a new task");
+    expect(prompt).toContain("preserve its research question");
+    expect(prompt).toContain("solving the named weakness");
+    expect(prompt).toContain("Nudge: <one concrete next action that continues the active goal>");
+    expect(prompt).toContain("found shallow mid-hour feedback");
   });
 });
 

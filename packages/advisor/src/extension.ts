@@ -333,11 +333,25 @@ function orchestrationSnapshotText(ctx: any): string {
       : "no active goal";
   return [
     "Orchestration:",
-    `- Goal: ${goalActive ? `active — ${truncate(snapshot.goal, 140)}` : "off"}`,
-    `- Autoresearch: ${researchActive ? `active — cycles=${snapshot.research.cycles ?? 0}, doneAttempts=${snapshot.research.doneAttempts ?? 0}${snapshot.research.lastResult ? `, last=${snapshot.research.lastResult}` : ""}` : "off"}`,
-    `- Loop: ${loopActive ? `active every ${snapshot.loop.interval || "?"} — ${truncate(snapshot.loop.instruction || "", 120)}` : "off"}`,
+    `- Goal: ${goalActive ? `active — ${truncate(snapshot.goal, 360)}` : "off"}`,
+    `- Autoresearch: ${researchActive ? `active — ${truncate(snapshot.research.instruction || "", 240)}; cycles=${snapshot.research.cycles ?? 0}, doneAttempts=${snapshot.research.doneAttempts ?? 0}${snapshot.research.lastResult ? `, last=${snapshot.research.lastResult}` : ""}` : "off"}`,
+    `- Loop: ${loopActive ? `active every ${snapshot.loop.interval || "?"} — ${truncate(snapshot.loop.instruction || "", 260)}` : "off"}`,
     `- Status: ${status}`,
   ].join("\n");
+}
+
+export function buildAdvisorCheckinPrompt(source: string, orchestration: string, sessionBrief: string): string {
+  return [
+    `Mid-session check-in (${source})`,
+    "Role: alignment reviewer for the active work. Do not create a new task, research direction, benchmark, script, artifact, or model switch unless the active goal explicitly asks for it.",
+    "Stay anchored to the active goal/autoresearch/loop. If autoresearch is active, preserve its research question and judge whether the latest work is gathering evidence toward that question.",
+    "Bad nudge examples: research the existence of weaknesses instead of solving the named weakness; create a script/report about weaknesses when the goal is to fix advisor behavior; swap to a shallower research mode.",
+    "Return exactly two short lines:",
+    "Status: on_track|stuck|off_track - <why, tied to the active goal>",
+    "Nudge: <one concrete next action that continues the active goal>",
+    orchestration,
+    sessionBrief ? `Session brief:\n${sessionBrief}` : "",
+  ].filter(Boolean).join("\n\n");
 }
 
 function setPiRogueStatus(ctx: any, config = loadConfig(), state = loadState()): void {
@@ -406,26 +420,19 @@ async function maybeAdvisorCheckin(pi: ExtensionAPI, ctx: any, source: string): 
 
   checkinLocks.add(key);
   try {
+    const prompt = buildAdvisorCheckinPrompt(source, orchestrationSnapshotText(ctx), brief(state));
     const completed = await completeWithHigherAdvisorModel(
       ctx,
       config,
-      [
-        `Mid-session check-in (${source}): briefly assess whether the current session is on track, stuck, or missing a higher-leverage next step.`,
-        orchestrationSnapshotText(ctx),
-        "If a goal exists but autoresearch/loop progression is off, call out the setup gap. Do not start or change orchestration; return one concrete nudge.",
-      ].join("\n\n"),
+      prompt,
       [
         {
           role: "user",
-          content: [
-            `Mid-session check-in (${source}): briefly assess whether the current session is on track, stuck, or missing a higher-leverage next step.`,
-            orchestrationSnapshotText(ctx),
-            "If a goal exists but autoresearch/loop progression is off, call out the setup gap. Do not start or change orchestration; return one concrete nudge.",
-          ].join("\n\n"),
+          content: prompt,
           timestamp: new Date().toISOString(),
         },
       ],
-      { maxTokens: 600, reasoning: "medium" as ThinkingLevel },
+      { maxTokens: 260, reasoning: "low" as ThinkingLevel },
     );
     if (!completed) return false;
 
