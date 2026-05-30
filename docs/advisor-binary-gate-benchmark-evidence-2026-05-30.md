@@ -4,7 +4,7 @@
 - Terminal-Bench 2.1/2.0 core-slice generated from `/tmp/terminal-bench-core-0.1.1/task.yaml`:
   - `data/routing/binary-gate-terminal-bench-core-full.jsonl` (80 rows: 12 continue / 68 escalate)
   - `data/routing/binary-gate-terminal-bench-core-small.jsonl` (32-row sample: 12 continue / 20 escalate)
-- Evaluated **old shipped model** (`data/routing/binary-gate-model.json`) vs **updated candidate** (`packages/advisor/assets/binary-gate-model.json`) using `scripts/eval-binary-gate-file.ts`.
+- Evaluated **old shipped model** (`docs/benchmark-evidence/binary-gate-model-baseline.json`) vs **updated candidate** (`docs/benchmark-evidence/binary-gate-model-updated.json`, same as `packages/advisor/assets/binary-gate-model.json`) using `scripts/eval-binary-gate-file.ts`.
 - Ran performance benchmark with `npm run binary:benchmark` on both model files.
 
 ## CLI evidence
@@ -63,20 +63,20 @@
 
 ### Reproduction commands used
 ```bash
-npm run binary:eval-file -- --input data/routing/binary-gate.jsonl --model data/routing/binary-gate-model.json --report docs/benchmark-evidence/binary-gate-eval-internal-old.json
-npm run binary:eval-file -- --input data/routing/binary-gate.jsonl --model packages/advisor/assets/binary-gate-model.json --report docs/benchmark-evidence/binary-gate-eval-internal-new.json
+npm run binary:eval-file -- --input data/routing/binary-gate.jsonl --model docs/benchmark-evidence/binary-gate-model-baseline.json --report docs/benchmark-evidence/binary-gate-eval-internal-old.json
+npm run binary:eval-file -- --input data/routing/binary-gate.jsonl --model docs/benchmark-evidence/binary-gate-model-updated.json --report docs/benchmark-evidence/binary-gate-eval-internal-new.json
 
-npm run binary:eval-file -- --input data/routing/binary-gate-terminal-bench-core-full.jsonl --model data/routing/binary-gate-model.json --report docs/benchmark-evidence/binary-gate-eval-core-full-old.json
-npm run binary:eval-file -- --input data/routing/binary-gate-terminal-bench-core-full.jsonl --model packages/advisor/assets/binary-gate-model.json --report docs/benchmark-evidence/binary-gate-eval-core-full-new.json
+npm run binary:eval-file -- --input data/routing/binary-gate-terminal-bench-core-full.jsonl --model docs/benchmark-evidence/binary-gate-model-baseline.json --report docs/benchmark-evidence/binary-gate-eval-core-full-old.json
+npm run binary:eval-file -- --input data/routing/binary-gate-terminal-bench-core-full.jsonl --model docs/benchmark-evidence/binary-gate-model-updated.json --report docs/benchmark-evidence/binary-gate-eval-core-full-new.json
 
-npm run binary:eval-file -- --input data/routing/binary-gate-terminal-bench-core-small.jsonl --model data/routing/binary-gate-model.json --report docs/benchmark-evidence/binary-gate-eval-core-small-old.json
-npm run binary:eval-file -- --input data/routing/binary-gate-terminal-bench-core-small.jsonl --model packages/advisor/assets/binary-gate-model.json --report docs/benchmark-evidence/binary-gate-eval-core-small-new.json
+npm run binary:eval-file -- --input data/routing/binary-gate-terminal-bench-core-small.jsonl --model docs/benchmark-evidence/binary-gate-model-baseline.json --report docs/benchmark-evidence/binary-gate-eval-core-small-old.json
+npm run binary:eval-file -- --input data/routing/binary-gate-terminal-bench-core-small.jsonl --model docs/benchmark-evidence/binary-gate-model-updated.json --report docs/benchmark-evidence/binary-gate-eval-core-small-new.json
 
-npm run binary:eval-file -- --input data/routing/binary-gate-terminal-bench-merged.jsonl --model data/routing/binary-gate-model.json --report docs/benchmark-evidence/binary-gate-eval-merged-old.json
-npm run binary:eval-file -- --input data/routing/binary-gate-terminal-bench-merged.jsonl --model packages/advisor/assets/binary-gate-model.json --report docs/benchmark-evidence/binary-gate-eval-merged-new.json
+npm run binary:eval-file -- --input data/routing/binary-gate-terminal-bench-merged.jsonl --model docs/benchmark-evidence/binary-gate-model-baseline.json --report docs/benchmark-evidence/binary-gate-eval-merged-old.json
+npm run binary:eval-file -- --input data/routing/binary-gate-terminal-bench-merged.jsonl --model docs/benchmark-evidence/binary-gate-model-updated.json --report docs/benchmark-evidence/binary-gate-eval-merged-new.json
 
-BINARY_GATE_MODEL_PATH=data/routing/binary-gate-model.json npm run binary:benchmark > docs/benchmark-evidence/binary-gate-benchmark-internal-old.txt
-BINARY_GATE_MODEL_PATH=packages/advisor/assets/binary-gate-model.json npm run binary:benchmark > docs/benchmark-evidence/binary-gate-benchmark-new.txt
+BINARY_GATE_MODEL_PATH=docs/benchmark-evidence/binary-gate-model-baseline.json npm run binary:benchmark > docs/benchmark-evidence/binary-gate-benchmark-internal-old.txt
+BINARY_GATE_MODEL_PATH=docs/benchmark-evidence/binary-gate-model-updated.json npm run binary:benchmark > docs/benchmark-evidence/binary-gate-benchmark-new.txt
 ```
 
 ### Verification trail
@@ -98,9 +98,9 @@ BINARY_GATE_MODEL_PATH=packages/advisor/assets/binary-gate-model.json npm run bi
   - `docs/benchmark-evidence/binary-gate-benchmark-internal-old.txt`
   - `docs/benchmark-evidence/binary-gate-benchmark-new.txt`
 - Current synced model hash:
-  - `1e5491eb4b571521d8fce3ca96384fd284a5f291ce0f62d4bc02dfd8b93a729d` (for both `data/routing/binary-gate-model.json` and `packages/advisor/assets/binary-gate-model.json`)
+  - `1e5491eb4b571521d8fce3ca96384fd284a5f291ce0f62d4bc02dfd8b93a729d` (`packages/advisor/assets/binary-gate-model.json` and `docs/benchmark-evidence/binary-gate-model-updated.json`)
 - Baseline artifact hash used for comparison:
-  - `6cc4991ccc0704fcca6bae61b1e4445b2b8ffc843f8af24cbfc3937f339eedc1`
+  - `6cc4991ccc0704fcca6bae61b1e4445b2b8ffc843f8af24cbfc3937f339eedc1` (`docs/benchmark-evidence/binary-gate-model-baseline.json`)
 - PR not created yet (per instruction to require explicit user approval before PR/merge).
 - To create the PR now:
   - `git push origin HEAD`
