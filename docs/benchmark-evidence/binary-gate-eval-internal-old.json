@@ -1,0 +1,116 @@
+{
+  "input": "data/routing/binary-gate.jsonl",
+  "model": "data/routing/binary-gate-model.json",
+  "rows": 2445,
+  "counts": {
+    "continue": 1273,
+    "escalate": 1172
+  },
+  "accuracy": 0.9713701431492843,
+  "escalatePrecision": 0.9758203799654577,
+  "escalateRecall": 0.9641638225255973,
+  "escalateF1": 0.9699570815450643,
+  "continuePrecision": 0.9673659673659674,
+  "continueRecall": 0.9780047132757266,
+  "continueF1": 0.97265625,
+  "confusion": [
+    {
+      "actual": "continue",
+      "predicted": [
+        [
+          "continue",
+          1245
+        ],
+        [
+          "escalate",
+          28
+        ]
+      ]
+    },
+    {
+      "actual": "escalate",
+      "predicted": [
+        [
+          "continue",
+          42
+        ],
+        [
+          "escalate",
+          1130
+        ]
+      ]
+    }
+  ],
+  "misses": [
+    {
+      "text": "running in torboquant-mlx location, what are the running model kpis",
+      "source": "gold",
+      "actual": "escalate",
+      "predicted": "continue",
+      "conf": 0.8678547765513382
+    },
+    {
+      "text": "and indeed real tasks please oh, Q - if we have access to the local ollama and lmstudio - can we load custom model in those? From older tests we found ollama/lmstudio does not render any big diff same model. Maybe llama cpp also not super advantageous? wdyt?",
+      "source": "gold",
+      "actual": "escalate",
+      "predicted": "continue",
+      "conf": 0.619628097563931
+    },
+    {
+      "text": "ssh -t openclaw-vm \"hermes model\" Warning: No inference provider configured. Run 'hermes model' to choose a provider and model, or set an API key (OPENROUTER_API_KEY, OPENAI_API_KEY, etc.) in ~/.hermes/.env. Falling back to auto provider detection. Traceback (most recent call last): File \"/home/openclaw/.hermes/hermes-agent/hermes_cli/main.py\", line 857, in cmd_model active = resolve_provider(effective_provider) ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ File \"/home/openclaw/.hermes/hermes-agent/hermes_cli/auth.py\", line 749, in resolve_provider raise AuthError( hermes_cli.auth.AuthError: No inference provider configured. Run 'hermes model' to choose a provider and model, or set an API key (OPENROUTER_API_KEY, OPENAI_API_KEY, etc.) in ~/.hermes/.env. During handling of the above exception, another exception occurred: set minimax api key there, it is in openclaw config",
+      "source": "gold",
+      "actual": "escalate",
+      "predicted": "continue",
+      "conf": 0.5928901628104601
+    },
+    {
+      "text": "check in 10 minutes and print - Ill leave laptop at the table",
+      "source": "gold",
+      "actual": "escalate",
+      "predicted": "continue",
+      "conf": 0.9663518922394547
+    },
+    {
+      "text": "haha someone nerfed our config. maybe qwen got in right after we fixed everything. Check if someone messed up our content in that /private/tmp/lr-throughput - should be clode to main project location I guess. Maybe someone also messed up there - I think pushed version at least should be the tweaked one 20K sps",
+      "source": "gold",
+      "actual": "escalate",
+      "predicted": "continue",
+      "conf": 0.8556289583685909
+    },
+    {
+      "text": "now go to the new git worktree and fork from the latest mainline - /autoresearch on a maatter of gemma4 models use as well as ANE / Apple silicone / MLX use here. Gemma seems extremely efficient, maybe we want to use tuned one? - check hugging face. Or Apple silicon optimized one - agsin check models. On ANE and hardware capabilities - again explore options, we want to avoid laptop conversion to the room heater or lenovo P1 you know - discharging in 30 minutes. Be smart in there. Maybe use autoresearch lab skill - decide on your own",
+      "source": "gold",
+      "actual": "continue",
+      "predicted": "escalate",
+      "conf": 0.8385309492316435
+    },
+    {
+      "text": "hey can you pdate tooling and have a look on the models competing for the perf in HF, also I should have their API token in the env: - update llama cpp build we got form MTP PR branch - get llama-benchy to veryfy llms - get MTP new candidates to verify - /autoresearch on the best model to run or maybe the current qwen it is Qwen3.6 35B A3B MTP Q4_0 + ngram-mod (64K, ~36 tok/s) - research and check if you can on full/empty ctw, different size, be carful with the mem, do not spill over get detailed report as done and give me the winner",
+      "source": "gold",
+      "actual": "continue",
+      "predicted": "escalate",
+      "conf": 0.6094573430272139
+    },
+    {
+      "text": "does it correlate with previous messges: Here's the final verdict after all iterations: TEACHER7B v2 is the best model. 200 teacher targets from Modal 7B, distilled into a 1.5B LoRA adapter. It covers 35/45 questions (most of any approach), has 118 package references (2nd most), and zero deflections. ### Final Leaderboard ┌──────────────┬──────────┬───────────┬──────┬───────────┐ │ Mode │ Pkg refs │ Qs w/ pkg │ Defl │ H2H vs v2 │ ├──────────────┼──────────┼───────────┼──────┼───────────┤ │ TEACHER7B v2 │ 118 │ 35/45 │ 0 │ — │ ├──────────────┼──────────┼───────────┼──────┼───────────┤ │ FUSED v1 │ 147 │ 30/45 │ 0 │ 19-17 │ ├──────────────┼──────────┼───────────┼──────┼───────────┤ │ TEACHER7B v1 │ 83 │ 33/45 │ 1 │ 20-18 │ ├──────────────┼──────────┼───────────┼──────┼───────────┤ │ HYBRID │ 94 │ 31/45 │ 0 │ 19-19 │ ├──────────────┼──────────┼───────────┼──────┼───────────┤ │ RETRIEVAL │ 97 │ 27/45 │ 0 │ 23-16 │ ├──────────────┼──────────┼───────────┼──────┼───────────┤ │ BASE │ 13 │ 2/45 │ 7 │ 32-3 │ └──────────────┴──────────┴───────────┴──────┴───────────┘ ### Key insights - More data helps: 200 targets beat 50 on every metric - Rank 16 not accessible via CLI — would need Python MLX API - The hybrid architecture is proven: retrieval provides facts, distilled adapter formats them - Total Modal spend: ~$0.30 (50 min A10G) ### To use ```bash python3 scripts/hybrid_search.py \"What should I know about agent-session.ts?\" \\ --adapter .repo-arch/adapters/teacher7b-v2 and: ==================================================================================================== Mode | Pkg refs | Qs w/ | Cmt refs | SHA refs | Defl ---------------------------------------------------------------------------------------------------- BASE | 13 | 2/45 | 0 | 11 ( 2qs) | 7 RETRIEVAL (cards) | 97 | 27/45 | 18 | 0 ( 0qs) | 0 FULL-HIST | 124 | 21/45 | 2 | 53 (15qs) | 0 FUSED v1 | 147 | 30/45 | 21 | 33 ( 8qs) | 0 HYBRID | 94 | 31/45 | 17 | 43 (13qs) | 0 TEACHER7B v1 | 83 | 33/45 | 16 | 35 (13qs) | 1 TEACHER7B v2 | 118 | 35/45 | 13 | 17 ( 7qs) | 0 ==================================================================================================== HEAD-TO-HEAD: TEACHER7B v2 vs all ==================================================================================================== vs BASE : 32- 3 (ties: 10) vs RETRIEVAL (cards) : 23-16 (ties: 6) vs FULL-HIST : 21-17 (ties: 7) vs FUSED v1 : 17-19 (ties: 9) vs HYBRID : 19-19 (ties: 7) vs TEACHER7B v1 : 20-18 (ties: 7) ==================================================================================================== SAMPLE (Q4: agent-session.ts risk) ==================================================================================================== FUSED v1: [1pkg,0cmt,0sha] The risk profile of changing `packages/coding-agent/src/core/agent-session.ts` is high due to the repeated bug fixes mentioned in the REPO-ARCH CARDS. This file has been fixed 94 separate times, indicating that it is a critical component of the appli TEACHER7B v1: [1pkg,1cmt,0sha] The risk profile of changing `packages/coding-agent/src/core/agent-session.ts` is relatively low, as it was fixed 94 times across multiple commits (subjects: Add AgentSession compaction (manual + auto), fix listener preservation, Fix bash execution i TEACHER7B v2: [1pkg,0cmt,0sha] The risk profile of changing `packages/coding-agent/src/core/agent-session.ts` is relatively low. The file has been fixed 94 separate times (commits: WP7: Add AgentSession compaction (manual + auto), fix listener preservation, Fix bash execution inte - where is fudes mentions - where is how to run inference on that model adapter the small one we built - the final table with chronology experiments list as we did them, check on docs, the session logs and such, get me a proper log , PR desc - maybe shorter version in the top + experiments table + modal usage brief on where we did it. Pllus modal issues met",
+      "source": "gold",
+      "actual": "continue",
+      "predicted": "escalate",
+      "conf": 0.6788867570304087
+    },
+    {
+      "text": "ok I think lets change direction in this session - can you /autoresearch in a real long run - Ill be away for an hour or two - on the policy improvements, as the current one is getting us nowhere. alright",
+      "source": "gold",
+      "actual": "continue",
+      "predicted": "escalate",
+      "conf": 0.6098430556573354
+    },
+    {
+      "text": "seems some bug - no controls working",
+      "source": "pi_session",
+      "actual": "escalate",
+      "predicted": "continue",
+      "conf": 0.7749186013543882
+    }
+  ]
+}

@@ -10,8 +10,8 @@
 ## CLI evidence
 
 ### Internal routing set (`data/routing/binary-gate.jsonl`)
-- Old model report: `/tmp/eval-internal-old.json`
-- New model report: `/tmp/eval-internal-new.json`
+- Old model report: `docs/benchmark-evidence/binary-gate-eval-internal-old.json`
+- New model report: `docs/benchmark-evidence/binary-gate-eval-internal-new.json`
 
 | metric | old | new |
 |---|---:|---:|
@@ -22,8 +22,8 @@
 | continue recall | 0.9780 | 0.9592 |
 
 ### Terminal-Bench core full (80 rows)
-- Old model report: `/tmp/eval-core-full-old.json`
-- New model report: `/tmp/eval-core-full-new.json`
+- Old model report: `docs/benchmark-evidence/binary-gate-eval-core-full-old.json`
+- New model report: `docs/benchmark-evidence/binary-gate-eval-core-full-new.json`
 
 | metric | old | new |
 |---|---:|---:|
@@ -34,8 +34,8 @@
 | continue recall | 0.9167 | 0.7500 |
 
 ### Terminal-Bench core small (32 rows)
-- Old model report: `/tmp/eval-core-small-old.json`
-- New model report: `/tmp/eval-core-small-new.json`
+- Old model report: `docs/benchmark-evidence/binary-gate-eval-core-small-old.json`
+- New model report: `docs/benchmark-evidence/binary-gate-eval-core-small-new.json`
 
 | metric | old | new |
 |---|---:|---:|
@@ -46,19 +46,37 @@
 | continue recall | 0.9167 | 0.7500 |
 
 ### Runtime benchmark (`npm run binary:benchmark`)
-- Old model (`data/routing/binary-gate-model.json`):
-  - cold load 1.8ms
-  - avg per prediction 0.026ms
-  - throughput 38,100 preds/sec
-- New model (`packages/advisor/assets/binary-gate-model.json`):
-  - cold load 1.8ms
-  - avg per prediction 0.025ms
-  - throughput 39,365 preds/sec
+- Old model evidence file: `docs/benchmark-evidence/binary-gate-benchmark-internal-old.txt`
+- New model evidence file: `docs/benchmark-evidence/binary-gate-benchmark-new.txt`
 
-## Why this looks 'incomplete' from git
-- `data/routing/*` outputs are ignored by git in `.gitignore`, so all benchmark reports/bench slices are not shown by `git status`.
-- The only tracked diff is the shipped model artifact:
-  - `packages/advisor/assets/binary-gate-model.json`
-- New model artifact hash changed from:
-  - `6cc4991ccc0704fcca6bae61b1e4445b2b8ffc843f8af24cbfc3937f339eedc1`
-  - to `1e5491eb4b571521d8fce3ca96384fd284a5f291ce0f62d4bc02dfd8b93a729d`
+### Reproduction commands used
+```bash
+npm run binary:eval-file -- --input data/routing/binary-gate.jsonl --model data/routing/binary-gate-model.json --report docs/benchmark-evidence/binary-gate-eval-internal-old.json
+npm run binary:eval-file -- --input data/routing/binary-gate.jsonl --model packages/advisor/assets/binary-gate-model.json --report docs/benchmark-evidence/binary-gate-eval-internal-new.json
+
+npm run binary:eval-file -- --input data/routing/binary-gate-terminal-bench-core-full.jsonl --model data/routing/binary-gate-model.json --report docs/benchmark-evidence/binary-gate-eval-core-full-old.json
+npm run binary:eval-file -- --input data/routing/binary-gate-terminal-bench-core-full.jsonl --model packages/advisor/assets/binary-gate-model.json --report docs/benchmark-evidence/binary-gate-eval-core-full-new.json
+
+npm run binary:eval-file -- --input data/routing/binary-gate-terminal-bench-core-small.jsonl --model data/routing/binary-gate-model.json --report docs/benchmark-evidence/binary-gate-eval-core-small-old.json
+npm run binary:eval-file -- --input data/routing/binary-gate-terminal-bench-core-small.jsonl --model packages/advisor/assets/binary-gate-model.json --report docs/benchmark-evidence/binary-gate-eval-core-small-new.json
+
+BINARY_GATE_MODEL_PATH=data/routing/binary-gate-model.json npm run binary:benchmark > docs/benchmark-evidence/binary-gate-benchmark-internal-old.txt
+BINARY_GATE_MODEL_PATH=packages/advisor/assets/binary-gate-model.json npm run binary:benchmark > docs/benchmark-evidence/binary-gate-benchmark-new.txt
+```
+
+### Verification trail
+- Commit: `2655a97`
+- Tracked evidence files now in git:
+  - `docs/advisor-binary-gate-benchmark-evidence-2026-05-30.md`
+  - `docs/benchmark-evidence/binary-gate-eval-internal-old.json`
+  - `docs/benchmark-evidence/binary-gate-eval-internal-new.json`
+  - `docs/benchmark-evidence/binary-gate-eval-core-full-old.json`
+  - `docs/benchmark-evidence/binary-gate-eval-core-full-new.json`
+  - `docs/benchmark-evidence/binary-gate-eval-core-small-old.json`
+  - `docs/benchmark-evidence/binary-gate-eval-core-small-new.json`
+  - `docs/benchmark-evidence/binary-gate-benchmark-internal-old.txt`
+  - `docs/benchmark-evidence/binary-gate-benchmark-new.txt`
+- `data/routing/*` outputs remain git-ignored; those generated artifacts intentionally stay out of commits, but a verifiable copy is now committed.
+- Artifact hash changed in committed binary file:
+  - old `6cc4991ccc0704fcca6bae61b1e4445b2b8ffc843f8af24cbfc3937f339eedc1`
+  - new `1e5491eb4b571521d8fce3ca96384fd284a5f291ce0f62d4bc02dfd8b93a729d`
