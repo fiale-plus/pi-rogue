@@ -87,7 +87,7 @@ describe("advisor check-in lifecycle bridge", () => {
     const next = resetAdvisorSessionContext(config, state);
 
     expect(next.state).toMatchObject({
-      turns: 9,
+      turns: 0,
       lastTask: "",
       notes: [],
       files: [],

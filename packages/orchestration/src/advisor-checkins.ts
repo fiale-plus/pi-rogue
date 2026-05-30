@@ -56,6 +56,7 @@ export function resetAdvisorSessionContext(
   const currentState = readJson<AdvisorState>(statePath);
   const nextState: AdvisorState = {
     ...currentState,
+    turns: 0,
     lastTask: "",
     notes: [],
     files: [],
