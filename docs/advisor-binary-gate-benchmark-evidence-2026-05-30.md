@@ -101,7 +101,6 @@ BINARY_GATE_MODEL_PATH=docs/benchmark-evidence/binary-gate-model-updated.json np
   - `1e5491eb4b571521d8fce3ca96384fd284a5f291ce0f62d4bc02dfd8b93a729d` (`packages/advisor/assets/binary-gate-model.json` and `docs/benchmark-evidence/binary-gate-model-updated.json`)
 - Baseline artifact hash used for comparison:
   - `6cc4991ccc0704fcca6bae61b1e4445b2b8ffc843f8af24cbfc3937f339eedc1` (`docs/benchmark-evidence/binary-gate-model-baseline.json`)
-- PR not created yet (per instruction to require explicit user approval before PR/merge).
-- To create the PR now:
-  - `git push origin HEAD`
-  - `gh pr create --title "chore(advisor): update binary-gate model from terminal-bench sweep" --body "See docs/advisor-binary-gate-benchmark-evidence-2026-05-30.md"`
+- PR created: https://github.com/fiale-plus/pi-rogue/pull/71 (`chore/binary-gate-evidence-2026-05-30` -> `main`), currently OPEN.
+- `gh pr view 71` for status/details.
+- PR body includes evidence path and metric deltas from this document.
