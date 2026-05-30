@@ -45,6 +45,18 @@
 | continue precision | 0.3929 | 1.0000 |
 | continue recall | 0.9167 | 0.7500 |
 
+### Terminal-Bench merged external set (2431 rows)
+- Old model report: `docs/benchmark-evidence/binary-gate-eval-merged-old.json`
+- New model report: `docs/benchmark-evidence/binary-gate-eval-merged-new.json`
+
+| metric | old | new |
+|---|---:|---:|
+| accuracy | 95.31% | 96.34% |
+| escalate precision | 0.9673 | 0.9500 |
+| escalate recall | 0.9344 | 0.9736 |
+| continue precision | 0.9407 | 0.9760 |
+| continue recall | 0.9706 | 0.9517 |
+
 ### Runtime benchmark (`npm run binary:benchmark`)
 - Old model evidence file: `docs/benchmark-evidence/binary-gate-benchmark-internal-old.txt`
 - New model evidence file: `docs/benchmark-evidence/binary-gate-benchmark-new.txt`
@@ -60,6 +72,9 @@ npm run binary:eval-file -- --input data/routing/binary-gate-terminal-bench-core
 npm run binary:eval-file -- --input data/routing/binary-gate-terminal-bench-core-small.jsonl --model data/routing/binary-gate-model.json --report docs/benchmark-evidence/binary-gate-eval-core-small-old.json
 npm run binary:eval-file -- --input data/routing/binary-gate-terminal-bench-core-small.jsonl --model packages/advisor/assets/binary-gate-model.json --report docs/benchmark-evidence/binary-gate-eval-core-small-new.json
 
+npm run binary:eval-file -- --input data/routing/binary-gate-terminal-bench-merged.jsonl --model data/routing/binary-gate-model.json --report docs/benchmark-evidence/binary-gate-eval-merged-old.json
+npm run binary:eval-file -- --input data/routing/binary-gate-terminal-bench-merged.jsonl --model packages/advisor/assets/binary-gate-model.json --report docs/benchmark-evidence/binary-gate-eval-merged-new.json
+
 BINARY_GATE_MODEL_PATH=data/routing/binary-gate-model.json npm run binary:benchmark > docs/benchmark-evidence/binary-gate-benchmark-internal-old.txt
 BINARY_GATE_MODEL_PATH=packages/advisor/assets/binary-gate-model.json npm run binary:benchmark > docs/benchmark-evidence/binary-gate-benchmark-new.txt
 ```
@@ -74,6 +89,8 @@ BINARY_GATE_MODEL_PATH=packages/advisor/assets/binary-gate-model.json npm run bi
   - `docs/benchmark-evidence/binary-gate-eval-core-full-new.json`
   - `docs/benchmark-evidence/binary-gate-eval-core-small-old.json`
   - `docs/benchmark-evidence/binary-gate-eval-core-small-new.json`
+  - `docs/benchmark-evidence/binary-gate-eval-merged-old.json`
+  - `docs/benchmark-evidence/binary-gate-eval-merged-new.json`
   - `docs/benchmark-evidence/binary-gate-benchmark-internal-old.txt`
   - `docs/benchmark-evidence/binary-gate-benchmark-new.txt`
 - `data/routing/*` outputs remain git-ignored; those generated artifacts intentionally stay out of commits, but a verifiable copy is now committed.

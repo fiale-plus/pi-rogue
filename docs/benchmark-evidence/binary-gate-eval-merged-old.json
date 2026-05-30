@@ -1,0 +1,116 @@
+{
+  "input": "data/routing/binary-gate-terminal-bench-merged.jsonl",
+  "model": "data/routing/binary-gate-model.json",
+  "rows": 2431,
+  "counts": {
+    "continue": 1258,
+    "escalate": 1173
+  },
+  "accuracy": 0.9531057178116001,
+  "escalatePrecision": 0.9673433362753752,
+  "escalateRecall": 0.9343563512361467,
+  "escalateF1": 0.950563746747615,
+  "continuePrecision": 0.940677966101695,
+  "continueRecall": 0.9705882352941176,
+  "continueF1": 0.9553990610328639,
+  "confusion": [
+    {
+      "actual": "continue",
+      "predicted": [
+        [
+          "continue",
+          1221
+        ],
+        [
+          "escalate",
+          37
+        ]
+      ]
+    },
+    {
+      "actual": "escalate",
+      "predicted": [
+        [
+          "continue",
+          77
+        ],
+        [
+          "escalate",
+          1096
+        ]
+      ]
+    }
+  ],
+  "misses": [
+    {
+      "text": "running in torboquant-mlx location, what are the running model kpis",
+      "source": "gold",
+      "actual": "escalate",
+      "predicted": "continue",
+      "conf": 0.8678547765513382
+    },
+    {
+      "text": "hey can you use repo-arch on the current repo - dig for full data footpring and train me a model properly as well",
+      "source": "gold",
+      "actual": "escalate",
+      "predicted": "continue",
+      "conf": 0.7679692440127706
+    },
+    {
+      "text": "which secrets it is reading to env? which secrets it is reading to openclaw config from psst?",
+      "source": "gold",
+      "actual": "escalate",
+      "predicted": "continue",
+      "conf": 0.6679328850455701
+    },
+    {
+      "text": "and indeed real tasks please oh, Q - if we have access to the local ollama and lmstudio - can we load custom model in those? From older tests we found ollama/lmstudio does not render any big diff same model. Maybe llama cpp also not super advantageous? wdyt?",
+      "source": "gold",
+      "actual": "escalate",
+      "predicted": "continue",
+      "conf": 0.619628097563931
+    },
+    {
+      "text": "use repo-arch subsystem, mine data and train local model and report on quality and examples you are able to use it with ove the hooks in your flows",
+      "source": "gold",
+      "actual": "escalate",
+      "predicted": "continue",
+      "conf": 0.7849986440817152
+    },
+    {
+      "text": "hey use repo-arch cli in this repo to train me little model on the full repo history",
+      "source": "gold",
+      "actual": "escalate",
+      "predicted": "continue",
+      "conf": 0.7896033613918001
+    },
+    {
+      "text": "ssh -t openclaw-vm \"hermes model\" Warning: No inference provider configured. Run 'hermes model' to choose a provider and model, or set an API key (OPENROUTER_API_KEY, OPENAI_API_KEY, etc.) in ~/.hermes/.env. Falling back to auto provider detection. Traceback (most recent call last): File \"/home/openclaw/.hermes/hermes-agent/hermes_cli/main.py\", line 857, in cmd_model active = resolve_provider(effective_provider) ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ File \"/home/openclaw/.hermes/hermes-agent/hermes_cli/auth.py\", line 749, in resolve_provider raise AuthError( hermes_cli.auth.AuthError: No inference provider configured. Run 'hermes model' to choose a provider and model, or set an API key (OPENROUTER_API_KEY, OPENAI_API_KEY, etc.) in ~/.hermes/.env. During handling of the above exception, another exception occurred: set minimax api key there, it is in openclaw config",
+      "source": "gold",
+      "actual": "escalate",
+      "predicted": "continue",
+      "conf": 0.5928901628104601
+    },
+    {
+      "text": "my claude responsed to the exact same Q: Interesting idea, but let me be honest about what's actually possible before we build something. What Claude Code already does: - Autocompact automatically compresses old messages when approaching the limit (you have a 33k buffer for this) - It summarizes old turns and keeps recent ones intact What a skill can't do: - Programmatically delete or modify messages in the context window - Control when or how autocompact triggers - \"Move\" context to another model mid-conversation What a skill CAN do — and this is the useful part: 1. Checkpoint to disk — before autocompact loses detail, proactively save structured state (decisions made, files modified, current plan) to a file. When context gets compressed, the file survives intact. 2. Session handoff notes — when context gets heavy, generate a handoff file that a new session can @import and pick up where you left off with full fidelity. 3. Chunk markers — structure work into named chunks so that when autocompact runs, it has clean semantic boundaries to compress against instead of a wall of interleaved tool calls. The most practical version: a /checkpoint command that snapshots the current session state to a file, so you can start fresh without losing anything. You're at 17% now but after a few more sessions like this one it adds up. Want me to build that as the next skill in fiale-awesome-skills? Or were you thinking about something different — like actually routing old context through model-offload to a cheaper model for summarization?",
+      "source": "gold",
+      "actual": "escalate",
+      "predicted": "continue",
+      "conf": 0.8109662763861019
+    },
+    {
+      "text": "Task: Run the full autoresearch cycle on the ANE stack in the 'ane/' directory. The goal is to achieve the lowest possible val_loss on TinyStories by tuning ane/experiment_config.h. Follow the strict cycle discipline: Measure (using the baseline command from README), Identify, Implement (modifying only ane/experiment_config.h), Build (using ane/autoresearch.checks.sh), Test (re-running the baseline command), Log, and Update Strategy. The target metric is val_loss. Do not proceed until the initial baseline measurement is successfully recorded.",
+      "source": "gold",
+      "actual": "escalate",
+      "predicted": "continue",
+      "conf": 0.9356683321090224
+    },
+    {
+      "text": "I think this is better list [Context] AGENTS.md [Skills] autoresearch, autoresearch-lab, brain, context-mode, ctx-doctor, ctx-insight, ctx-purge, ctx-stats, ctx-upgrade, grok-scout, librarian, onboard, pi-subagents, repo-arch, twitter-export [Prompts] /gather-context-and-clarify, /parallel-cleanup, /parallel-context-build, /parallel-handoff-plan, /parallel-research, /parallel-review, /review-loop [Extensions] @aliou/pi-guardrails:guardrails, @aliou/pi-guardrails:path-access, @aliou/pi-guardrails:permission-gate, @fiale-plus/repo-arch:pi/extensions/repo-arch.ts, advisor-coach, context-mode:build/adapters/pi/extension.js, extensions, goal, mac-system-theme.ts, mlx-sampler.ts, pi-brain:src, pi-powerline-footer, pi-subagents:src/extension, pi-web-access",
+      "source": "gold",
+      "actual": "escalate",
+      "predicted": "continue",
+      "conf": 0.8255065221072452
+    }
+  ]
+}
