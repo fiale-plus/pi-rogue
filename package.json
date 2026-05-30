@@ -22,6 +22,11 @@
     "binary:eval-candidates": "npx tsx scripts/eval-binary-gate-candidate-matrix.ts",
     "binary:eval-file": "npx tsx scripts/eval-binary-gate-file.ts",
     "binary:benchmark": "npx tsx scripts/benchmark-binary-gate.ts",
+    "benchmark:advisor-gap": "tsx scripts/analyze-advisor-benchmark-gaps.ts",
+    "advisor-value:build": "tsx scripts/build-advisor-value-dataset.ts",
+    "advisor-value:train": "npx tsx scripts/train-binary-gate.ts --input data/routing/advisor-value-train-balanced.jsonl --model data/routing/advisor-value-model.json --report data/routing/advisor-value-training-report.json",
+    "advisor-value:eval": "npx tsx scripts/eval-binary-gate-file.ts --input data/routing/advisor-value-benchmark.jsonl --model data/routing/advisor-value-model.json --report data/routing/advisor-value-eval-report.json",
+    "advisor-demo:roi": "tsx scripts/summarize-advisor-assisted-roi.ts",
     "routing:score": "tsx scripts/score-routing-active-learning.ts",
     "routing:eval": "tsx scripts/eval-routing-baselines.ts"
   },
