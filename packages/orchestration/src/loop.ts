@@ -5,6 +5,8 @@ import { setAdvisorCheckinsEnabled } from "./advisor-checkins.js";
 import { buildGoalCheckPrompt, beginGoalCheck, hasGoalCheckPending } from "./goal-resolution.js";
 import { readSessionJson, writeSessionJson } from "./state.js";
 import { loopArgumentCompletions } from "./completions.js";
+import { advisorCheckinReason, budgetFlowReason, clearBudgetState, readBudgetState, recordAdvisorCheckin } from "./budget.js";
+import { clearGoal, setGoalStatus } from "./goal.js";
 
 const FEATURE = "orchestration";
 const LOOP_FILE = "loop.json";
@@ -68,6 +70,7 @@ export function clearLoop(ctx: any, options: { clearResearch?: boolean; preserve
   if (options.clearResearch) {
     clearResearchState(ctx);
   }
+  clearBudgetState(ctx);
   return next;
 }
 
@@ -123,7 +126,18 @@ async function runAdvisorCheckinTick(pi: ExtensionAPI, ctx: any): Promise<void> 
   }
 
   if (!advisorLoopCheckinFn) return;
+  const before = readBudgetState(ctx);
+  const checkinBudgetReason = advisorCheckinReason(before);
+  if (checkinBudgetReason) {
+    setAdvisorCheckinsEnabled(false);
+    return;
+  }
+
   await advisorLoopCheckinFn(pi, ctx, "loop_tick");
+  const after = recordAdvisorCheckin(ctx);
+  if (advisorCheckinReason(after)) {
+    setAdvisorCheckinsEnabled(false);
+  }
 }
 
 function runLoopTick(pi: ExtensionAPI, ctx: any): boolean {
@@ -143,12 +157,23 @@ function runLoopTick(pi: ExtensionAPI, ctx: any): boolean {
     return false;
   }
 
-  if (activeGoal(ctx) && hasGoalCheckPending(ctx)) {
+  const goal = activeGoal(ctx);
+  if (goal) {
+    const budgetReason = budgetFlowReason(readBudgetState(ctx));
+    if (budgetReason) {
+      clearGoal(ctx);
+      clearLoop(ctx, { clearResearch: true });
+      setGoalStatus(ctx, null);
+      ctx.ui.notify(`🧭 Goal budget exhausted: ${budgetReason}.`, "warning");
+      return false;
+    }
+  }
+
+  if (goal && hasGoalCheckPending(ctx)) {
     void runAdvisorCheckinTick(pi, ctx);
     return false;
   }
 
-  const goal = activeGoal(ctx);
   const prompt = goal ? buildGoalCheckPrompt(goal, current.instruction) : current.instruction;
   ctx.ui.notify(goal ? `🎯 Goal check: ${truncate(goal, 80)}` : `↻ Loop tick: ${truncate(current.instruction, 80)}`, "info");
   if (goal) {

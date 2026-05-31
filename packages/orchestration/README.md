@@ -43,4 +43,6 @@ npm install --workspace packages/orchestration
 - `autoresearch` and `autoresearch-lab` are thin facades over `/goal + /loop`.
 - Loop activation enables scheduled advisor check-ins; stopping the active loop disables them again.
 - Check-ins are part of orchestration lifecycle, not a standalone advisor command. They use higher/advanced advisor models first, with regular model fallback enabled by default.
+- A conversation novelty guard suppresses repeated status-confirmation prompts before they can re-enter advisor/model flow, and asks for clarification on truncated prompts.
+- `goal` and `autoresearch` flows enforce budgets (turns, wall time, advisor check-ins) so local-model runs cannot spin forever or keep draining advisor capacity.
 - Stale research state is cleared when `goal` or `loop` are cleared.
