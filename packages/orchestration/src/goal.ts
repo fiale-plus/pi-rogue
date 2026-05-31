@@ -6,6 +6,7 @@ import { beginGoalCheck, buildGoalCheckPrompt, endGoalCheck, goalCheckResult, ha
 import { clearLoop, triggerLoopTick } from "./loop.js";
 import { resetAdvisorSessionContext } from "./advisor-checkins.js";
 import { goalArgumentCompletions } from "./completions.js";
+import { budgetFlowReason, budgetStatus, clearBudgetState, initializeBudgetState, recordBudgetTurn, readBudgetState } from "./budget.js";
 
 const FEATURE = "orchestration";
 const CURRENT_FILE = "goal.md";
@@ -28,6 +29,7 @@ export function setGoal(ctx: any, goal: string): void {
   }
   clearLoop(ctx, { clearResearch: true, preserveCheckins: true });
   writeText(sessionFile(FEATURE, ctx, CURRENT_FILE), `${note}\n`);
+  initializeBudgetState(ctx, "goal");
   resetAdvisorSessionContext();
   endGoalCheck(ctx);
   appendText(HISTORY_FILE, `${JSON.stringify({ at: new Date().toISOString(), goal: note })}\n`);
@@ -35,6 +37,7 @@ export function setGoal(ctx: any, goal: string): void {
 
 export function clearGoal(ctx: any): void {
   writeText(sessionFile(FEATURE, ctx, CURRENT_FILE), "");
+  clearBudgetState(ctx);
   resetAdvisorSessionContext();
 }
 
@@ -79,11 +82,20 @@ function researchForGoal(ctx: any, goal: string): ResearchState | null {
   return state;
 }
 
-export type GoalProcessingStartResult = "loop" | "standalone" | "pending";
+export type GoalProcessingStartResult = "loop" | "standalone" | "pending" | "budget_exhausted";
 
 export function startGoalProcessing(pi: ExtensionAPI, ctx: any, goal: string): GoalProcessingStartResult {
   if (hasGoalCheckPending(ctx)) {
     return "pending";
+  }
+
+  const budgetReason = budgetFlowReason(readBudgetState(ctx));
+  if (budgetReason) {
+    clearGoal(ctx);
+    setGoalStatus(ctx, null);
+    clearLoop(ctx, { clearResearch: true });
+    ctx.ui.notify(`🧭 Goal budget exhausted: ${budgetReason}.`, "warning");
+    return "budget_exhausted";
   }
 
   if (triggerLoopTick(pi, ctx)) {
@@ -140,6 +152,25 @@ export function registerGoal(pi: ExtensionAPI): void {
     const research = researchForGoal(ctx, goal);
     const recordedResearch = research ? recordResearchCheck(ctx, research, result) : null;
     const holdReason = recordedResearch ? shouldHoldResearchOpen(recordedResearch, result, text) : null;
+    const budget = recordBudgetTurn(ctx);
+    const budgetReason = budgetFlowReason(budget);
+
+    if (result === "done" && !holdReason) {
+      clearGoal(ctx);
+      setGoalStatus(ctx, null);
+      clearLoop(ctx, { clearResearch: true });
+      ctx.ui.notify(`🎯 Goal completed: ${truncate(goal, 160)}`, "info");
+      return;
+    }
+
+    if (budgetReason) {
+      clearGoal(ctx);
+      setGoalStatus(ctx, null);
+      clearLoop(ctx, { clearResearch: true });
+      ctx.ui.notify(`🧭 Goal budget exhausted: ${budgetReason}.`, "warning");
+      return;
+    }
+
     if (holdReason) {
       ctx.ui.notify(`🔎 Autoresearch continuing: ${holdReason}.`, "info");
       return;
@@ -148,11 +179,6 @@ export function registerGoal(pi: ExtensionAPI): void {
     if (result !== "done") {
       return;
     }
-
-    clearGoal(ctx);
-    setGoalStatus(ctx, null);
-    clearLoop(ctx, { clearResearch: true, preserveCheckins: true });
-    ctx.ui.notify(`🎯 Goal completed: ${truncate(goal, 160)}`, "info");
   });
 
   pi.on("before_agent_start", async (event, ctx) => {
@@ -178,7 +204,7 @@ export function registerGoal(pi: ExtensionAPI): void {
       if (resolved === "show") {
         const goal = activeGoal(ctx);
         setGoalStatus(ctx, goal || null);
-        ctx.ui.notify(goal ? `🎯 ${truncate(goal, 160)}` : "No active goal.", "info");
+        ctx.ui.notify(goal ? `🎯 ${truncate(goal, 160)} — ${budgetStatus(readBudgetState(ctx))}` : "No active goal.", "info");
         return;
       }
 
@@ -215,7 +241,10 @@ export function registerGoal(pi: ExtensionAPI): void {
       setGoal(ctx, text);
       setGoalStatus(ctx, text);
       const started = startGoalProcessing(pi, ctx, text);
-      ctx.ui.notify(`🎯 Goal set: ${truncate(text, 160)}${started === "pending" ? " (goal processing already pending)" : " — processing started"}`, "info");
+      ctx.ui.notify(
+        `🎯 Goal set: ${truncate(text, 160)}${started === "pending" ? " (goal processing already pending)" : started === "budget_exhausted" ? " (budget exhausted)" : " — processing started"}`,
+        "info",
+      );
     },
   });
 }

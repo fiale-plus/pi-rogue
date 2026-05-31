@@ -10,6 +10,7 @@ import {
   type ResearchKind,
 } from "./autoresearch-state.js";
 import { appendText, featureFile } from "./internal.js";
+import { initializeBudgetState, readBudgetState } from "./budget.js";
 import { autoresearchArgumentCompletions } from "./completions.js";
 
 export function buildResearchGoal(kind: ResearchKind, instruction: string): string {
@@ -77,7 +78,7 @@ function registerResearchCommand(pi: ExtensionAPI, commandName: ResearchKind): v
       const resolved = !input ? "status" : ["status", "show"].includes(cmd) ? cmd : ["off", "clear", "stop"].includes(cmd) ? "clear" : "set";
 
       if (resolved === "status" || resolved === "show") {
-        ctx.ui.notify(formatResearchState(readResearchState(ctx)), "info");
+        ctx.ui.notify(formatResearchState(readResearchState(ctx), readBudgetState(ctx)), "info");
         return;
       }
 
@@ -120,6 +121,7 @@ function registerResearchCommand(pi: ExtensionAPI, commandName: ResearchKind): v
       const loopInstruction = buildResearchLoopInstruction(commandName, instruction);
       setGoal(ctx, goal);
       setGoalStatus(ctx, goal);
+      initializeBudgetState(ctx, commandName);
       const next = writeResearchState(ctx, {
         kind: commandName,
         instruction,

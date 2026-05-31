@@ -1,5 +1,6 @@
 import { truncate } from "./internal.js";
 import { readSessionJson, writeSessionJson } from "./state.js";
+import { budgetStatus, type BudgetState } from "./budget.js";
 
 export const FEATURE = "orchestration";
 export const RESEARCH_FILE = "autoresearch.json";
@@ -61,7 +62,7 @@ export function label(kind: ResearchKind): string {
   return kind === "autoresearch-lab" ? "🧪 Autoresearch lab" : "🔎 Autoresearch";
 }
 
-export function formatResearchState(state: ResearchState): string {
+export function formatResearchState(state: ResearchState, budget?: BudgetState | null): string {
   if (!state.instruction) {
     return `${label(state.kind)} is off.`;
   }
@@ -69,5 +70,6 @@ export function formatResearchState(state: ResearchState): string {
   const cycles = state.cycles ?? 0;
   const doneAttempts = state.doneAttempts ?? 0;
   const last = state.lastResult ? `, last=${state.lastResult}` : "";
-  return `${label(state.kind)} active: ${truncate(state.instruction, 160)} — backed by /goal + /loop ${state.interval || DEFAULT_RESEARCH_INTERVAL}; cycles=${cycles}, doneAttempts=${doneAttempts}${last}`;
+  const budgetText = budget ? `, ${budgetStatus(budget)}` : "";
+  return `${label(state.kind)} active: ${truncate(state.instruction, 160)} — backed by /goal + /loop ${state.interval || DEFAULT_RESEARCH_INTERVAL}; cycles=${cycles}, doneAttempts=${doneAttempts}${last}${budgetText}`;
 }
