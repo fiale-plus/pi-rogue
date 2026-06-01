@@ -74,6 +74,14 @@ describe("advisor check-in lifecycle bridge", () => {
       advisorCalls: 3,
       cacheHits: 7,
       followUp: "old follow-up",
+      reviewControl: {
+        status: "running",
+        pending: true,
+        consumed: false,
+        running: true,
+        lastDecision: "review",
+        lastReason: "manual checkpoint",
+      },
       router: { preflight: { label: "continue" } },
       checkin: {
         lastAt: "2026-05-29T00:00:00.000Z",
@@ -97,6 +105,12 @@ describe("advisor check-in lifecycle bridge", () => {
       followUp: "",
       router: {},
       checkin: { queued: false },
+      reviewControl: {
+        status: "idle",
+        pending: false,
+        consumed: true,
+        running: false,
+      },
     });
     expect(next.config.checkinStartedAt).toBeTypeOf("number");
     expect(next.config.checkinStartedAt).toBeGreaterThanOrEqual(startedAt);
@@ -105,6 +119,12 @@ describe("advisor check-in lifecycle bridge", () => {
     expect(parsedState.lastTask).toBe("");
     expect(parsedState.notes).toEqual([]);
     expect(parsedState.checkin).toEqual({ queued: false });
+    expect(parsedState.reviewControl).toEqual({
+      status: "idle",
+      pending: false,
+      consumed: true,
+      running: false,
+    });
 
     const parsedConfig = JSON.parse(readFileSync(config, "utf8"));
     expect(parsedConfig.checkins).toBe("mid-hour");
