@@ -143,9 +143,15 @@ function registerResearchCommand(pi: ExtensionAPI, commandName: ResearchKind): v
 }
 
 export function registerAutoresearch(pi: ExtensionAPI): void {
+  const p = pi as any;
+  if (p.__piRogueAutoresearchRegistered) return;
+  p.__piRogueAutoresearchRegistered = true;
   registerResearchCommand(pi, "autoresearch");
 }
 
 export function registerAutoresearchLab(pi: ExtensionAPI): void {
+  const p = pi as any;
+  if (p.__piRogueAutoresearchLabRegistered) return;
+  p.__piRogueAutoresearchLabRegistered = true;
   registerResearchCommand(pi, "autoresearch-lab");
 }

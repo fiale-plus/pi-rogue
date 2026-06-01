@@ -247,6 +247,10 @@ export function triggerLoopTick(pi: ExtensionAPI, ctx: any): boolean {
 }
 
 export function registerLoop(pi: ExtensionAPI): void {
+  const p = pi as any;
+  if (p.__piRogueLoopRegistered) return;
+  p.__piRogueLoopRegistered = true;
+
   pi.on("session_start", (_event, ctx) => {
     syncLoopTimer(pi, ctx);
   });

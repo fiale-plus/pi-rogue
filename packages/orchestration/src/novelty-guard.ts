@@ -262,6 +262,10 @@ function writeGuardState(ctx: any, state: NoveltyGuardState): void {
 }
 
 export function registerNoveltyGuard(pi: ExtensionAPI): void {
+  const p = pi as any;
+  if (p.__piRogueNoveltyGuardRegistered) return;
+  p.__piRogueNoveltyGuardRegistered = true;
+
   pi.on("input", async (event, ctx) => {
     const text = String(event?.text ?? "").trim();
     if (!text || text.startsWith("/") || event?.source === "extension") {

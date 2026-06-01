@@ -4,7 +4,7 @@ import { advisorArgumentCompletions, piRogueArgumentCompletions } from "./comple
 describe("advisor completions", () => {
   it("offers top-level advisor continuations", () => {
     const values = advisorArgumentCompletions("")?.map((i) => i.value);
-    expect(values).toEqual(expect.arrayContaining(["status", "config", "model", "review"]));
+    expect(values).toEqual(expect.arrayContaining(["status", "config", "model", "review", "pause", "unpause"]));
     expect(values).not.toContain("checkins");
   });
 

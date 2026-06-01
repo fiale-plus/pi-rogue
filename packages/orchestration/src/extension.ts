@@ -5,6 +5,10 @@ import { registerLoop } from "./loop.js";
 import { registerNoveltyGuard } from "./novelty-guard.js";
 
 export function registerOrchestration(pi: ExtensionAPI): void {
+  const p = pi as any;
+  if (p.__piRogueOrchestrationRegistered) return;
+  p.__piRogueOrchestrationRegistered = true;
+
   registerNoveltyGuard(pi);
   registerGoal(pi);
   registerLoop(pi);

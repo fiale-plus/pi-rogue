@@ -58,6 +58,7 @@ const MAX_FILES = 8;
 const MAX_ERRORS = 5;
 const MIN_CHECKIN_INTERVAL_MINUTES = 10;
 const MAX_CHECKIN_INTERVAL_MINUTES = 240;
+const ADVISOR_AUTORUN_COOLDOWN_TURNS = 3;
 const checkinLocks = new Set<string>();
 
 // ── SOTA models (ordered by preference) ───────────────────────────────────
@@ -90,6 +91,8 @@ interface SessionState {
     queuedReason?: string;
   };
   reviewControl: ReviewControlState;
+  advisorPauseUntilTurn?: number;
+  advisorAutoRunCooldownUntilTurn?: number;
 }
 function defaultReviewControl(): ReviewControlState {
   return {
@@ -153,6 +156,8 @@ function saveConfig(c: AdvisorConfig) {
 function loadState(): SessionState {
   const raw = readJson<Partial<SessionState>>(STATE_PATH, {});
   const control = raw.reviewControl;
+  const pauseUntil = Number(raw.advisorPauseUntilTurn);
+  const cooldownUntil = Number(raw.advisorAutoRunCooldownUntilTurn);
   return {
     turns: raw.turns ?? 0,
     lastTask: raw.lastTask ?? "",
@@ -184,6 +189,8 @@ function loadState(): SessionState {
       lastTrigger: control?.lastTrigger,
       lastAppliedAt: control?.lastAppliedAt,
     },
+    advisorPauseUntilTurn: Number.isFinite(pauseUntil) ? pauseUntil : undefined,
+    advisorAutoRunCooldownUntilTurn: Number.isFinite(cooldownUntil) ? cooldownUntil : undefined,
   };
 }
 
@@ -214,7 +221,7 @@ const REVIEW_SYSTEM = `You are a senior reviewer. An AI agent just completed wor
   "summary": "1-2 sentence assessment",
   "actions": ["action1"],
   "checklist": ["item"],
-  "notify": true
+  "notify": false
 }`;
 
 // ── Helpers ───────────────────────────────────────────────────────────────
@@ -325,6 +332,8 @@ function persistReviewState(state: SessionState, includeReviewRoute: boolean): v
   const persisted = loadState();
   persisted.reviewControl = state.reviewControl;
   persisted.followUp = state.followUp;
+  persisted.advisorPauseUntilTurn = state.advisorPauseUntilTurn;
+  persisted.advisorAutoRunCooldownUntilTurn = state.advisorAutoRunCooldownUntilTurn;
   if (includeReviewRoute && state.router.review) {
     persisted.router.review = state.router.review;
   }
@@ -507,14 +516,51 @@ export function buildAdvisorCheckinPrompt(source: string, orchestration: string,
   ].filter(Boolean).join("\n\n");
 }
 
+function advisorPauseRemaining(state: SessionState, nowTurns = state.turns): number {
+  const until = state.advisorPauseUntilTurn;
+  if (until === undefined || Number.isNaN(until)) return 0;
+  return Math.max(0, until - nowTurns);
+}
+
+function isAdvisorPaused(state: SessionState, nowTurns = state.turns): boolean {
+  return advisorPauseRemaining(state, nowTurns) > 0;
+}
+
+function advisorCooldownRemaining(state: SessionState, nowTurns = state.turns): number {
+  const until = state.advisorAutoRunCooldownUntilTurn;
+  if (until === undefined || Number.isNaN(until)) return 0;
+  return Math.max(0, until - nowTurns);
+}
+
+function isAdvisorCooldownActive(state: SessionState, nowTurns = state.turns): boolean {
+  return advisorCooldownRemaining(state, nowTurns) > 0;
+}
+
+function setAdvisorAutoRunCooldown(state: SessionState): void {
+  state.advisorAutoRunCooldownUntilTurn = state.turns + ADVISOR_AUTORUN_COOLDOWN_TURNS;
+}
+
+function isAdvisorAutoRunSuppressed(state: SessionState, nowTurns = state.turns): boolean {
+  return isAdvisorPaused(state, nowTurns) || isAdvisorCooldownActive(state, nowTurns);
+}
+
+function isAdvisorAutoRunSuppressedForTurnContext(state: SessionState, nowTurns = state.turns): boolean {
+  return isAdvisorAutoRunSuppressed(state, nowTurns) || isAdvisorAutoRunSuppressed(state, nowTurns - 1);
+}
+
 function setPiRogueStatus(ctx: any, config = loadConfig(), state = loadState()): void {
   const normalized = normalizeAdvisorConfig(config);
   const checkin = normalized.checkins === "off" ? "checkins off" : `checkins ${normalized.checkinIntervalMinutes}m`;
+  const pause = advisorPauseRemaining(state, state.turns);
+  const cooldown = advisorCooldownRemaining(state, state.turns);
+  const pauseText = pause > 0 ? ` · pause ${pause} turn${pause === 1 ? "" : "s"}` : "";
+  const cooldownText = cooldown > 0 ? ` · cool-down ${cooldown} turn${cooldown === 1 ? "" : "s"}` : "";
   const last = state.checkin.lastAt ? ` · last ${new Date(state.checkin.lastAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}` : "";
-  ctx.ui.setStatus("pi-rogue", `☠︎ advisor ${normalized.mode}/${normalized.review} · ${checkin}${last}`);
+  ctx.ui.setStatus("pi-rogue", `☠︎ advisor ${normalized.mode}/${normalized.review} · ${checkin}${pauseText}${cooldownText}${last}`);
 }
 
 export function shouldRunCheckin(config: AdvisorConfig, state: SessionState, now = Date.now(), startedAt = now): string | null {
+  if (isAdvisorAutoRunSuppressed(state, state.turns)) return null;
   const normalized = normalizeAdvisorConfig(config);
   if (normalized.mode === "off" || normalized.mode === "manual") return null;
   if (normalized.checkins === "off") return null;
@@ -590,6 +636,7 @@ async function maybeAdvisorCheckin(pi: ExtensionAPI, ctx: any, source: string): 
     if (!completed) return false;
 
     const next = loadState();
+    setAdvisorAutoRunCooldown(next);
     next.checkin = {
       lastAt: new Date().toISOString(),
       lastTurn: next.turns,
@@ -607,10 +654,14 @@ async function maybeAdvisorCheckin(pi: ExtensionAPI, ctx: any, source: string): 
 
 function piRogueCockpitText(config: AdvisorConfig, state: SessionState, currentNote: string, orchestration = ""): string {
   const normalized = normalizeAdvisorConfig(config);
+  const pause = advisorPauseRemaining(state, state.turns);
+  const cooldown = advisorCooldownRemaining(state, state.turns);
   return [
     "☠︎ Pi-Rogue cockpit",
     currentNote ? `Advisor: ${truncate(currentNote, 220)}` : "Advisor: no current note",
     `Mode: ${normalized.mode} | Review: ${normalized.review} | Check-ins: ${normalized.checkins === "off" ? "off" : `${normalized.checkinIntervalMinutes}m`}`,
+    pause > 0 ? `Advisor pause: ${pause} turn${pause === 1 ? "" : "s"} remaining` : "Advisor pause: off",
+    cooldown > 0 ? `Auto run cool-down: ${cooldown} turn${cooldown === 1 ? "" : "s"} remaining` : "Auto run cool-down: off",
     `Turns: ${state.turns} | Advisor calls: ${state.advisorCalls} | Cache hits: ${state.cacheHits}`,
     state.checkin.lastAt ? `Last check-in: ${new Date(state.checkin.lastAt).toLocaleString()} (${state.checkin.lastReason || "mid-hour"})` : "Last check-in: never",
     state.checkin.queued ? `Queued check-in: ${state.checkin.queuedReason || "due"}` : "",
@@ -845,6 +896,9 @@ async function doReview(pi: ExtensionAPI, ctx: any, trigger: string, delta: stri
       ].join("\n"), timestamp: new Date().toISOString() },
     ] as any[];
     const completed = await completeWithModelFallback(ctx, config, REVIEW_SYSTEM, msgs, { maxTokens: 400, reasoning: "low" as ThinkingLevel });
+    if (completed) {
+      setAdvisorAutoRunCooldown(state);
+    }
     const raw = completed?.text;
     if (!raw) {
       finalDecision = "defer";
@@ -878,7 +932,7 @@ async function doReview(pi: ExtensionAPI, ctx: any, trigger: string, delta: stri
       return;
     }
 
-    if (json.verdict === "on_track" && json.notify !== true) {
+    if (json.verdict === "on_track") {
       finalDecision = "continue";
       finalReason = (json.reason || json.summary || "review result").slice(0, 120);
       markReviewApplied(state, signature, trigger, finalDecision, finalReason, true);
@@ -887,10 +941,9 @@ async function doReview(pi: ExtensionAPI, ctx: any, trigger: string, delta: stri
       return;
     }
 
-    const decision = json.verdict === "on_track" ? "continue"
-      : json.verdict === "course_correct" ? "review"
-        : json.verdict === "not_done" ? "review"
-          : "defer";
+    const decision = json.verdict === "course_correct" ? "review"
+      : json.verdict === "not_done" ? "review"
+        : "defer";
     finalDecision = decision;
     finalReason = (json.reason || json.summary || "review result").slice(0, 120);
 
@@ -902,7 +955,7 @@ async function doReview(pi: ExtensionAPI, ctx: any, trigger: string, delta: stri
       state.followUp = [json.summary, ...(json.actions?.slice(0, 2) || [])].filter(Boolean).join(" — ");
     }
 
-    markReviewApplied(state, signature, trigger, finalDecision, finalReason, decision === "continue");
+    markReviewApplied(state, signature, trigger, finalDecision, finalReason, false);
     persistReviewState(state, true);
     finalized = true;
   } finally {
@@ -916,6 +969,10 @@ async function doReview(pi: ExtensionAPI, ctx: any, trigger: string, delta: stri
 // ── Extension entry point ──────────────────────────────────────────────────
 
 export function registerAdvisor(pi: ExtensionAPI): void {
+  const p = pi as any;
+  if (p.__piRogueAdvisorRegistered) return;
+  p.__piRogueAdvisorRegistered = true;
+
   for (const customType of ["advisor:model", "advisor:rules", "advisor:llm"] as const) {
     pi.registerMessageRenderer(customType, renderAdvisorHint);
   }
@@ -957,8 +1014,11 @@ export function registerAdvisor(pi: ExtensionAPI): void {
   // ── Preflight (heuristics only — no LLM call, <1ms) ──────────────────
   pi.on("before_agent_start", async (event: any, ctx: any) => {
     const cfg = loadConfig();
-    if (cfg.mode === "off" || cfg.mode === "manual") return { systemPrompt: event.systemPrompt };
     const state = loadState();
+    const hasFollowUp = Boolean(state.followUp);
+    if ((isAdvisorAutoRunSuppressed(state, state.turns) && !hasFollowUp) || cfg.mode === "off" || cfg.mode === "manual") {
+      return { systemPrompt: event.systemPrompt };
+    }
     setPiRogueStatus(ctx, cfg, state);
     const prompt = typeof event.prompt === "string" && event.prompt.trim() ? squish(event.prompt, 1000) : "";
     if (prompt) state.lastTask = prompt;
@@ -1023,17 +1083,22 @@ export function registerAdvisor(pi: ExtensionAPI): void {
     const cfg = loadConfig();
     if (cfg.mode === "off") return;
     const state = loadState();
-    state.turns++;
+    const suppressedThisTurn = isAdvisorAutoRunSuppressedForTurnContext(state, state.turns);
     const tools = (event.toolResults || []).map((t: any) => String(t?.toolName || t?.name || "tool"));
     const fileChanged = tools.some((t: string) => /^(edit|write)$/i.test(t));
     const failed = (event.toolResults || []).some((t: any) => isActualFailure(t));
     const text = squish(contentText(event.message?.content));
     if (text && text !== state.notes[state.notes.length - 1]) state.notes.push(text);
+    state.turns++;
+    if (state.advisorPauseUntilTurn && isAdvisorPaused(state, state.turns) === false) {
+      state.advisorPauseUntilTurn = undefined;
+    }
+    if (state.advisorAutoRunCooldownUntilTurn && isAdvisorCooldownActive(state, state.turns) === false) {
+      state.advisorAutoRunCooldownUntilTurn = undefined;
+    }
     saveState(state);
     setPiRogueStatus(ctx, cfg, state);
-    void maybeAdvisorCheckin(pi, ctx, "turn_end");
-
-    if (cfg.review !== "off") {
+    if (cfg.review !== "off" && !suppressedThisTurn) {
       await doReview(pi, ctx, `turn-${state.turns}`, text, {
         fileChanged,
         failed,
@@ -1041,15 +1106,26 @@ export function registerAdvisor(pi: ExtensionAPI): void {
         materialSignals: tools,
       });
     }
+
+    const post = loadState();
+    if (!isAdvisorAutoRunSuppressed(post, post.turns)) {
+      void maybeAdvisorCheckin(pi, ctx, "turn_end");
+    }
   });
 
   // ── Post-review (agent_end) ────────────────────────────────────────────
   pi.on("agent_end", async (event: any, ctx: any) => {
     const cfg = loadConfig();
     if (cfg.mode === "off") return;
-    void maybeAdvisorCheckin(pi, ctx, "agent_end");
+    const state = loadState();
+    const suppressed = isAdvisorAutoRunSuppressedForTurnContext(state, state.turns);
+    if (cfg.review === "off" || suppressed) {
+      if (!suppressed) {
+        void maybeAdvisorCheckin(pi, ctx, "agent_end");
+      }
+      return;
+    }
 
-    if (cfg.review === "off") return;
     const msgs = (event.messages || []).filter((m: any) => m.role === "assistant" || m.role === "toolResult");
     const last = msgs[msgs.length - 1];
     const delta = contentText(last?.content) || "(none)";
@@ -1065,6 +1141,11 @@ export function registerAdvisor(pi: ExtensionAPI): void {
       isAgentEnd: true,
       materialSignals: signals,
     });
+
+    const post = loadState();
+    if (!isAdvisorAutoRunSuppressed(post, post.turns)) {
+      void maybeAdvisorCheckin(pi, ctx, "agent_end");
+    }
   });
 
   // ── /pi-rogue cockpit ──────────────────────────────────────────────────
@@ -1120,7 +1201,7 @@ export function registerAdvisor(pi: ExtensionAPI): void {
 
   // ── /advisor command ───────────────────────────────────────────────────
   pi.registerCommand("advisor", {
-    description: "Senior engineering advisor. Usage: /advisor [on|off|status|config|question]",
+    description: "Senior engineering advisor. Usage: /advisor [on|off|status|config|pause|unpause|question]",
     getArgumentCompletions: (prefix: string) => advisorArgumentCompletions(prefix),
     handler: async (args, ctx) => {
       const a = String(args ?? "").trim().toLowerCase();
@@ -1132,17 +1213,21 @@ export function registerAdvisor(pi: ExtensionAPI): void {
         const note = readText(CURRENT_PATH).trim();
         const resolved = await resolveModel(ctx, cfg);
         const route = state.router.review ?? state.router.preflight;
+        const pause = advisorPauseRemaining(state, state.turns);
+        const cooldown = advisorCooldownRemaining(state, state.turns);
         ctx.ui.notify([
           note ? `🧭 ${truncate(note, 200)}` : "",
           route ? `Router: ${summarizeRoute(route)}${route.safety ? " · safety" : ""}` : "",
           "",
           `Mode: ${cfg.mode} | Review: ${cfg.review} | Check-ins: ${cfg.checkins === "off" ? "off" : `${cfg.checkinIntervalMinutes}m`} (orchestration-managed) | Model: ${resolved?.label || cfg.model || "auto"}`,
+          pause > 0 ? `Advisor pause: ${pause} turn${pause === 1 ? "" : "s"} remaining` : "Advisor pause: off",
+          cooldown > 0 ? `Auto run cool-down: ${cooldown} turn${cooldown === 1 ? "" : "s"} remaining` : "Auto run cool-down: off",
           `Turns: ${state.turns} | Calls: ${state.advisorCalls} | Cache hits: ${state.cacheHits}`,
           state.checkin.lastAt ? `Last check-in: ${new Date(state.checkin.lastAt).toLocaleString()} (${state.checkin.lastReason || "mid-hour"})` : "Last check-in: never",
           state.checkin.queued ? `Queued check-in: ${state.checkin.queuedReason || "due"}` : "",
           orchestrationSnapshotText(ctx),
           "",
-          "Commands: /advisor on|off | /advisor status | /advisor config | <question>",
+          "Commands: /advisor on|off | /advisor status | /advisor config | /advisor pause <n turns> | <question>",
           "Tip: SOTA models auto-detected. No config needed.",
         ].filter(Boolean).join("\n"), "info");
         return;
@@ -1199,12 +1284,16 @@ export function registerAdvisor(pi: ExtensionAPI): void {
         return;
       }
       if (cmd === "config") {
+        const pause = advisorPauseRemaining(state, state.turns);
+        const cooldown = advisorCooldownRemaining(state, state.turns);
         ctx.ui.notify([
           "Advisor config (check-ins are orchestration-managed):",
           `  mode: "${cfg.mode}" — auto (preflight+post+cache) | manual | off`,
           `  review: "${cfg.review}" — light (changes/errors) | strict (every 3) | off`,
           `  checkins: "${cfg.checkins}" — set by active /loop lifecycle`,
           `  checkinIntervalMinutes: ${cfg.checkinIntervalMinutes}`,
+          pause > 0 ? `  advisorPauseUntilTurn: ${pause} turn${pause === 1 ? "" : "s"} remaining` : "  advisorPauseUntilTurn: off",
+          cooldown > 0 ? `  advisorAutoRunCooldownUntilTurn: ${cooldown} turn${cooldown === 1 ? "" : "s"} remaining` : "  advisorAutoRunCooldownUntilTurn: off",
           `  model: "${cfg.model || "auto"}" — optional override for higher/advanced advisor model`,
           "",
           "Router logs: evals/advisor-router.jsonl",
@@ -1225,6 +1314,32 @@ export function registerAdvisor(pi: ExtensionAPI): void {
           "Create or resume /loop to activate scheduled higher-model check-ins; stop the loop to disable them.",
           orchestrationSnapshotText(ctx),
         ].join("\n"), "info");
+        return;
+      }
+
+      if (cmd === "pause") {
+        const value = rest[0];
+        const turns = Number.parseInt(String(value || ""), 10);
+        if (!Number.isFinite(turns) || turns <= 0) {
+          if (value === "off" || value === "cancel" || value === "clear") {
+            state.advisorPauseUntilTurn = undefined;
+            saveState(state);
+            ctx.ui.notify("Advisor pause cleared.", "info");
+            return;
+          }
+          ctx.ui.notify("Usage: /advisor pause <turns>  (or /advisor pause off)", "error");
+          return;
+        }
+        state.advisorPauseUntilTurn = state.turns + turns;
+        saveState(state);
+        ctx.ui.notify(`Advisor pause enabled for next ${turns} turn${turns === 1 ? "" : "s"}.`, "info");
+        return;
+      }
+
+      if (cmd === "unpause") {
+        state.advisorPauseUntilTurn = undefined;
+        saveState(state);
+        ctx.ui.notify("Advisor pause cleared.", "info");
         return;
       }
 

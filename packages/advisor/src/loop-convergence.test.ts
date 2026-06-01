@@ -20,6 +20,7 @@ type HandlerMap = Record<string, Handler[]>;
 
 function makeHandlers() {
   const handlers: HandlerMap = {};
+  const sendMessage = vi.fn();
 
   const pi = {
     on: (event: string, handler: Handler) => {
@@ -29,7 +30,7 @@ function makeHandlers() {
     registerMessageRenderer: () => undefined,
     registerCommand: () => undefined,
     registerTool: vi.fn(),
-    sendMessage: () => undefined,
+    sendMessage,
     sendUserMessage: () => undefined,
     ui: {
       setStatus: () => undefined,
@@ -37,7 +38,7 @@ function makeHandlers() {
     },
   };
 
-  return { handlers, pi: pi as any };
+  return { handlers, pi: pi as any, sendMessage };
 }
 
 const ADVISOR_STATE_DIR = join(homedir(), ".pi", "agent", "pi-rogue", "advisor");
@@ -72,6 +73,7 @@ function mkCtx() {
 describe("advisor two-agent convergence", () => {
   let ctx: any;
   let handlers: HandlerMap;
+  let sendMessageMock: ReturnType<typeof vi.fn>;
   let completeSimpleMock: ReturnType<typeof vi.fn>;
   let priorState: string | null = null;
   let priorConfig: string | null = null;
@@ -82,6 +84,7 @@ describe("advisor two-agent convergence", () => {
 
     const setup = makeHandlers();
     handlers = setup.handlers;
+    sendMessageMock = setup.sendMessage;
 
     mkdirSync(dirname(ADVISOR_STATE_PATH), { recursive: true });
     writeFileSync(ADVISOR_CONFIG_PATH, JSON.stringify({ mode: "auto", review: "light", checkins: "off", checkinIntervalMinutes: 30 }, null, 2), "utf8");
@@ -174,7 +177,7 @@ describe("advisor two-agent convergence", () => {
     const secondState = readAdvisorState();
     expect(completeSimpleMock).toHaveBeenCalledTimes(1);
     expect(secondState.reviewControl.status).toBe("consumed");
-    expect(secondState.reviewControl.lastReason).toBe("repeated material snapshot");
+    expect(secondState.reviewControl.lastReason).toBe(firstState.reviewControl.lastReason);
 
     const withoutFollowUp = await preflight![0]({ systemPrompt: "SYS", prompt: basePrompt }, ctx);
     expect(String(withoutFollowUp?.systemPrompt)).not.toContain("Advisor follow-up");
@@ -230,6 +233,41 @@ describe("advisor two-agent convergence", () => {
 
     const withoutFollowUp = await preflight![0]({ systemPrompt: "SYS", prompt: basePrompt }, ctx);
     expect(String(withoutFollowUp?.systemPrompt)).not.toContain("Advisor follow-up");
+  });
+
+  it("records on-track reviews silently instead of emitting repetitive continue hints", async () => {
+    const preflight = handlers.before_agent_start;
+    const turnEnd = handlers.turn_end;
+    expect(preflight?.length).toBe(1);
+    expect(turnEnd?.length).toBe(1);
+
+    completeSimpleMock.mockResolvedValue({
+      content: [{
+        type: "text",
+        text: JSON.stringify({
+          verdict: "on_track",
+          summary: "Implementation aligns with the requested cooldown behavior",
+          actions: [],
+          checklist: [],
+          notify: true,
+        }),
+      }],
+    });
+
+    await handlers.session_start?.[0]?.({}, ctx);
+    await preflight![0]({ systemPrompt: "SYS", prompt: "Continue the current goal" }, ctx);
+    await turnEnd![0]({
+      toolResults: [{ toolName: "edit" }],
+      message: { role: "assistant", content: "Secret token handling was reviewed and the safety fix is complete." },
+    }, ctx);
+
+    const state = readAdvisorState();
+    expect(completeSimpleMock).toHaveBeenCalledTimes(1);
+    expect(state.reviewControl.lastDecision).toBe("continue");
+    expect(sendMessageMock).not.toHaveBeenCalledWith(
+      expect.objectContaining({ customType: "advisor:llm" }),
+      expect.anything(),
+    );
   });
 
   it("recovers running review control state on session start", async () => {
