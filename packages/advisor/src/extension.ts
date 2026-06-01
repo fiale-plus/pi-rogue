@@ -174,7 +174,7 @@ function loadState(): SessionState {
       queuedReason: raw.checkin?.queuedReason,
     },
     reviewControl: {
-      status: (control?.status === "needed" || control?.status === "running" || control?.status === "applied" || control?.status === "consumed") ? control.status : "idle",
+      status: (control?.status === "needed" || control?.status === "running" || control?.status === "consumed" || control?.status === "idle") ? control.status : "idle",
       pending: Boolean(control?.pending),
       consumed: control?.consumed !== false,
       running: Boolean(control?.running),
@@ -321,6 +321,16 @@ function markReviewApplied(state: SessionState, signature: string, trigger: stri
   };
 }
 
+function persistReviewState(state: SessionState, includeReviewRoute: boolean): void {
+  const persisted = loadState();
+  persisted.reviewControl = state.reviewControl;
+  persisted.followUp = state.followUp;
+  if (includeReviewRoute && state.router.review) {
+    persisted.router.review = state.router.review;
+  }
+  saveState(persisted);
+}
+
 function recoverReviewControl(state: SessionState): void {
   if (!state.reviewControl.running) return;
 
@@ -342,7 +352,7 @@ type AdvisorHintDetails = {
 };
 
 type ReviewControlState = {
-  status: "idle" | "needed" | "running" | "applied" | "consumed";
+  status: "idle" | "needed" | "running" | "consumed";
   pending: boolean;
   consumed: boolean;
   running: boolean;
@@ -729,12 +739,12 @@ async function doReview(pi: ExtensionAPI, ctx: any, trigger: string, delta: stri
   }
   if (shouldSkipReview(state, signature)) {
     markReviewSkipped(state, signature, trigger);
-    saveState(state);
+    persistReviewState(state, false);
     return;
   }
 
   markReviewRunning(state, signature, trigger);
-  saveState(state);
+  persistReviewState(state, false);
 
   let finalized = false;
   let finalDecision: "continue" | "review" | "defer" = "defer";
@@ -768,13 +778,13 @@ async function doReview(pi: ExtensionAPI, ctx: any, trigger: string, delta: stri
     }
     appendRouteLog(reviewRoute);
     state.router.review = reviewRoute;
-    saveState(state);
+    persistReviewState(state, true);
 
     if (gatePrediction && gatePrediction.confidence >= 0.55 && gatePrediction.decision === "continue" && !reviewHeuristic.safety) {
       finalDecision = "continue";
       finalReason = "local gate continue";
       markReviewApplied(state, signature, trigger, finalDecision, finalReason, true);
-      saveState(state);
+      persistReviewState(state, true);
       finalized = true;
       return;
     }
@@ -785,7 +795,7 @@ async function doReview(pi: ExtensionAPI, ctx: any, trigger: string, delta: stri
       finalDecision = "continue";
       finalReason = "review disabled";
       markReviewApplied(state, signature, trigger, finalDecision, finalReason, true);
-      saveState(state);
+      persistReviewState(state, true);
       finalized = true;
       return;
     }
@@ -798,7 +808,7 @@ async function doReview(pi: ExtensionAPI, ctx: any, trigger: string, delta: stri
       finalDecision = "defer";
       finalReason = "no material signal";
       markReviewApplied(state, signature, trigger, finalDecision, finalReason, true);
-      saveState(state);
+      persistReviewState(state, true);
       finalized = true;
       return;
     }
@@ -808,7 +818,7 @@ async function doReview(pi: ExtensionAPI, ctx: any, trigger: string, delta: stri
       finalDecision = "defer";
       finalReason = "missing brief context";
       markReviewApplied(state, signature, trigger, finalDecision, finalReason, true);
-      saveState(state);
+      persistReviewState(state, true);
       finalized = true;
       return;
     }
@@ -819,7 +829,7 @@ async function doReview(pi: ExtensionAPI, ctx: any, trigger: string, delta: stri
       finalDecision = "defer";
       finalReason = "cached verdict";
       markReviewApplied(state, signature, trigger, finalDecision, finalReason, true);
-      saveState(state);
+      persistReviewState(state, true);
       finalized = true;
       return;
     }
@@ -840,7 +850,7 @@ async function doReview(pi: ExtensionAPI, ctx: any, trigger: string, delta: stri
       finalDecision = "defer";
       finalReason = "empty verdict";
       markReviewApplied(state, signature, trigger, finalDecision, finalReason, true);
-      saveState(state);
+      persistReviewState(state, true);
       finalized = true;
       return;
     }
@@ -854,7 +864,7 @@ async function doReview(pi: ExtensionAPI, ctx: any, trigger: string, delta: stri
       finalDecision = "defer";
       finalReason = "unparseable verdict";
       markReviewApplied(state, signature, trigger, finalDecision, finalReason, true);
-      saveState(state);
+      persistReviewState(state, true);
       finalized = true;
       return;
     }
@@ -863,7 +873,7 @@ async function doReview(pi: ExtensionAPI, ctx: any, trigger: string, delta: stri
       finalDecision = "defer";
       finalReason = "explicit skip";
       markReviewApplied(state, signature, trigger, finalDecision, finalReason, true);
-      saveState(state);
+      persistReviewState(state, true);
       finalized = true;
       return;
     }
@@ -872,7 +882,7 @@ async function doReview(pi: ExtensionAPI, ctx: any, trigger: string, delta: stri
       finalDecision = "continue";
       finalReason = (json.reason || json.summary || "review result").slice(0, 120);
       markReviewApplied(state, signature, trigger, finalDecision, finalReason, true);
-      saveState(state);
+      persistReviewState(state, true);
       finalized = true;
       return;
     }
@@ -893,12 +903,12 @@ async function doReview(pi: ExtensionAPI, ctx: any, trigger: string, delta: stri
     }
 
     markReviewApplied(state, signature, trigger, finalDecision, finalReason, decision === "continue");
-    saveState(state);
+    persistReviewState(state, true);
     finalized = true;
   } finally {
     if (!finalized) {
       markReviewApplied(state, signature, trigger, finalDecision, finalReason, false);
-      saveState(state);
+      persistReviewState(state, true);
     }
   }
 }

@@ -15,7 +15,7 @@ type AdvisorState = Record<string, unknown> & {
   router?: Record<string, unknown>;
   checkin?: Record<string, unknown>;
   reviewControl?: {
-    status?: "idle" | "needed" | "running" | "applied" | "consumed";
+    status?: "idle" | "needed" | "running" | "consumed";
     pending?: boolean;
     consumed?: boolean;
     running?: boolean;
