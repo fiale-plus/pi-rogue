@@ -89,6 +89,15 @@ interface SessionState {
     queued?: boolean;
     queuedReason?: string;
   };
+  reviewControl: ReviewControlState;
+}
+function defaultReviewControl(): ReviewControlState {
+  return {
+    status: "idle",
+    pending: false,
+    consumed: true,
+    running: false,
+  };
 }
 
 function defaultState(): SessionState {
@@ -103,6 +112,7 @@ function defaultState(): SessionState {
     followUp: "",
     router: {},
     checkin: { queued: false },
+    reviewControl: defaultReviewControl(),
   };
 }
 
@@ -142,6 +152,7 @@ function saveConfig(c: AdvisorConfig) {
 
 function loadState(): SessionState {
   const raw = readJson<Partial<SessionState>>(STATE_PATH, {});
+  const control = raw.reviewControl;
   return {
     turns: raw.turns ?? 0,
     lastTask: raw.lastTask ?? "",
@@ -161,6 +172,17 @@ function loadState(): SessionState {
       lastReason: raw.checkin?.lastReason,
       queued: Boolean(raw.checkin?.queued),
       queuedReason: raw.checkin?.queuedReason,
+    },
+    reviewControl: {
+      status: (control?.status === "needed" || control?.status === "running" || control?.status === "applied" || control?.status === "consumed") ? control.status : "idle",
+      pending: Boolean(control?.pending),
+      consumed: control?.consumed !== false,
+      running: Boolean(control?.running),
+      lastDecision: control?.lastDecision,
+      lastMaterialSignature: control?.lastMaterialSignature,
+      lastReason: control?.lastReason,
+      lastTrigger: control?.lastTrigger,
+      lastAppliedAt: control?.lastAppliedAt,
     },
   };
 }
@@ -224,6 +246,94 @@ function noteText(note: unknown): string {
   return text;
 }
 
+function normalizeReviewSignals(materialSignals: string[] = []): string[] {
+  return [...new Set(materialSignals.filter(Boolean).map((signal) => squish(signal)))].sort();
+}
+
+function reviewMaterialSignature(state: SessionState, delta: string, meta: ReviewMaterialMeta): string {
+  const signals = normalizeReviewSignals(meta.materialSignals);
+  return hash(
+    "rev",
+    state.lastTask || "",
+    String(meta.isAgentEnd),
+    String(meta.fileChanged),
+    String(meta.failed),
+    delta || "(none)",
+    ...signals,
+  );
+}
+
+function shouldSkipReview(state: SessionState, signature: string): boolean {
+  return Boolean(signature && state.reviewControl.lastMaterialSignature === signature && !state.reviewControl.running);
+}
+
+function consumeReviewFollowUp(state: SessionState): void {
+  state.followUp = "";
+  state.reviewControl = {
+    ...state.reviewControl,
+    status: "consumed",
+    pending: false,
+    consumed: true,
+    running: false,
+    lastAppliedAt: new Date().toISOString(),
+  };
+}
+
+function markReviewSkipped(state: SessionState, signature: string, trigger: string): void {
+  state.reviewControl = {
+    ...state.reviewControl,
+    status: "consumed",
+    running: false,
+    consumed: true,
+    pending: false,
+    lastMaterialSignature: signature,
+    lastDecision: "defer",
+    lastTrigger: trigger,
+    lastReason: "repeated material snapshot",
+    lastAppliedAt: new Date().toISOString(),
+  };
+}
+
+function markReviewRunning(state: SessionState, signature: string, trigger: string): void {
+  state.reviewControl = {
+    ...state.reviewControl,
+    status: "running",
+    running: true,
+    pending: true,
+    consumed: false,
+    lastMaterialSignature: signature,
+    lastTrigger: trigger,
+  };
+}
+
+function markReviewApplied(state: SessionState, signature: string, trigger: string, decision: "continue" | "review" | "defer", reason: string, consumed: boolean): void {
+  state.reviewControl = {
+    ...state.reviewControl,
+    status: consumed ? "consumed" : "needed",
+    running: false,
+    pending: !consumed,
+    consumed,
+    lastMaterialSignature: signature,
+    lastDecision: decision,
+    lastTrigger: trigger,
+    lastReason: reason,
+    lastAppliedAt: new Date().toISOString(),
+  };
+}
+
+function recoverReviewControl(state: SessionState): void {
+  if (!state.reviewControl.running) return;
+
+  const pending = Boolean(state.reviewControl.pending);
+  state.reviewControl = {
+    ...state.reviewControl,
+    running: false,
+    status: pending ? "needed" : state.reviewControl.status === "needed" ? "needed" : "idle",
+    consumed: !pending,
+    lastAppliedAt: new Date().toISOString(),
+  };
+}
+
 type AdvisorHintDetails = {
   decision?: "continue" | "review" | "defer";
   reason?: string;
@@ -231,6 +341,24 @@ type AdvisorHintDetails = {
   actions?: string[];
 };
 
+type ReviewControlState = {
+  status: "idle" | "needed" | "running" | "applied" | "consumed";
+  pending: boolean;
+  consumed: boolean;
+  running: boolean;
+  lastDecision?: "continue" | "review" | "defer";
+  lastMaterialSignature?: string;
+  lastReason?: string;
+  lastTrigger?: string;
+  lastAppliedAt?: string;
+};
+
+type ReviewMaterialMeta = {
+  fileChanged: boolean;
+  failed: boolean;
+  isAgentEnd: boolean;
+  materialSignals?: string[];
+};
 function sendAdvisorHint(pi: ExtensionAPI, decision: "continue" | "review" | "defer", reason: string, summary: string, actions: string[] = []) {
   pi.sendMessage(
     {
@@ -590,97 +718,188 @@ async function askAdvisor(pi: ExtensionAPI, ctx: any, question: string, scope: s
   return { text, model: completed.model, fallback: completed.fallback };
 }
 
-async function doReview(pi: ExtensionAPI, ctx: any, trigger: string, delta: string, meta: { fileChanged: boolean; failed: boolean; isAgentEnd: boolean }) {
+async function doReview(pi: ExtensionAPI, ctx: any, trigger: string, delta: string, meta: ReviewMaterialMeta) {
   const config = loadConfig();
   if (config.review === "off") return;
   const state = loadState();
 
-  const phase: AdvisorRouteInput["phase"] = meta.isAgentEnd ? "closeout" : "review";
-  const reviewInput: AdvisorRouteInput = {
-    phase,
-    text: delta || "(none)",
-    brief: brief(state),
-    fileChanged: meta.fileChanged,
-    failed: meta.failed,
-  };
-  const reviewHeuristic = heuristicRoute(reviewInput);
-  const gatePrediction = binaryGatePredict(reviewInput.text);
-  let reviewRoute = reviewHeuristic;
-  if (gatePrediction && gatePrediction.confidence >= 0.55 && !reviewHeuristic.safety) {
-    const gateContinues = gatePrediction.decision === "continue";
-    reviewRoute = {
-      ...reviewHeuristic,
-      label: gateContinues ? "abstain" : reviewHeuristic.label,
-      confidence: gatePrediction.confidence,
-      source: "model",
-      reason: gateContinues
-        ? "local gate predicts continue"
-        : "local gate predicts review",
-      review: gateContinues ? "off" as const : reviewHeuristic.review,
-      escalate: gateContinues ? false : reviewHeuristic.escalate,
-    };
+  const signature = reviewMaterialSignature(state, delta, meta);
+  if (state.reviewControl.running) {
+    return;
   }
-  appendRouteLog(reviewRoute);
-  state.router.review = reviewRoute;
-  saveState(state);
-
-  if (gatePrediction && gatePrediction.confidence >= 0.55 && gatePrediction.decision === "continue" && !reviewHeuristic.safety) {
+  if (shouldSkipReview(state, signature)) {
+    markReviewSkipped(state, signature, trigger);
+    saveState(state);
     return;
   }
 
-  const effectiveReview = mergeRouteReview(config.review, state.router.preflight?.review);
-  const finalReview = mergeReviewPolicy(effectiveReview, reviewRoute.review);
-  if (finalReview === "off") return;
+  markReviewRunning(state, signature, trigger);
+  saveState(state);
 
-  const shouldRun =
-    finalReview === "strict"
-      ? meta.isAgentEnd || meta.fileChanged || meta.failed || reviewRoute.label !== "abstain" || state.turns % 3 === 0
-      : meta.fileChanged || meta.failed;
-  if (!shouldRun) return;
+  let finalized = false;
+  let finalDecision: "continue" | "review" | "defer" = "defer";
+  let finalReason = "pending review";
 
-  const b = brief(state);
-  if (!b) return;
-
-  const rk = hash("rev", trigger, b, delta, String(meta.fileChanged), String(meta.failed), String(meta.isAgentEnd), String(reviewRoute.label));
-  const cache = loadCache();
-  if (cache[rk]) return; // already reviewed this
-
-  const msgs = [
-    { role: "user", content: [
-      `Trigger: ${trigger}`,
-      `Task: ${state.lastTask || "(unknown)"}`,
-      `Delta: ${delta || "(none)"}`,
-      `Files: ${meta.fileChanged} Errors: ${meta.failed}`,
-      `Route: ${summarizeRoute(reviewRoute)}`,
-      `Brief:\n${b}`,
-    ].join("\n"), timestamp: new Date().toISOString() },
-  ] as any[];
-  const completed = await completeWithModelFallback(ctx, config, REVIEW_SYSTEM, msgs, { maxTokens: 400, reasoning: "low" as ThinkingLevel });
-  const raw = completed?.text;
-  if (!raw) return;
-
-  cache[rk] = raw;
-  saveCache(cache);
-
-  // Try to parse JSON verdict
-  let json: any = null;
-  try { json = JSON.parse(raw.replace(/^```(?:json)?\n?/i, "").replace(/\n?```$/i, "")); } catch { /* ignore */ }
-  if (!json) return;
-
-  if (json.verdict === "on_track" && json.notify !== true) return;
-  if (json.verdict === "skip") return;
-  const decision = json.verdict === "on_track" ? "continue"
-    : json.verdict === "course_correct" ? "review"
-      : json.verdict === "not_done" ? "review"
-        : "defer";
-  const explanation = (json.reason || json.summary || "review result").slice(0, 120);
-  const display = formatAdvisorDisplay("advisor:llm", decision, explanation);
-  writeText(CURRENT_PATH, `${display}\n`);
-  sendAdvisorHint(pi, decision, explanation, json.summary || "", json.actions || []);
-
-  if (json.verdict !== "on_track") {
-    state.followUp = [json.summary, ...(json.actions?.slice(0, 2) || [])].filter(Boolean).join(" — ");
+  try {
+    const phase: AdvisorRouteInput["phase"] = meta.isAgentEnd ? "closeout" : "review";
+    const reviewInput: AdvisorRouteInput = {
+      phase,
+      text: delta || "(none)",
+      brief: brief(state),
+      fileChanged: meta.fileChanged,
+      failed: meta.failed,
+    };
+    const reviewHeuristic = heuristicRoute(reviewInput);
+    const gatePrediction = binaryGatePredict(reviewInput.text);
+    let reviewRoute = reviewHeuristic;
+    if (gatePrediction && gatePrediction.confidence >= 0.55 && !reviewHeuristic.safety) {
+      const gateContinues = gatePrediction.decision === "continue";
+      reviewRoute = {
+        ...reviewHeuristic,
+        label: gateContinues ? "abstain" : reviewHeuristic.label,
+        confidence: gatePrediction.confidence,
+        source: "model",
+        reason: gateContinues
+          ? "local gate predicts continue"
+          : "local gate predicts review",
+        review: gateContinues ? "off" as const : reviewHeuristic.review,
+        escalate: gateContinues ? false : reviewHeuristic.escalate,
+      };
+    }
+    appendRouteLog(reviewRoute);
+    state.router.review = reviewRoute;
     saveState(state);
+
+    if (gatePrediction && gatePrediction.confidence >= 0.55 && gatePrediction.decision === "continue" && !reviewHeuristic.safety) {
+      finalDecision = "continue";
+      finalReason = "local gate continue";
+      markReviewApplied(state, signature, trigger, finalDecision, finalReason, true);
+      saveState(state);
+      finalized = true;
+      return;
+    }
+
+    const effectiveReview = mergeRouteReview(config.review, state.router.preflight?.review);
+    const finalReview = mergeReviewPolicy(effectiveReview, reviewRoute.review);
+    if (finalReview === "off") {
+      finalDecision = "continue";
+      finalReason = "review disabled";
+      markReviewApplied(state, signature, trigger, finalDecision, finalReason, true);
+      saveState(state);
+      finalized = true;
+      return;
+    }
+
+    const shouldRun =
+      finalReview === "strict"
+        ? meta.isAgentEnd || meta.fileChanged || meta.failed || reviewRoute.label !== "abstain" || state.turns % 3 === 0
+        : meta.fileChanged || meta.failed;
+    if (!shouldRun) {
+      finalDecision = "defer";
+      finalReason = "no material signal";
+      markReviewApplied(state, signature, trigger, finalDecision, finalReason, true);
+      saveState(state);
+      finalized = true;
+      return;
+    }
+
+    const b = brief(state);
+    if (!b) {
+      finalDecision = "defer";
+      finalReason = "missing brief context";
+      markReviewApplied(state, signature, trigger, finalDecision, finalReason, true);
+      saveState(state);
+      finalized = true;
+      return;
+    }
+
+    const rk = hash("rev", trigger, b, delta, String(meta.fileChanged), String(meta.failed), String(meta.isAgentEnd), String(reviewRoute.label), signature);
+    const cache = loadCache();
+    if (cache[rk]) {
+      finalDecision = "defer";
+      finalReason = "cached verdict";
+      markReviewApplied(state, signature, trigger, finalDecision, finalReason, true);
+      saveState(state);
+      finalized = true;
+      return;
+    }
+
+    const msgs = [
+      { role: "user", content: [
+        `Trigger: ${trigger}`,
+        `Task: ${state.lastTask || "(unknown)"}`,
+        `Delta: ${delta || "(none)"}`,
+        `Files: ${meta.fileChanged} Errors: ${meta.failed}`,
+        `Route: ${summarizeRoute(reviewRoute)}`,
+        `Brief:\n${b}`,
+      ].join("\n"), timestamp: new Date().toISOString() },
+    ] as any[];
+    const completed = await completeWithModelFallback(ctx, config, REVIEW_SYSTEM, msgs, { maxTokens: 400, reasoning: "low" as ThinkingLevel });
+    const raw = completed?.text;
+    if (!raw) {
+      finalDecision = "defer";
+      finalReason = "empty verdict";
+      markReviewApplied(state, signature, trigger, finalDecision, finalReason, true);
+      saveState(state);
+      finalized = true;
+      return;
+    }
+
+    cache[rk] = raw;
+    saveCache(cache);
+
+    let json: any = null;
+    try { json = JSON.parse(raw.replace(/^```(?:json)?\n?/i, "").replace(/\n?```$/i, "")); } catch { /* ignore */ }
+    if (!json) {
+      finalDecision = "defer";
+      finalReason = "unparseable verdict";
+      markReviewApplied(state, signature, trigger, finalDecision, finalReason, true);
+      saveState(state);
+      finalized = true;
+      return;
+    }
+
+    if (json.verdict === "skip") {
+      finalDecision = "defer";
+      finalReason = "explicit skip";
+      markReviewApplied(state, signature, trigger, finalDecision, finalReason, true);
+      saveState(state);
+      finalized = true;
+      return;
+    }
+
+    if (json.verdict === "on_track" && json.notify !== true) {
+      finalDecision = "continue";
+      finalReason = (json.reason || json.summary || "review result").slice(0, 120);
+      markReviewApplied(state, signature, trigger, finalDecision, finalReason, true);
+      saveState(state);
+      finalized = true;
+      return;
+    }
+
+    const decision = json.verdict === "on_track" ? "continue"
+      : json.verdict === "course_correct" ? "review"
+        : json.verdict === "not_done" ? "review"
+          : "defer";
+    finalDecision = decision;
+    finalReason = (json.reason || json.summary || "review result").slice(0, 120);
+
+    const display = formatAdvisorDisplay("advisor:llm", decision, finalReason);
+    writeText(CURRENT_PATH, `${display}\n`);
+    sendAdvisorHint(pi, decision, finalReason, json.summary || "", json.actions || []);
+
+    if (json.verdict !== "on_track") {
+      state.followUp = [json.summary, ...(json.actions?.slice(0, 2) || [])].filter(Boolean).join(" — ");
+    }
+
+    markReviewApplied(state, signature, trigger, finalDecision, finalReason, decision === "continue");
+    saveState(state);
+    finalized = true;
+  } finally {
+    if (!finalized) {
+      markReviewApplied(state, signature, trigger, finalDecision, finalReason, false);
+      saveState(state);
+    }
   }
 }
 
@@ -694,7 +913,10 @@ export function registerAdvisor(pi: ExtensionAPI): void {
   pi.on("session_start", (_event, ctx) => {
     const key = sessionKey(ctx);
     checkinLocks.delete(key);
-    setPiRogueStatus(ctx, loadConfig(), loadState());
+    const state = loadState();
+    recoverReviewControl(state);
+    saveState(state);
+    setPiRogueStatus(ctx, loadConfig(), state);
     // No timer is owned by advisor itself anymore; check-ins are triggered
     // from active goal/loop/autoresearch flow progression.
   });
@@ -766,16 +988,21 @@ export function registerAdvisor(pi: ExtensionAPI): void {
     appendRouteLog(route);
     state.router.preflight = route;
     const follow = state.followUp;
-    if (follow) { state.followUp = ""; }
+    if (follow) {
+      consumeReviewFollowUp(state);
+    }
     saveState(state);
 
     const note = routeNote(route);
+    const control = state.reviewControl;
+    const controlTag = control.status === "needed" || control.status === "running" ? `Review-control: ${control.status}${control.lastDecision ? ` (${control.lastDecision})` : ""}` : "";
     writeText(CURRENT_PATH, `${note}\n`);
     return {
       systemPrompt: [
         event.systemPrompt,
         follow ? `Advisor follow-up:\n${follow}` : "",
         note,
+        controlTag,
         briefText ? `Brief (cache-aware):\n${briefText}` : "",
       ].filter(Boolean).join("\n\n"),
     };
@@ -797,7 +1024,12 @@ export function registerAdvisor(pi: ExtensionAPI): void {
     void maybeAdvisorCheckin(pi, ctx, "turn_end");
 
     if (cfg.review !== "off") {
-      await doReview(pi, ctx, `turn-${state.turns}`, text, { fileChanged, failed, isAgentEnd: false });
+      await doReview(pi, ctx, `turn-${state.turns}`, text, {
+        fileChanged,
+        failed,
+        isAgentEnd: false,
+        materialSignals: tools,
+      });
     }
   });
 
@@ -813,7 +1045,16 @@ export function registerAdvisor(pi: ExtensionAPI): void {
     const delta = contentText(last?.content) || "(none)";
     const fileChanged = msgs.some((m: any) => /(?:write|edit)/i.test(JSON.stringify(m)));
     const failed = msgs.some((m: any) => isActualFailure(m));
-    await doReview(pi, ctx, "agent-end", delta, { fileChanged, failed, isAgentEnd: true });
+    const signals = msgs.map((m: any) => {
+      const sig = contentText(m?.content);
+      return `${m?.role || "msg"}: ${sig ? squish(sig, 120) : "(empty)"}`;
+    });
+    await doReview(pi, ctx, "agent-end", delta, {
+      fileChanged,
+      failed,
+      isAgentEnd: true,
+      materialSignals: signals,
+    });
   });
 
   // ── /pi-rogue cockpit ──────────────────────────────────────────────────

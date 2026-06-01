@@ -14,6 +14,17 @@ type AdvisorState = Record<string, unknown> & {
   followUp?: string;
   router?: Record<string, unknown>;
   checkin?: Record<string, unknown>;
+  reviewControl?: {
+    status?: "idle" | "needed" | "running" | "applied" | "consumed";
+    pending?: boolean;
+    consumed?: boolean;
+    running?: boolean;
+    lastDecision?: string;
+    lastMaterialSignature?: string;
+    lastReason?: string;
+    lastTrigger?: string;
+    lastAppliedAt?: string;
+  };
 };
 
 const ADVISOR_DIR = join(homedir(), ".pi", "agent", "pi-rogue", "advisor");
@@ -62,6 +73,12 @@ export function resetAdvisorSessionContext(
     files: [],
     errors: [],
     followUp: "",
+    reviewControl: {
+      status: "idle",
+      pending: false,
+      consumed: true,
+      running: false,
+    },
     router: {},
     checkin: { queued: false },
   };
