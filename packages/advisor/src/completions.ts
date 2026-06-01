@@ -40,6 +40,8 @@ const advisorTopLevel: Array<[string, string?]> = [
   ["off", "disable advisor"],
   ["mode", "set auto/manual/off"],
   ["review", "set light/strict/off"],
+  ["pause", "pause advisor auto-runs for N turns"],
+  ["unpause", "resume advisor auto-runs immediately"],
   ["model", "set or inspect model override"],
 ];
 

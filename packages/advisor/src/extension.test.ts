@@ -115,6 +115,58 @@ describe("mid-hour check-ins", () => {
     expect(shouldRunCheckin(cfg, state(), 999999, 1)).toBeNull();
   });
 
+  it("skips check-in while advisor is in temporary pause", () => {
+    const cfg = normalizeAdvisorConfig({ checkins: "mid-hour", checkinIntervalMinutes: 30 });
+    expect(
+      shouldRunCheckin(cfg, state({
+        turns: 5,
+        advisorPauseUntilTurn: 10,
+      }), 2_000_000, 1_000),
+    ).toBeNull();
+  });
+
+  it("allows check-in after pause expires", () => {
+    const cfg = normalizeAdvisorConfig({ checkins: "mid-hour", checkinIntervalMinutes: 30 });
+    const startedAt = 1_000;
+    const now = startedAt + 31 * 60_000;
+    expect(
+      shouldRunCheckin(cfg, state({
+        turns: 12,
+        lastTask: "work",
+        notes: ["note"],
+        advisorPauseUntilTurn: 10,
+      }), now, startedAt),
+    ).toMatch(/mid-hour check-in/);
+  });
+
+  it("skips check-in while auto run cooldown is active", () => {
+    const cfg = normalizeAdvisorConfig({ checkins: "mid-hour", checkinIntervalMinutes: 30 });
+    const startedAt = 1_000;
+    const now = startedAt + 31 * 60_000;
+    expect(
+      shouldRunCheckin(cfg, state({
+        turns: 5,
+        advisorAutoRunCooldownUntilTurn: 6,
+        lastTask: "work",
+        notes: ["note"],
+      }), now, startedAt),
+    ).toBeNull();
+  });
+
+  it("allows check-in after auto run cooldown expires", () => {
+    const cfg = normalizeAdvisorConfig({ checkins: "mid-hour", checkinIntervalMinutes: 30 });
+    const startedAt = 1_000;
+    const now = startedAt + 31 * 60_000;
+    expect(
+      shouldRunCheckin(cfg, state({
+        turns: 7,
+        advisorAutoRunCooldownUntilTurn: 6,
+        lastTask: "work",
+        notes: ["note"],
+      }), now, startedAt),
+    ).toMatch(/mid-hour check-in/);
+  });
+
   it("flushes queued check-in regardless of turn delta", () => {
     const cfg = normalizeAdvisorConfig({ checkins: "mid-hour", checkinIntervalMinutes: 30 });
     expect(

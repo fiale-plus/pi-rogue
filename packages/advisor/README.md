@@ -28,6 +28,8 @@ npm install --workspace packages/advisor
 | `/advisor off` | Disable advisor |
 | `/advisor mode auto\|manual\|off` | Change routing behavior |
 | `/advisor review light\|strict\|off` | Change review strictness |
+| `/advisor pause <N>` | Pause advisor auto-runs for the next N turns |
+| `/advisor unpause` | Resume advisor auto-runs immediately |
 | `/advisor config` | Show current config |
 | `/advisor model <provider>/<model>` | Set explicit model override |
 | `/advisor <question>` | Get one-shot advisory response |
@@ -39,6 +41,7 @@ npm install --workspace packages/advisor
 - `checkins`: `off` (orchestration turns them on when a loop is active)
 - `checkinIntervalMinutes`: `30`
 - `model`: not set (auto-detected)
+- Advisor auto-feedback is rate-limited: after any automatic advisor LLM run, preflight/review/check-in messages are skipped for the next 3 turns. Successful `on_track` review verdicts are recorded silently instead of displayed as follow-up messages.
 
 Check-ins gate on session activity, are bounded, avoid overlapping calls, and use higher/advanced advisor models first with regular model fallback enabled by default. They are lifecycle-managed by orchestration: enabling `/loop` enables them, and stopping that loop disables them.
 

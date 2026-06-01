@@ -25,6 +25,8 @@ Use this skill for non-trivial decisions before/after significant edits.
 | `/advisor mode auto\|manual\|off` | Control when advisor auto-runs |
 | `/advisor review light\|strict\|off` | Set review threshold |
 | `/advisor config` | Dump full config |
+| `/advisor pause <N>` | Pause advisor auto-runs for the next N turns |
+| `/advisor unpause` | Resume advisor auto-runs immediately |
 | `/advisor model <provider/model>` | Pin model explicitly |
 | `/advisor <question>` | Run one advisory response |
 
@@ -36,7 +38,8 @@ Use this skill for non-trivial decisions before/after significant edits.
 
 ## Keep scope clear
 
-The advisor surface is separate from orchestration (`goal`/`loop`/`autoresearch`) and intentionally stays a small command set with explicit entries above.
+- Advisory auto-runs are rate-limited: after any automatic advisor LLM run, preflight/review/check-in messages are skipped for the next 3 turns. Successful `on_track` review verdicts are recorded silently instead of displayed as follow-up messages.
+- The advisor surface is separate from orchestration (`goal`/`loop`/`autoresearch`) and intentionally stays a small command set with explicit entries above.
 
 ## Defaults
 

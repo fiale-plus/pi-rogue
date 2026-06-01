@@ -129,6 +129,10 @@ export function recordResearchCheck(ctx: any, state: ResearchState, result: Rese
 }
 
 export function registerGoal(pi: ExtensionAPI): void {
+  const p = pi as any;
+  if (p.__piRogueGoalRegistered) return;
+  p.__piRogueGoalRegistered = true;
+
   pi.on("session_start", (_event, ctx) => {
     endGoalCheck(ctx);
     const goal = activeGoal(ctx);
