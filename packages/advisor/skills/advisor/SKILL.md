@@ -38,7 +38,8 @@ Use this skill for non-trivial decisions before/after significant edits.
 
 ## Keep scope clear
 
-- Advisory auto-runs are rate-limited: after any automatic advisor LLM run, preflight/review/check-in messages are skipped for the next 3 turns. Successful `on_track` review verdicts are recorded silently instead of displayed as follow-up messages.
+- Successful `on_track` review verdicts are recorded silently instead of displayed as follow-up messages.
+- Loop-managed check-ins gate on session activity and `checkinIntervalMinutes`, avoid overlapping calls, and use higher/advanced advisor models first with regular model fallback enabled by default.
 - The advisor surface is separate from orchestration (`goal`/`loop`/`autoresearch`) and intentionally stays a small command set with explicit entries above.
 
 ## Defaults

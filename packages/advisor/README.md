@@ -41,12 +41,11 @@ npm install --workspace packages/advisor
 - `checkins`: `off` (orchestration turns them on when a loop is active)
 - `checkinIntervalMinutes`: `30`
 - `model`: not set (auto-detected)
-- Advisor auto-feedback is rate-limited: after any automatic advisor LLM run, preflight/review/check-in messages are skipped for the next 3 turns. Successful `on_track` review verdicts are recorded silently instead of displayed as follow-up messages.
+- Successful `on_track` review verdicts are recorded silently instead of displayed as follow-up messages.
 
-Check-ins gate on session activity, are bounded, avoid overlapping calls, and use higher/advanced advisor models first with regular model fallback enabled by default. They are lifecycle-managed by orchestration: enabling `/loop` enables them, and stopping that loop disables them.
+Check-ins gate on session activity and `checkinIntervalMinutes`, avoid overlapping calls, and use higher/advanced advisor models first with regular model fallback enabled by default. They are lifecycle-managed by orchestration: enabling `/loop` enables them, and stopping that loop disables them.
 
 ## Stability guarantees
 
 - No flattening: the advisor remains its own surface and does not hide orchestration commands.
 - Cockpit is simple and explicit: `/pi-rogue` is the top-level status view.
-

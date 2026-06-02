@@ -20,7 +20,7 @@ This repo keeps the existing skill logic intact and routes it into the orchestra
 - Source skill: iterative optimization with measurement, implementation, checks, and stall detection
 - In flow: `packages/orchestration` command `/autoresearch`
 - Role: single-agent optimization over a measurable target
-- Runtime: facade over `/goal` + `/loop`; starting autoresearch writes a research-shaped goal, starts a 5m loop, enables advisor check-ins while active, queues the first cycle immediately, guards against premature completion without multiple/evidence-backed cycles, exposes cycle/done-attempt counters in status, and clears stale status/check-ins when the backing goal or loop is cleared
+- Runtime: facade over `/goal` + `/loop`; starting autoresearch writes a research-shaped goal, starts a 5m loop, enables advisor check-ins while active, queues the first cycle immediately, records cycle/result status, and clears stale status/check-ins when the backing goal or loop is cleared
 - Preserved goodness:
   - metric-first workflow
   - measurement + checks
@@ -45,7 +45,7 @@ This repo keeps the existing skill logic intact and routes it into the orchestra
 - Auto-detect candidate orchestration modes from the user request and project context.
 - Present a proposal first (`goal`, `autoresearch`, or `autoresearch-lab`) instead of silently starting a long run.
 - In interactive mode, ask for explicit confirmation before writing or launching a long-lived flow.
-- In unattended mode, only auto-run if policy explicitly allows the detected command and budget.
+- In unattended mode, only auto-run if policy explicitly allows the detected command.
 - Never auto-escalate from `autoresearch` to `autoresearch-lab` without approval.
 
 ## No flattening guarantee

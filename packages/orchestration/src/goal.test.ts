@@ -1,9 +1,8 @@
 import { randomUUID } from "node:crypto";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { resetAdvisorSessionContext } from "./advisor-checkins.js";
+import { resetAdvisorSessionContext, setAdvisorCheckinsEnabled } from "./advisor-checkins.js";
 import { endGoalCheck } from "./goal-resolution.js";
-import { clearGoal, setGoal, startGoalProcessing } from "./goal.js";
-import { recordBudgetTurn } from "./budget.js";
+import { activeGoal, clearGoal, registerGoal, setGoal, startGoalProcessing } from "./goal.js";
 import { featureFile, readText } from "./internal.js";
 
 vi.mock("./advisor-checkins.js", () => ({
@@ -12,6 +11,7 @@ vi.mock("./advisor-checkins.js", () => ({
 }));
 
 const resetAdvisorSessionContextMock = vi.mocked(resetAdvisorSessionContext);
+const setAdvisorCheckinsEnabledMock = vi.mocked(setAdvisorCheckinsEnabled);
 
 function fakeCtx(id = randomUUID(), idle = true) {
   return {
@@ -29,6 +29,7 @@ function fakeCtx(id = randomUUID(), idle = true) {
 describe("goal processing", () => {
   beforeEach(() => {
     resetAdvisorSessionContextMock.mockClear();
+    setAdvisorCheckinsEnabledMock.mockClear();
   });
 
   it("starts an immediate standalone goal check when no loop is active", () => {
@@ -67,7 +68,7 @@ describe("goal processing", () => {
     clearGoal(ctx);
   });
 
-  it("blocks proven two-goal alternating cycles before appending history", () => {
+  it("allows explicit goal changes without cycle heuristics", () => {
     const ctx = fakeCtx();
     const first = `cycle-a ${randomUUID()}`;
     const second = `cycle-b ${randomUUID()}`;
@@ -77,7 +78,7 @@ describe("goal processing", () => {
     expect(setGoal(ctx, first)).toBe("updated");
     expect(setGoal(ctx, second)).toBe("updated");
     expect(setGoal(ctx, first)).toBe("updated");
-    expect(setGoal(ctx, second)).toBe("cycle");
+    expect(setGoal(ctx, second)).toBe("updated");
 
     clearGoal(ctx);
     expect(setGoal(ctx, second)).toBe("updated");
@@ -108,22 +109,44 @@ describe("goal processing", () => {
     expect(resetAdvisorSessionContextMock).toHaveBeenCalledTimes(1);
   });
 
-  it("stops goal processing when the flow budget is exhausted", () => {
-    const ctx = fakeCtx();
-    const sent: Array<{ text: string; options?: unknown }> = [];
+  it("disables advisor check-ins when /goal clear stops the loop", async () => {
+    let handler: ((args: string, ctx: any) => Promise<void>) | undefined;
     const pi = {
-      sendUserMessage: (text: string, options?: unknown) => sent.push({ text, options }),
+      on: () => undefined,
+      registerCommand: (name: string, command: { handler: (args: string, ctx: any) => Promise<void> }) => {
+        if (name === "goal") handler = command.handler;
+      },
+      sendUserMessage: () => undefined,
     } as any;
+    const ctx = fakeCtx();
 
-    setGoal(ctx, "ship a small fix");
-    for (let i = 0; i < 20; i++) {
-      recordBudgetTurn(ctx);
-    }
+    registerGoal(pi);
+    setGoal(ctx, "clear lifecycle test");
+    setAdvisorCheckinsEnabledMock.mockClear();
+    await handler?.("clear", ctx);
 
-    const result = startGoalProcessing(pi, ctx, "ship a small fix");
-
-    expect(result).toBe("budget_exhausted");
-    expect(sent).toHaveLength(0);
-    endGoalCheck(ctx);
+    expect(setAdvisorCheckinsEnabledMock).toHaveBeenCalledWith(false);
   });
+
+  it("clears the active goal immediately when a pending check returns GOAL_DONE", async () => {
+    const handlers: Record<string, Array<(event: any, ctx: any) => Promise<void> | void>> = {};
+    const pi = {
+      on: (name: string, handler: (event: any, ctx: any) => Promise<void> | void) => {
+        handlers[name] = [...(handlers[name] ?? []), handler];
+      },
+      registerCommand: () => undefined,
+      sendUserMessage: () => undefined,
+    } as any;
+    const ctx = fakeCtx();
+
+    registerGoal(pi);
+    setGoal(ctx, "ship the thing");
+    startGoalProcessing(pi, ctx, "ship the thing");
+    await handlers.agent_end?.[0]?.({
+      messages: [{ role: "assistant", content: "GOAL_DONE: shipped with evidence" }],
+    }, ctx);
+
+    expect(activeGoal(ctx)).toBe("");
+  });
+
 });

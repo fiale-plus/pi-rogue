@@ -2,7 +2,7 @@
 /**
  * session-flow-analyzer.ts
  *
- * Extracts repeated goal, loop, and assistant-output patterns from Pi-Rogue
+ * Extracts repeated goal and assistant-output patterns from Pi-Rogue
  * orchestration session state. Intended for quick local diagnosis:
  *
  *   npx tsx scripts/session-flow-analyzer.ts
@@ -28,7 +28,7 @@ type Run<T> = {
   lastAt?: string;
 };
 
-type NoveltyGuardAssistantTurn = {
+type RepetitionGuardAssistantTurn = {
   at?: string;
   text?: string;
 };
@@ -41,7 +41,6 @@ type SessionReport = {
   };
   goalHistoryRuns: Array<Run<string>>;
   goalAlternatingRuns: Array<Run<string[]>>;
-  autoresearchHistoryRuns: Array<Run<string>>;
   assistantRepetitionRuns: Array<Run<string> & { session: string }>;
 };
 
@@ -225,7 +224,7 @@ function listSessionDirs(root: string): string[] {
 function assistantRuns(root: string, minRun: number): Array<Run<string> & { session: string }> {
   const runs: Array<Run<string> & { session: string }> = [];
   for (const dir of listSessionDirs(root)) {
-    const state = parseJson<{ recentAssistantTurns?: NoveltyGuardAssistantTurn[] }>(join(dir, "novelty-guard.json"));
+    const state = parseJson<{ recentAssistantTurns?: RepetitionGuardAssistantTurn[] }>(join(dir, "repetition-guard.json"));
     const turns = Array.isArray(state?.recentAssistantTurns) ? state.recentAssistantTurns : [];
     for (const run of repeatedRuns(turns, (turn) => String(turn.text ?? ""), minRun)) {
       runs.push({ ...run, session: dir });
@@ -236,10 +235,6 @@ function assistantRuns(root: string, minRun: number): Array<Run<string> & { sess
 
 function buildReport(args: Args): SessionReport {
   const goalEntries = parseJsonLines(join(args.sessionRoot, "goal-history.jsonl")) as Array<{ at?: string; goal?: string }>;
-  const researchEntries = parseJsonLines(join(args.sessionRoot, "autoresearch-history.jsonl")) as Array<{
-    at?: string;
-    previous?: { instruction?: string; goal?: string };
-  }>;
 
   return {
     generatedAt: new Date().toISOString(),
@@ -249,11 +244,6 @@ function buildReport(args: Args): SessionReport {
     },
     goalHistoryRuns: repeatedRuns(goalEntries, (entry) => String(entry.goal ?? ""), args.minRun),
     goalAlternatingRuns: alternatingRuns(goalEntries, (entry) => String(entry.goal ?? ""), args.minRun),
-    autoresearchHistoryRuns: repeatedRuns(
-      researchEntries,
-      (entry) => String(entry.previous?.goal ?? entry.previous?.instruction ?? ""),
-      args.minRun,
-    ),
     assistantRepetitionRuns: assistantRuns(args.sessionRoot, args.minRun),
   };
 }
