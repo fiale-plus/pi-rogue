@@ -549,7 +549,7 @@ function setPiRogueStatus(ctx: any, config = loadConfig(), state = loadState()):
   ctx.ui.setStatus("pi-rogue", `☠︎ advisor ${normalized.mode}/${normalized.review} · ${checkin}${pauseText}${last}`);
 }
 
-export function shouldRunCheckin(config: AdvisorConfig, state: SessionState, now = Date.now(), startedAt = now, options: { ignoreInterval?: boolean } = {}): string | null {
+export function shouldRunCheckin(config: AdvisorConfig, state: SessionState, now = Date.now(), startedAt = now): string | null {
   if (isAdvisorAutoRunSuppressed(state, state.turns)) return null;
   const normalized = normalizeAdvisorConfig(config);
   if (normalized.mode === "off" || normalized.mode === "manual") return null;
@@ -561,7 +561,6 @@ export function shouldRunCheckin(config: AdvisorConfig, state: SessionState, now
 
   const lastTurn = state.checkin.lastTurn ?? 0;
   if (state.turns <= lastTurn) return null;
-  if (options.ignoreInterval) return `loop check-in after ${state.turns - lastTurn} new turn(s)`;
 
   const lastAt = state.checkin.lastAt ? Date.parse(state.checkin.lastAt) : 0;
   const intervalMs = normalized.checkinIntervalMinutes * 60_000;
@@ -592,7 +591,7 @@ async function maybeAdvisorCheckin(pi: ExtensionAPI, ctx: any, source: string): 
 
   const config = loadConfig();
   const state = loadState();
-  const reason = shouldRunCheckin(config, state, Date.now(), Date.now(), { ignoreInterval: source === "loop_tick" });
+  const reason = shouldRunCheckin(config, state, Date.now(), Date.now());
   if (!reason) {
     if (state.checkin.queued) {
       state.checkin.queued = false;
