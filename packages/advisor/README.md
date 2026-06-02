@@ -1,5 +1,7 @@
 # @fiale-plus/pi-rogue-advisor
 
+> **Releases paused.** This package is now internal. All usage and updates are via the single consolidated `@fiale-plus/pi-rogue-bundle` artefact (see root README, `docs/release.md`, and AGENTS.md). Direct installs and independent releases are on pause; the package is marked private. Code here continues to evolve and ships inside bundle releases.
+
 ## What this package is
 
 Strategic advisor for Pi sessions with low-overhead preflight/post-review routing, model auto-detection, session memory, and orchestration-managed mid-session check-ins.
@@ -9,13 +11,19 @@ Strategic advisor for Pi sessions with low-overhead preflight/post-review routin
 
 ## Install
 
-```bash
-# Published package (recommended)
-pi install npm:@fiale-plus/pi-rogue-advisor
+**For users:** Use the bundle (releases for this package are paused):
 
-# Local package development
+```bash
+pi install npm:@fiale-plus/pi-rogue-bundle
+```
+
+**For local development (monorepo only):**
+
+```bash
 npm install --workspace packages/advisor
 ```
+
+(See root README and docs/release.md for the consolidated policy.)
 
 ## Commands
 

@@ -1,7 +1,7 @@
 {
   "name": "@fiale-plus/pi-rogue-bundle",
   "version": "0.1.2",
-  "description": "Public Pi-Rogue bundle for advisor and orchestration.",
+  "description": "Public Pi-Rogue bundle for advisor and orchestration. Single consolidated artefact (advisor and orchestration releases paused; their packages are private and bundled here).",
   "type": "module",
   "license": "MIT",
   "repository": {
@@ -18,6 +18,10 @@
   "pi": {
     "extensions": [
       "./src/extension.ts"
+    ],
+    "skills": [
+      "./node_modules/@fiale-plus/pi-rogue-advisor/skills",
+      "./node_modules/@fiale-plus/pi-rogue-orchestration/skills"
     ]
   },
   "peerDependencies": {
@@ -27,6 +31,10 @@
     "@fiale-plus/pi-rogue-advisor": "^0.1.0",
     "@fiale-plus/pi-rogue-orchestration": "^0.1.0"
   },
+  "bundledDependencies": [
+    "@fiale-plus/pi-rogue-advisor",
+    "@fiale-plus/pi-rogue-orchestration"
+  ],
   "publishConfig": {
     "access": "public"
   }
