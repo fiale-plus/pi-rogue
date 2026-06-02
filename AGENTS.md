@@ -27,6 +27,6 @@ This AGENTS file intentionally stays agentic (not maintainer process).
 - **Recommended user install:** `pi install npm:@fiale-plus/pi-rogue-bundle`
 - **Do not:** cut separate releases for leaves; update leaf package.json versions only as dev markers (CI for bundle handles published version from tag).
 - Full details, checklists, naming, and process: see `docs/release.md` and `.github/ISSUE_TEMPLATE/release.md`.
-- Workflows: `.github/workflows/npm-publish-bundle.yml` (active); the advisor/orchestration publish ymls are disabled (if: false) with comments.
+- Workflows: only `.github/workflows/npm-publish-bundle.yml` is active for releases.
 
 See also the referenced docs for the canonical checklists.

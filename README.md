@@ -10,9 +10,9 @@ Pi-Rogue is a modular Pi extension stack for **agentic session guidance** and **
 
 | Package | NPM Version | NPM Downloads | What it is |
 |---|---|---|---|
-| `@fiale-plus/pi-rogue-advisor` | [![advisor version](https://img.shields.io/npm/v/%40fiale-plus%2Fpi-rogue-advisor?style=flat-square)](https://www.npmjs.com/package/@fiale-plus/pi-rogue-advisor) | [![advisor downloads](https://img.shields.io/npm/dm/%40fiale-plus%2Fpi-rogue-advisor?style=flat-square)](https://www.npmjs.com/package/@fiale-plus/pi-rogue-advisor) | (Releases paused; see below) Strategic advisor + phase-aware routing + orchestration-managed check-ins |
-| `@fiale-plus/pi-rogue-orchestration` | [![orchestration version](https://img.shields.io/npm/v/%40fiale-plus%2Fpi-rogue-orchestration?style=flat-square)](https://www.npmjs.com/package/@fiale-plus/pi-rogue-orchestration) | [![orchestration downloads](https://img.shields.io/npm/dm/%40fiale-plus%2Fpi-rogue-orchestration?style=flat-square)](https://www.npmjs.com/package/@fiale-plus/pi-rogue-orchestration) | (Releases paused; see below) Loop, goal, and autoresearch controls |
 | `@fiale-plus/pi-rogue-bundle` | [![bundle version](https://img.shields.io/npm/v/%40fiale-plus%2Fpi-rogue-bundle?style=flat-square)](https://www.npmjs.com/package/@fiale-plus/pi-rogue-bundle) | [![bundle downloads](https://img.shields.io/npm/dm/%40fiale-plus%2Fpi-rogue-bundle?style=flat-square)](https://www.npmjs.com/package/@fiale-plus/pi-rogue-bundle) | **Single consolidated artefact** for advisor + orchestration (recommended) |
+
+`@fiale-plus/pi-rogue-advisor` and `@fiale-plus/pi-rogue-orchestration` are internal packages in this repo; direct releases are paused and their logic ships only inside the bundle.
 
 Lab/greenhouse helper packages (`pi-rogue-guardrails`, `pi-rogue-brain`, `pi-rogue-repo-arch`) are internal and not published.
 
@@ -38,7 +38,7 @@ This is the single consolidated artefact. It includes advisor + orchestration lo
 npm install
 ```
 
-This exposes all workspace packages for local development (including the paused leaf packages, which remain usable locally via the monorepo workspaces).
+This exposes all workspace packages for local development.
 
 ## Quick start
 
