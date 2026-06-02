@@ -32,16 +32,23 @@ afterEach(() => {
 describe("advisor check-in lifecycle bridge", () => {
   it("turns advisor check-ins on while preserving existing config and captures start time", () => {
     const file = tempConfig();
-    writeFileSync(file, JSON.stringify({ mode: "auto", review: "light", model: "openai-codex/gpt-5.5" }), "utf8");
+    writeFileSync(file, JSON.stringify({
+      mode: "auto",
+      review: "light",
+      model: "openai-codex/gpt-5.5",
+      checkinIntervalTurns: 3,
+    }), "utf8");
     const startedAt = Date.now();
 
     const next = setAdvisorCheckinsEnabled(true, file);
 
     expect(next).toMatchObject({ mode: "auto", review: "light", model: "openai-codex/gpt-5.5", checkins: "mid-hour" });
+    expect(next.checkinIntervalTurns).toBeUndefined();
     expect(next.checkinStartedAt).toBeTypeOf("number");
     expect(next.checkinStartedAt).toBeGreaterThanOrEqual(startedAt);
     const parsed = JSON.parse(readFileSync(file, "utf8"));
     expect(parsed.checkins).toBe("mid-hour");
+    expect(parsed.checkinIntervalTurns).toBeUndefined();
     expect(parsed.checkinStartedAt).toBeGreaterThanOrEqual(startedAt);
   });
 
@@ -63,6 +70,7 @@ describe("advisor check-in lifecycle bridge", () => {
       review: "light",
       checkins: "mid-hour",
       checkinIntervalMinutes: 30,
+      checkinIntervalTurns: 3,
       checkinStartedAt: 1,
     }), "utf8");
     writeFileSync(state, JSON.stringify({
@@ -128,6 +136,7 @@ describe("advisor check-in lifecycle bridge", () => {
 
     const parsedConfig = JSON.parse(readFileSync(config, "utf8"));
     expect(parsedConfig.checkins).toBe("mid-hour");
+    expect(parsedConfig.checkinIntervalTurns).toBeUndefined();
     expect(parsedConfig.checkinStartedAt).toBeGreaterThanOrEqual(startedAt);
   });
 });

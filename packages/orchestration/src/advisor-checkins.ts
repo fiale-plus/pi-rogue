@@ -40,8 +40,15 @@ function readJson<T>(file: string): T {
   }
 }
 
+function cleanAdvisorConfig(config: AdvisorConfig): AdvisorConfig {
+  const cleaned = { ...config };
+  delete cleaned.checkinIntervalTurns;
+  delete cleaned.advisorAutoRunCooldownUntilTurn;
+  return cleaned;
+}
+
 export function setAdvisorCheckinsEnabled(enabled: boolean, configPath = ADVISOR_CONFIG_PATH): AdvisorConfig {
-  const current = readJson<AdvisorConfig>(configPath);
+  const current = cleanAdvisorConfig(readJson<AdvisorConfig>(configPath));
   const next: AdvisorConfig = {
     ...current,
     checkins: enabled ? "mid-hour" : "off",
@@ -56,7 +63,7 @@ export function resetAdvisorSessionContext(
   configPath = ADVISOR_CONFIG_PATH,
   statePath = ADVISOR_STATE_PATH,
 ): { config: AdvisorConfig; state: AdvisorState } {
-  const currentConfig = readJson<AdvisorConfig>(configPath);
+  const currentConfig = cleanAdvisorConfig(readJson<AdvisorConfig>(configPath));
   const nextConfig: AdvisorConfig = {
     ...currentConfig,
     checkinStartedAt: currentConfig.checkins === "mid-hour" ? Date.now() : undefined,

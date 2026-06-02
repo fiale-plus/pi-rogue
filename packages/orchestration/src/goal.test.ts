@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { resetAdvisorSessionContext } from "./advisor-checkins.js";
 import { endGoalCheck } from "./goal-resolution.js";
-import { clearGoal, setGoal, startGoalProcessing } from "./goal.js";
+import { activeGoal, clearGoal, registerGoal, setGoal, startGoalProcessing } from "./goal.js";
 import { featureFile, readText } from "./internal.js";
 
 vi.mock("./advisor-checkins.js", () => ({
@@ -105,6 +105,27 @@ describe("goal processing", () => {
     clearGoal(ctx);
 
     expect(resetAdvisorSessionContextMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("clears the active goal immediately when a pending check returns GOAL_DONE", async () => {
+    const handlers: Record<string, Array<(event: any, ctx: any) => Promise<void> | void>> = {};
+    const pi = {
+      on: (name: string, handler: (event: any, ctx: any) => Promise<void> | void) => {
+        handlers[name] = [...(handlers[name] ?? []), handler];
+      },
+      registerCommand: () => undefined,
+      sendUserMessage: () => undefined,
+    } as any;
+    const ctx = fakeCtx();
+
+    registerGoal(pi);
+    setGoal(ctx, "ship the thing");
+    startGoalProcessing(pi, ctx, "ship the thing");
+    await handlers.agent_end?.[0]?.({
+      messages: [{ role: "assistant", content: "GOAL_DONE: shipped with evidence" }],
+    }, ctx);
+
+    expect(activeGoal(ctx)).toBe("");
   });
 
 });
