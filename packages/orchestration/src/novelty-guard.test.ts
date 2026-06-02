@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  detectAssistantRepetition,
   evaluateNoveltyGuard,
   isStatusConfirmation,
   looksTruncatedPrompt,
@@ -76,5 +77,17 @@ describe("novelty guard", () => {
     );
 
     expect(similarity).toBeGreaterThan(0.72);
+  });
+
+  it("detects repeated assistant output even without a repeated user prompt", () => {
+    const base: NoveltyGuardState = { recentUserTurns: [], recentAssistantTurns: [] };
+    const first = recordAssistantTurn(base, "Now let me build the session-flow analyzer and workflow clustering pipeline.");
+    const second = recordAssistantTurn(first, "Now let me build the session-flow analyzer and workflow clustering pipeline.");
+    const third = recordAssistantTurn(second, "Now let me build the session-flow analyzer and workflow clustering pipeline.");
+
+    const repeat = detectAssistantRepetition(third);
+
+    expect(repeat?.count).toBe(3);
+    expect(third.assistantRepeat?.text).toContain("session-flow analyzer");
   });
 });
