@@ -38,12 +38,12 @@ npm install --workspace packages/advisor
 
 - `mode`: `auto`
 - `review`: `light`
-- `checkins`: `off` (orchestration turns them on when a loop is active)
+- `checkins`: `off` (orchestration turns them on when a goal or loop is active)
 - `checkinIntervalMinutes`: `30`
 - `model`: not set (auto-detected)
 - Successful `on_track` review verdicts are recorded silently instead of displayed as follow-up messages.
 
-Check-ins gate on session activity and `checkinIntervalMinutes`, avoid overlapping calls, and use higher/advanced advisor models first with regular model fallback enabled by default. They are lifecycle-managed by orchestration: enabling `/loop` enables them, and stopping that loop disables them.
+Check-ins gate on session activity and `checkinIntervalMinutes`, avoid overlapping calls, and use higher/advanced advisor models first with regular model fallback enabled by default. They are lifecycle-managed by orchestration: activating a goal or `/loop` enables them, and clearing either disables them.
 
 ## Stability guarantees
 

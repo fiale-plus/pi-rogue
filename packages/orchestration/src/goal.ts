@@ -3,7 +3,7 @@ import { appendText, contentText, featureFile, readText, sessionFile, truncate, 
 import { clearResearchStateForGoal, readResearchState, writeResearchState, type ResearchState } from "./autoresearch-state.js";
 import { beginGoalCheck, buildGoalCheckPrompt, endGoalCheck, goalCheckResult, hasGoalCheckPending } from "./goal-resolution.js";
 import { clearLoop, triggerLoopTick } from "./loop.js";
-import { resetAdvisorSessionContext } from "./advisor-checkins.js";
+import { resetAdvisorSessionContext, setAdvisorCheckinsEnabled } from "./advisor-checkins.js";
 import { goalArgumentCompletions } from "./completions.js";
 
 const FEATURE = "orchestration";
@@ -43,6 +43,9 @@ export function setGoal(ctx: any, goal: string, options: { restartDuplicate?: bo
   const note = goal.trim();
   const previous = activeGoal(ctx);
   if (previous === note && !options.restartDuplicate) {
+    if (note) {
+      setAdvisorCheckinsEnabled(true);
+    }
     return "duplicate";
   }
 
@@ -52,6 +55,9 @@ export function setGoal(ctx: any, goal: string, options: { restartDuplicate?: bo
   clearLoop(ctx, { clearResearch: true, preserveCheckins: true });
   writeText(sessionFile(FEATURE, ctx, CURRENT_FILE), note ? `${note}\n` : "");
   resetAdvisorSessionContext();
+  if (note) {
+    setAdvisorCheckinsEnabled(true);
+  }
   endGoalCheck(ctx);
 
   if (note) {
@@ -128,6 +134,9 @@ export function registerGoal(pi: ExtensionAPI): void {
     endGoalCheck(ctx);
     const goal = activeGoal(ctx);
     setGoalStatus(ctx, goal || null);
+    if (goal) {
+      setAdvisorCheckinsEnabled(true);
+    }
   });
 
   pi.on("session_shutdown", (_event, ctx) => {
