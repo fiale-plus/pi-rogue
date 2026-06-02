@@ -32,6 +32,13 @@ describe("goal processing", () => {
     setAdvisorCheckinsEnabledMock.mockClear();
   });
 
+  function countGoalEntries(text: string, goal: string): number {
+    return text
+      .split("\n")
+      .filter((line) => line.includes(goal))
+      .length;
+  }
+
   it("starts an immediate standalone goal check when no loop is active", () => {
     const ctx = fakeCtx();
     const sent: Array<{ text: string; options?: unknown }> = [];
@@ -58,13 +65,16 @@ describe("goal processing", () => {
     const before = readText(featureFile("orchestration", "goal-history.jsonl"));
 
     expect(setGoal(ctx, goal)).toBe("updated");
+    setAdvisorCheckinsEnabledMock.mockClear();
     const afterFirst = readText(featureFile("orchestration", "goal-history.jsonl"));
     expect(setGoal(ctx, goal)).toBe("duplicate");
     const afterSecond = readText(featureFile("orchestration", "goal-history.jsonl"));
 
-    expect(afterFirst.slice(before.length)).toContain(goal);
-    expect(afterSecond).toBe(afterFirst);
+    expect(countGoalEntries(before, goal)).toBe(0);
+    expect(countGoalEntries(afterFirst, goal)).toBe(1);
+    expect(countGoalEntries(afterSecond, goal)).toBe(1);
     expect(resetAdvisorSessionContextMock).toHaveBeenCalledTimes(1);
+    expect(setAdvisorCheckinsEnabledMock).toHaveBeenCalledWith(true);
     clearGoal(ctx);
   });
 
@@ -107,6 +117,26 @@ describe("goal processing", () => {
     clearGoal(ctx);
 
     expect(resetAdvisorSessionContextMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("re-arms advisor check-ins when a session resumes with an active goal", () => {
+    const handlers: Record<string, Array<(event: any, ctx: any) => Promise<void> | void>> = {};
+    const pi = {
+      on: (name: string, handler: (event: any, ctx: any) => Promise<void> | void) => {
+        handlers[name] = [...(handlers[name] ?? []), handler];
+      },
+      registerCommand: () => undefined,
+      sendUserMessage: () => undefined,
+    } as any;
+    const ctx = fakeCtx();
+
+    registerGoal(pi);
+    setGoal(ctx, "resume heartbeat after compaction");
+    setAdvisorCheckinsEnabledMock.mockClear();
+
+    void handlers.session_start?.[0]?.({}, ctx);
+
+    expect(setAdvisorCheckinsEnabledMock).toHaveBeenCalledWith(true);
   });
 
   it("disables advisor check-ins when /goal clear stops the loop", async () => {

@@ -12,7 +12,7 @@ Use this skill for non-trivial decisions before/after significant edits.
 - `/pi-rogue` — open cockpit and command pointers
 - `/advisor status` — show current advisor settings and model route
 - `/advisor <question>` — ask immediate advice
-- Check-ins are lifecycle-managed by `/loop`, not by the advisor command surface
+- Check-ins are lifecycle-managed by orchestration, not by the advisor command surface
 
 ## Command surface
 
@@ -34,18 +34,18 @@ Use this skill for non-trivial decisions before/after significant edits.
 
 - Preflight is heuristics + quick local gate first.
 - Review runs after edits and/or at completion points by policy.
-- No standalone check-in command: check-ins are triggered from loop cadence (not from advisor internals), using higher/advanced advisor models first with regular model fallback enabled by default.
+- No standalone check-in command: check-ins are triggered from goal/loop orchestration cadence (not from advisor internals), using higher/advanced advisor models first with regular model fallback enabled by default.
 
 ## Keep scope clear
 
 - Successful `on_track` review verdicts are recorded silently instead of displayed as follow-up messages.
-- Loop-managed check-ins gate on session activity and `checkinIntervalMinutes`, avoid overlapping calls, and use higher/advanced advisor models first with regular model fallback enabled by default.
+- Goal/loop-managed check-ins gate on session activity and `checkinIntervalMinutes`, avoid overlapping calls, and use higher/advanced advisor models first with regular model fallback enabled by default.
 - The advisor surface is separate from orchestration (`goal`/`loop`/`autoresearch`) and intentionally stays a small command set with explicit entries above.
 
 ## Defaults
 
 - `mode: auto`
 - `review: light`
-- `checkins: off` by default; loop orchestration owns cadence and enables them when active
+- `checkins: off` by default; orchestration owns cadence and enables them when a goal or loop is active
 - `checkinIntervalMinutes: 30`
 - `model: auto`

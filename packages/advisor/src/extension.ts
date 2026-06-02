@@ -1155,7 +1155,7 @@ export function registerAdvisor(pi: ExtensionAPI): void {
           "  /advisor config",
           "  /advisor <question>",
           "",
-          "Check-ins are orchestration-managed: start /loop to activate them.",
+          "Check-ins are orchestration-managed: set /goal or /loop to activate them.",
         ].join("\n"), "info");
         return;
       }
@@ -1174,7 +1174,7 @@ export function registerAdvisor(pi: ExtensionAPI): void {
       if (arg.startsWith("checkins")) {
         ctx.ui.notify([
           `Check-ins: ${checkinDescription(cfg)}`,
-          "Managed by orchestration: /loop activates them; stopping the loop disables them.",
+          "Managed by orchestration: /goal or /loop activates them; stopping or clearing either disables them.",
           orchestrationSnapshotText(ctx),
         ].join("\n"), "info");
         return;
@@ -1272,7 +1272,7 @@ export function registerAdvisor(pi: ExtensionAPI): void {
           "Advisor config (check-ins are orchestration-managed):",
           `  mode: "${cfg.mode}" — auto (preflight+post+cache) | manual | off`,
           `  review: "${cfg.review}" — light (changes/errors) | strict (every 3) | off`,
-          `  checkins: "${cfg.checkins}" — set by active /loop lifecycle`,
+          `  checkins: "${cfg.checkins}" — set by active /goal or /loop lifecycle`,
           `  checkinIntervalMinutes: ${cfg.checkinIntervalMinutes}`,
           pause > 0 ? `  advisorPauseUntilTurn: ${pause} turn${pause === 1 ? "" : "s"} remaining` : "  advisorPauseUntilTurn: off",
           `  model: "${cfg.model || "auto"}" — optional override for higher/advanced advisor model`,
@@ -1292,7 +1292,7 @@ export function registerAdvisor(pi: ExtensionAPI): void {
         ctx.ui.notify([
           "Advisor check-ins are orchestration-managed now.",
           `Current: ${checkinDescription(cfg)}`,
-          "Create or resume /loop to activate scheduled higher-model check-ins; stop the loop to disable them.",
+          "Create or resume /goal or /loop to activate scheduled higher-model check-ins; stop or clear either to disable them.",
           orchestrationSnapshotText(ctx),
         ].join("\n"), "info");
         return;

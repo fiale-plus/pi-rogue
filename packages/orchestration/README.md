@@ -22,7 +22,7 @@ npm install --workspace packages/orchestration
 
 | Command | What it does |
 |---|---|
-| `/goal set <text>` | Set/update current goal (auto-starts a first check when loop exists) |
+| `/goal set <text>` | Set/update current goal and re-arm check-ins |
 | `/goal show` | Show current goal |
 | `/goal clear` | Clear active goal |
 | `/goal list` | Show recent goal history |
@@ -41,7 +41,7 @@ npm install --workspace packages/orchestration
 - `loop` supports minimum interval `1m`.
 - `goal` checks are done through assistant loop ticks; `GOAL_DONE` / `GOAL_CONTINUE` are preserved.
 - `autoresearch` and `autoresearch-lab` are thin facades over `/goal + /loop`.
-- Loop activation enables scheduled advisor check-ins; stopping the active loop disables them again.
+- A goal or loop activation enables scheduled advisor check-ins; stopping or clearing the active goal/loop disables them again.
 - Check-ins are part of orchestration lifecycle, not a standalone advisor command. They use the advisor interval, higher/advanced advisor models first, and regular model fallback by default.
 - A small repetition guard detects repeated assistant output and nudges the next turn to inspect current state before retrying.
 - There are no hidden flow budgets. Long loops run until `/loop off`, `/goal clear`, or a `GOAL_DONE` response clears the active goal and loop.
