@@ -33,22 +33,19 @@ Use this shape for component releases so notes stay consistent:
 
 ## Release scope
 
-List components touched in this release (and release in dependency order):
+Only the consolidated bundle is released:
 
-- [ ] advisor (`advisor-<semver>`)
-- [ ] pi-rogue-orchestration (`pi-rogue-orchestration-<semver>`)
 - [ ] pi-rogue-bundle (`pi-rogue-bundle-<semver>`)
 
-When this release updates both logic packages and the bundle:
-- release logic packages first
-- then release `pi-rogue-bundle` so it captures latest versions
+Advisor and orchestration releases are on pause (packages marked private; no independent tags/releases). Changes to their logic ship via the bundle artefact only.
 
 ## Naming policy
 
-- Tag format: `<component>-<semver>`
+- Tag format: `pi-rogue-bundle-<semver>`
 - Release title: `<semver>`
 - Use the component prefix in the tag, not in the title.
 - Internal helper packages (guardrails/brain/repo-arch) remain lab/greenhouse and are not published independently.
+- Direct releases of advisor and pi-rogue-orchestration are paused per docs/release.md.
 
 ## Notes
 

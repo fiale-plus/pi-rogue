@@ -2,13 +2,15 @@
 
 Use this when cutting a new release.
 
+**Current policy (as of this doc):** Releases are consolidated under the single published artefact `@fiale-plus/pi-rogue-bundle`. Direct releases of `@fiale-plus/pi-rogue-advisor` and `@fiale-plus/pi-rogue-orchestration` are on pause (their packages are marked private in source; no new npm releases or GitHub tags for them). All logic changes ship via bundle releases.
+
 ## Checklist
 
-- [ ] Version is bumped and committed
+- [ ] Version is bumped and committed (for the bundle; leaves use dev versions only)
 - [ ] Changelog is provisioned for this release
 - [ ] Release notes are drafted
 - [ ] CI is green on the release commit
-- [ ] npm publish workflow is ready
+- [ ] npm publish workflow is ready (only the bundle workflow)
 - [ ] Post-release verification passes (`npm view`, install smoke test)
 
 ## Changelog provisioning
@@ -22,21 +24,30 @@ Prefer the changelog entry to be done before the release is cut, not after.
 
 ## Naming policy
 
-- Tag format: `<component>-<semver>`
-  - `advisor-0.1.x`
-  - `pi-rogue-orchestration-0.1.x`
-  - `pi-rogue-bundle-0.1.x`
-- Release title: `<semver>`
+- Only `pi-rogue-bundle` releases are cut:
+  - Tag format: `pi-rogue-bundle-<semver>` (e.g. `pi-rogue-bundle-0.2.0`)
+  - Release title: `<semver>` (e.g. `0.2.0`)
+- No new tags or releases for `advisor-*` or `pi-rogue-orchestration-*` (paused).
 - Keep the component prefix in the tag only.
-- Release order is important when multiple packages depend on one another:
-  - Run logic-surface releases (`advisor`, `orchestration`) before `pi-rogue-bundle`.
-  - Trigger only workflows corresponding to changed packages for that release wave.
-- Use the same note sections for every component release:
+- Use the same note sections for the bundle release:
   - `## Summary`
   - `## Changes`
   - `## Validation`
 
-## Greenhouse status
+## Greenhouse / paused packages
 
-Internal helper packages (`pi-rogue-guardrails`, `pi-rogue-brain`, `pi-rogue-repo-arch`) remain lab/greenhouse scope and are not published.
-`@fiale-plus/pi-rogue-bundle` is the prepared umbrella for advisor + orchestrator logic and is released via the `pi-rogue-bundle-<semver>` wave after upstream logic surfaces are updated.
+- Internal helper packages (`pi-rogue-guardrails`, `pi-rogue-brain`, `pi-rogue-repo-arch`) remain lab/greenhouse scope and are not published.
+- `@fiale-plus/pi-rogue-advisor` and `@fiale-plus/pi-rogue-orchestration` releases are paused (see package.json "private": true). Their code evolves in this repo; updates ship exclusively via the bundle artefact.
+- `@fiale-plus/pi-rogue-bundle` is the single public/consolidated artefact for advisor + orchestration logic. Install via `pi install npm:@fiale-plus/pi-rogue-bundle`.
+
+## Release process notes
+
+- Cut a GitHub release with tag `pi-rogue-bundle-<semver>` (this triggers only the bundle publish workflow).
+- The bundle publish workflow:
+  - Runs checks + tests.
+  - Syncs the bundle version from the tag (local only).
+  - Publishes the bundle (which bundles the advisor/orchestration logic via bundledDependencies for single-artefact install).
+- No need to release leaves first (they are no longer independently released).
+- For users: always use the bundle; direct leaf installs are deprecated/paused.
+
+See also: `.github/ISSUE_TEMPLATE/release.md`, AGENTS.md (maintenance references), and the individual package READMEs.

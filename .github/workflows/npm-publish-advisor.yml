@@ -10,7 +10,10 @@ permissions:
 
 jobs:
   publish:
-    if: startsWith(github.event.release.tag_name, 'advisor-')
+    # Releases for @fiale-plus/pi-rogue-advisor are on pause.
+    # All future releases consolidated under the single pi-rogue-bundle artefact.
+    # See docs/release.md and AGENTS.md for policy.
+    if: false
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

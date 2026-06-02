@@ -10,29 +10,26 @@ Pi-Rogue is a modular Pi extension stack for **agentic session guidance** and **
 
 | Package | NPM Version | NPM Downloads | What it is |
 |---|---|---|---|
-| `@fiale-plus/pi-rogue-advisor` | [![advisor version](https://img.shields.io/npm/v/%40fiale-plus%2Fpi-rogue-advisor?style=flat-square)](https://www.npmjs.com/package/@fiale-plus/pi-rogue-advisor) | [![advisor downloads](https://img.shields.io/npm/dm/%40fiale-plus%2Fpi-rogue-advisor?style=flat-square)](https://www.npmjs.com/package/@fiale-plus/pi-rogue-advisor) | Strategic advisor + phase-aware routing + orchestration-managed check-ins |
-| `@fiale-plus/pi-rogue-orchestration` | [![orchestration version](https://img.shields.io/npm/v/%40fiale-plus%2Fpi-rogue-orchestration?style=flat-square)](https://www.npmjs.com/package/@fiale-plus/pi-rogue-orchestration) | [![orchestration downloads](https://img.shields.io/npm/dm/%40fiale-plus%2Fpi-rogue-orchestration?style=flat-square)](https://www.npmjs.com/package/@fiale-plus/pi-rogue-orchestration) | Loop, goal, and autoresearch controls |
-| `@fiale-plus/pi-rogue-bundle` | [![bundle version](https://img.shields.io/npm/v/%40fiale-plus%2Fpi-rogue-bundle?style=flat-square)](https://www.npmjs.com/package/@fiale-plus/pi-rogue-bundle) | [![bundle downloads](https://img.shields.io/npm/dm/%40fiale-plus%2Fpi-rogue-bundle?style=flat-square)](https://www.npmjs.com/package/@fiale-plus/pi-rogue-bundle) | Umbrella package for advisor + orchestration |
+| `@fiale-plus/pi-rogue-advisor` | [![advisor version](https://img.shields.io/npm/v/%40fiale-plus%2Fpi-rogue-advisor?style=flat-square)](https://www.npmjs.com/package/@fiale-plus/pi-rogue-advisor) | [![advisor downloads](https://img.shields.io/npm/dm/%40fiale-plus%2Fpi-rogue-advisor?style=flat-square)](https://www.npmjs.com/package/@fiale-plus/pi-rogue-advisor) | (Releases paused; see below) Strategic advisor + phase-aware routing + orchestration-managed check-ins |
+| `@fiale-plus/pi-rogue-orchestration` | [![orchestration version](https://img.shields.io/npm/v/%40fiale-plus%2Fpi-rogue-orchestration?style=flat-square)](https://www.npmjs.com/package/@fiale-plus/pi-rogue-orchestration) | [![orchestration downloads](https://img.shields.io/npm/dm/%40fiale-plus%2Fpi-rogue-orchestration?style=flat-square)](https://www.npmjs.com/package/@fiale-plus/pi-rogue-orchestration) | (Releases paused; see below) Loop, goal, and autoresearch controls |
+| `@fiale-plus/pi-rogue-bundle` | [![bundle version](https://img.shields.io/npm/v/%40fiale-plus%2Fpi-rogue-bundle?style=flat-square)](https://www.npmjs.com/package/@fiale-plus/pi-rogue-bundle) | [![bundle downloads](https://img.shields.io/npm/dm/%40fiale-plus%2Fpi-rogue-bundle?style=flat-square)](https://www.npmjs.com/package/@fiale-plus/pi-rogue-bundle) | **Single consolidated artefact** for advisor + orchestration (recommended) |
 
-Lab/greenhouse helper packages are currently internal and not listed as published surfaces.
+Lab/greenhouse helper packages (`pi-rogue-guardrails`, `pi-rogue-brain`, `pi-rogue-repo-arch`) are internal and not published.
+
+**Release policy:** Advisor and orchestration direct releases are on pause (packages private in source). All updates ship under the single `@fiale-plus/pi-rogue-bundle` artefact. See `docs/release.md` and `AGENTS.md` for the clean policy.
 
 
 ## Install
 
-### Recommended install (simplest)
+### Recommended (and only supported for new installs)
 
 ```bash
 pi install npm:@fiale-plus/pi-rogue-bundle
 ```
 
-### Extra control (individual extensions)
+This is the single consolidated artefact. It includes advisor + orchestration logic (via bundling for a true single package).
 
-```bash
-pi install npm:@fiale-plus/pi-rogue-advisor
-pi install npm:@fiale-plus/pi-rogue-orchestration
-```
-
-`@fiale-plus/pi-rogue-bundle` is now published and recommended as the default one-shot install.
+**Note on paused packages:** Direct `pi install` of `@fiale-plus/pi-rogue-advisor` or `@fiale-plus/pi-rogue-orchestration` is no longer recommended and their independent releases are paused. Existing installs continue to work, but use the bundle for new work and updates. See `docs/release.md`.
 
 ### Local workspace / lab
 
@@ -41,11 +38,11 @@ pi install npm:@fiale-plus/pi-rogue-orchestration
 npm install
 ```
 
-This exposes all workspace packages (`advisor`, `orchestration`, `bundle`, and internal lab packages) for local development.
+This exposes all workspace packages for local development (including the paused leaf packages, which remain usable locally via the monorepo workspaces).
 
 ## Quick start
 
-1. Install `@fiale-plus/pi-rogue-bundle` (or individual extensions if preferred).
+1. Install `@fiale-plus/pi-rogue-bundle` (the single consolidated artefact).
 2. Start a Pi session.
 3. Run `/advisor` (or `/advisor status`) first to let the quick main model establish session posture.
 4. Then use:
@@ -55,7 +52,7 @@ This exposes all workspace packages (`advisor`, `orchestration`, `bundle`, and i
 
 ## Published command surfaces
 
-### Advisor package
+All command surfaces below are provided by the single `@fiale-plus/pi-rogue-bundle` artefact (advisor + orchestration logic are included/bundled; their standalone packages have releases paused).
 
 - `/advisor` — status, config, mode/review/model control, and questions
 - `/advisor status` — show active mode/review/model state and loop-owned check-ins
@@ -66,17 +63,12 @@ This exposes all workspace packages (`advisor`, `orchestration`, `bundle`, and i
 - `/advisor config`
 - `/advisor <question>` — get immediate advice
 - `/pi-rogue` — shared cockpit view over advisor + orchestration pointers
-
-### Orchestration package
-
-- `/goal set|show|clear|list` — set or update the active goal (check-ins are enabled when a loop is active)
+- `/goal set|show|clear|list` — set or update the active goal (check-ins enabled via loop)
 - `/loop status|off|clear|stop|<interval> <instruction>`
-- `/autoresearch status|clear|<instruction>` — goal+loop-driven research flow; check-ins are tied to loop activation
+- `/autoresearch status|clear|<instruction>` — goal+loop-driven research flow
 - `/autoresearch-lab status|clear|<instruction>`
 
-### Bundle package
-
-- Includes both advisor and orchestration commands above via one install.
+(Previously documented "Advisor package" and "Orchestration package" sections now route through the bundle only.)
 
 ## Documentation
 
