@@ -7,6 +7,8 @@ const MAX_USER_TURNS = 8;
 const MAX_ASSISTANT_TURNS = 6;
 const DUPLICATE_THRESHOLD = 0.72;
 const CONTAINMENT_THRESHOLD = 0.82;
+const ASSISTANT_REPEAT_THRESHOLD = 0.94;
+const ASSISTANT_REPEAT_COUNT = 3;
 
 const STOPWORDS = new Set([
   "the",
@@ -82,9 +84,16 @@ export interface NoveltyGuardAssistantTurn extends NoveltyGuardTurn {
   statusConfirmation: boolean;
 }
 
+export interface NoveltyGuardAssistantRepeat {
+  at: string;
+  count: number;
+  text: string;
+}
+
 export interface NoveltyGuardState {
   recentUserTurns: NoveltyGuardTurn[];
   recentAssistantTurns: NoveltyGuardAssistantTurn[];
+  assistantRepeat?: NoveltyGuardAssistantRepeat;
 }
 
 export type NoveltyGuardDecision =
@@ -173,6 +182,37 @@ export function isStatusConfirmation(text: string): boolean {
   return hasSubject && hasClosed && (hasNoAction || normalized.length < 900);
 }
 
+export function detectAssistantRepetition(state: NoveltyGuardState, minCount = ASSISTANT_REPEAT_COUNT): NoveltyGuardAssistantRepeat | null {
+  const recent = state.recentAssistantTurns.slice(-MAX_ASSISTANT_TURNS);
+  const last = recent.at(-1);
+  if (!last) return null;
+
+  const normalizedLast = normalizeTurn(last.text);
+  if (normalizedLast.length < 16) return null;
+
+  let count = 1;
+  for (let index = recent.length - 2; index >= 0; index--) {
+    const candidate = recent[index];
+    if (!candidate) break;
+
+    const normalizedCandidate = normalizeTurn(candidate.text);
+    if (!normalizedCandidate || normalizedCandidate.length < 16) break;
+    if (normalizedCandidate === normalizedLast || turnSimilarity(last.text, candidate.text) >= ASSISTANT_REPEAT_THRESHOLD) {
+      count++;
+      continue;
+    }
+
+    break;
+  }
+
+  if (count < minCount) return null;
+  return {
+    at: new Date().toISOString(),
+    count,
+    text: truncate(last.text, 240),
+  };
+}
+
 function recentStatusConfirmationCount(state: NoveltyGuardState): number {
   return state.recentAssistantTurns.slice(-4).filter((turn) => turn.statusConfirmation).length;
 }
@@ -226,13 +266,15 @@ export function recordUserTurn(state: NoveltyGuardState, text: string): NoveltyG
 export function recordAssistantTurn(state: NoveltyGuardState, text: string): NoveltyGuardState {
   const trimmed = String(text ?? "").trim();
   if (!trimmed) return state;
-  return {
+  const next: NoveltyGuardState = {
     ...state,
     recentAssistantTurns: [
       ...state.recentAssistantTurns,
       { at: new Date().toISOString(), text: truncate(trimmed, 1200), statusConfirmation: isStatusConfirmation(trimmed) },
     ].slice(-MAX_ASSISTANT_TURNS),
   };
+  const repeat = detectAssistantRepetition(next);
+  return repeat ? { ...next, assistantRepeat: repeat } : { ...next, assistantRepeat: undefined };
 }
 
 function parseState(raw: string): NoveltyGuardState {
@@ -247,6 +289,13 @@ function parseState(raw: string): NoveltyGuardState {
             .map((turn) => ({ ...turn, statusConfirmation: Boolean((turn as NoveltyGuardAssistantTurn).statusConfirmation) }))
             .slice(-MAX_ASSISTANT_TURNS)
         : [],
+      assistantRepeat: parsed.assistantRepeat && typeof parsed.assistantRepeat.text === "string"
+        ? {
+            at: String(parsed.assistantRepeat.at ?? new Date().toISOString()),
+            count: Number(parsed.assistantRepeat.count) || ASSISTANT_REPEAT_COUNT,
+            text: parsed.assistantRepeat.text,
+          }
+        : undefined,
     };
   } catch {
     return defaultNoveltyGuardState();
@@ -284,10 +333,30 @@ export function registerNoveltyGuard(pi: ExtensionAPI): void {
     return { action: "handled" };
   });
 
+  pi.on("before_agent_start", async (event, _ctx) => {
+    const state = readGuardState(_ctx);
+    const repeat = detectAssistantRepetition(state) ?? state.assistantRepeat;
+    if (!repeat) return { systemPrompt: event.systemPrompt };
+
+    return {
+      systemPrompt: [
+        event.systemPrompt,
+        "Pi-Rogue repetition guard:",
+        `The previous assistant output repeated ${repeat.count} times: ${truncate(repeat.text, 180)}`,
+        "Before retrying, inspect the current state or diff, identify the smallest missing delta, and apply only that delta. Do not repeat the same preamble, tool payload, or partial file body.",
+      ].filter(Boolean).join("\n\n"),
+    };
+  });
+
   pi.on("message_end", async (event, ctx) => {
     if (event?.message?.role !== "assistant") return;
     const text = contentText(event.message.content);
     if (!text) return;
-    writeGuardState(ctx, recordAssistantTurn(readGuardState(ctx), text));
+    const previous = readGuardState(ctx);
+    const next = recordAssistantTurn(previous, text);
+    writeGuardState(ctx, next);
+    if (next.assistantRepeat && (!previous.assistantRepeat || next.assistantRepeat.count > previous.assistantRepeat.count)) {
+      ctx.ui.notify("Repetition guard detected repeated assistant output; the next turn will be forced to inspect state before retrying.", "warning");
+    }
   });
 }

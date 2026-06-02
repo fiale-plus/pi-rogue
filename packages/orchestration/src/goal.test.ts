@@ -4,6 +4,7 @@ import { resetAdvisorSessionContext } from "./advisor-checkins.js";
 import { endGoalCheck } from "./goal-resolution.js";
 import { clearGoal, setGoal, startGoalProcessing } from "./goal.js";
 import { recordBudgetTurn } from "./budget.js";
+import { featureFile, readText } from "./internal.js";
 
 vi.mock("./advisor-checkins.js", () => ({
   resetAdvisorSessionContext: vi.fn(),
@@ -37,7 +38,7 @@ describe("goal processing", () => {
       sendUserMessage: (text: string, options?: unknown) => sent.push({ text, options }),
     } as any;
 
-    setGoal(ctx, "ship a small fix");
+    expect(setGoal(ctx, "ship a small fix")).toBe("updated");
     const result = startGoalProcessing(pi, ctx, "ship a small fix");
 
     expect(result).toBe("standalone");
@@ -48,6 +49,39 @@ describe("goal processing", () => {
     expect(sent[0].text).toContain("Take the first concrete step now");
     expect(sent[0].text).toContain("Do not only record, restate, or summarize the goal.");
     endGoalCheck(ctx);
+  });
+
+  it("does not append history or reset orchestration for an exact active goal duplicate", () => {
+    const ctx = fakeCtx();
+    const goal = `dedupe goal ${randomUUID()}`;
+    const before = readText(featureFile("orchestration", "goal-history.jsonl"));
+
+    expect(setGoal(ctx, goal)).toBe("updated");
+    const afterFirst = readText(featureFile("orchestration", "goal-history.jsonl"));
+    expect(setGoal(ctx, goal)).toBe("duplicate");
+    const afterSecond = readText(featureFile("orchestration", "goal-history.jsonl"));
+
+    expect(afterFirst.slice(before.length)).toContain(goal);
+    expect(afterSecond).toBe(afterFirst);
+    expect(resetAdvisorSessionContextMock).toHaveBeenCalledTimes(1);
+    clearGoal(ctx);
+  });
+
+  it("blocks proven two-goal alternating cycles before appending history", () => {
+    const ctx = fakeCtx();
+    const first = `cycle-a ${randomUUID()}`;
+    const second = `cycle-b ${randomUUID()}`;
+
+    expect(setGoal(ctx, first)).toBe("updated");
+    expect(setGoal(ctx, second)).toBe("updated");
+    expect(setGoal(ctx, first)).toBe("updated");
+    expect(setGoal(ctx, second)).toBe("updated");
+    expect(setGoal(ctx, first)).toBe("updated");
+    expect(setGoal(ctx, second)).toBe("cycle");
+
+    clearGoal(ctx);
+    expect(setGoal(ctx, second)).toBe("updated");
+    clearGoal(ctx);
   });
 
   it("queues immediate standalone goal processing as follow-up when busy", () => {

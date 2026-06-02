@@ -1,6 +1,6 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { activeGoal, clearGoal, setGoal, setGoalStatus } from "./goal.js";
-import { clearLoop, startLoop } from "./loop.js";
+import { clearLoop, readLoopState, startLoop } from "./loop.js";
 import {
   DEFAULT_RESEARCH_INTERVAL,
   formatResearchState,
@@ -108,7 +108,22 @@ function registerResearchCommand(pi: ExtensionAPI, commandName: ResearchKind): v
         return;
       }
 
+      const goal = buildResearchGoal(commandName, instruction);
+      const loopInstruction = buildResearchLoopInstruction(commandName, instruction);
       const previous = readResearchState(ctx);
+      const currentLoop = readLoopState(ctx);
+      if (
+        previous.kind === commandName
+        && previous.instruction === instruction
+        && previous.goal === goal
+        && activeGoal(ctx) === goal
+        && currentLoop.enabled
+        && currentLoop.instruction === loopInstruction
+      ) {
+        ctx.ui.notify(`${prefix} already active for this instruction. No duplicate cycle queued.`, "info");
+        return;
+      }
+
       if (previous.instruction) {
         appendText(featureFile("orchestration", "autoresearch-history.jsonl"), `${JSON.stringify({
           at: new Date().toISOString(),
@@ -117,9 +132,13 @@ function registerResearchCommand(pi: ExtensionAPI, commandName: ResearchKind): v
         })}\n`);
       }
 
-      const goal = buildResearchGoal(commandName, instruction);
-      const loopInstruction = buildResearchLoopInstruction(commandName, instruction);
-      setGoal(ctx, goal);
+      const restartSameGoal = activeGoal(ctx) === goal;
+      const goalResult = setGoal(ctx, goal, { restartDuplicate: restartSameGoal });
+      if (goalResult === "cycle") {
+        ctx.ui.notify(`${prefix} not started: detected a repeating two-goal cycle. Use /goal clear before intentionally restarting this pattern.`, "warning");
+        return;
+      }
+
       setGoalStatus(ctx, goal);
       initializeBudgetState(ctx, commandName);
       const next = writeResearchState(ctx, {

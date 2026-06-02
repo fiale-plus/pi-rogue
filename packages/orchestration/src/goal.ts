@@ -7,9 +7,11 @@ import { clearLoop, triggerLoopTick } from "./loop.js";
 import { resetAdvisorSessionContext } from "./advisor-checkins.js";
 import { goalArgumentCompletions } from "./completions.js";
 import { budgetFlowReason, budgetStatus, clearBudgetState, initializeBudgetState, recordBudgetTurn, readBudgetState } from "./budget.js";
+import { readSessionJson, writeSessionJson } from "./state.js";
 
 const FEATURE = "orchestration";
 const CURRENT_FILE = "goal.md";
+const CYCLE_FILE = "goal-cycle.json";
 const HISTORY_FILE = featureFile(FEATURE, "goal-history.jsonl");
 
 type GoalHistoryEntry = {
@@ -17,14 +19,102 @@ type GoalHistoryEntry = {
   goal: string;
 };
 
+export type GoalSetResult = "updated" | "duplicate" | "cycle";
+
+type GoalCycleState = {
+  recentGoals: GoalHistoryEntry[];
+  clearedAt?: string;
+};
+
 export function activeGoal(ctx: any): string {
   return readText(sessionFile(FEATURE, ctx, CURRENT_FILE)).trim();
 }
 
-export function setGoal(ctx: any, goal: string): void {
+function parseGoalHistoryEntries(limit: number): GoalHistoryEntry[] {
+  const raw = readText(HISTORY_FILE).trim();
+  if (!raw) return [];
+
+  return raw
+    .split("\n")
+    .filter(Boolean)
+    .slice(-limit)
+    .map((line) => {
+      try {
+        return JSON.parse(line) as GoalHistoryEntry;
+      } catch {
+        return { at: new Date().toISOString(), goal: line };
+      }
+    });
+}
+
+function normalizedGoal(goal: string): string {
+  return goal.replace(/\s+/g, " ").trim();
+}
+
+function defaultGoalCycleState(): GoalCycleState {
+  return { recentGoals: [] };
+}
+
+function readGoalCycleState(ctx: any): GoalCycleState {
+  const parsed = readSessionJson<Partial<GoalCycleState>>(FEATURE, ctx, CYCLE_FILE, defaultGoalCycleState());
+  return {
+    recentGoals: Array.isArray(parsed.recentGoals)
+      ? parsed.recentGoals
+          .filter((entry) => typeof entry?.goal === "string")
+          .map((entry) => ({ at: String(entry.at ?? new Date().toISOString()), goal: entry.goal }))
+          .slice(-8)
+      : [],
+    clearedAt: typeof parsed.clearedAt === "string" ? parsed.clearedAt : undefined,
+  };
+}
+
+function writeGoalCycleState(ctx: any, state: GoalCycleState): void {
+  writeSessionJson(FEATURE, ctx, CYCLE_FILE, {
+    ...state,
+    recentGoals: state.recentGoals.slice(-8),
+  });
+}
+
+function recordGoalCycleEntry(ctx: any, goal: string, at: string): void {
+  const state = readGoalCycleState(ctx);
+  writeGoalCycleState(ctx, {
+    recentGoals: [...state.recentGoals, { at, goal }].slice(-8),
+    clearedAt: state.clearedAt,
+  });
+}
+
+function resetGoalCycleState(ctx: any): void {
+  writeGoalCycleState(ctx, { recentGoals: [], clearedAt: new Date().toISOString() });
+}
+
+function isAlternatingGoalCycle(goals: string[], minTurns = 6): boolean {
+  if (goals.length < minTurns) return false;
+  const tail = goals.slice(-minTurns).map(normalizedGoal);
+  if (!tail[0] || !tail[1] || tail[0] === tail[1]) return false;
+
+  for (let index = 2; index < tail.length; index++) {
+    if (tail[index] !== tail[index - 2]) return false;
+  }
+
+  return true;
+}
+
+function continuesRecentGoalCycle(ctx: any, candidate: string): boolean {
+  const recent = readGoalCycleState(ctx).recentGoals.map((entry) => entry.goal);
+  return isAlternatingGoalCycle([...recent, candidate]);
+}
+
+export function setGoal(ctx: any, goal: string, options: { restartDuplicate?: boolean } = {}): GoalSetResult {
   const note = goal.trim();
   const previous = activeGoal(ctx);
-  if (previous) {
+  if (previous === note && !options.restartDuplicate) {
+    return "duplicate";
+  }
+  if (previous !== note && continuesRecentGoalCycle(ctx, note)) {
+    return "cycle";
+  }
+
+  if (previous && previous !== note) {
     clearResearchStateForGoal(ctx, previous);
   }
   clearLoop(ctx, { clearResearch: true, preserveCheckins: true });
@@ -32,11 +122,15 @@ export function setGoal(ctx: any, goal: string): void {
   initializeBudgetState(ctx, "goal");
   resetAdvisorSessionContext();
   endGoalCheck(ctx);
-  appendText(HISTORY_FILE, `${JSON.stringify({ at: new Date().toISOString(), goal: note })}\n`);
+  const at = new Date().toISOString();
+  appendText(HISTORY_FILE, `${JSON.stringify({ at, goal: note })}\n`);
+  recordGoalCycleEntry(ctx, note, at);
+  return "updated";
 }
 
 export function clearGoal(ctx: any): void {
   writeText(sessionFile(FEATURE, ctx, CURRENT_FILE), "");
+  resetGoalCycleState(ctx);
   clearBudgetState(ctx);
   resetAdvisorSessionContext();
 }
@@ -54,20 +148,7 @@ export function setGoalStatus(ctx: any, goal: string | null): void {
 }
 
 function historyEntries(): GoalHistoryEntry[] {
-  const raw = readText(HISTORY_FILE).trim();
-  if (!raw) return [];
-
-  return raw
-    .split("\n")
-    .filter(Boolean)
-    .slice(-10)
-    .map((line) => {
-      try {
-        return JSON.parse(line) as GoalHistoryEntry;
-      } catch {
-        return { at: new Date().toISOString(), goal: line };
-      }
-    });
+  return parseGoalHistoryEntries(10);
 }
 
 function assistantText(event: any): string {
@@ -242,7 +323,16 @@ export function registerGoal(pi: ExtensionAPI): void {
         return;
       }
 
-      setGoal(ctx, text);
+      const result = setGoal(ctx, text);
+      if (result === "duplicate") {
+        ctx.ui.notify(`🎯 Goal already active: ${truncate(text, 160)}. No duplicate goal cycle queued.`, "info");
+        return;
+      }
+      if (result === "cycle") {
+        ctx.ui.notify("🎯 Goal not changed: detected a repeating two-goal cycle. Use /goal clear before intentionally restarting this pattern.", "warning");
+        return;
+      }
+
       setGoalStatus(ctx, text);
       const started = startGoalProcessing(pi, ctx, text);
       ctx.ui.notify(
