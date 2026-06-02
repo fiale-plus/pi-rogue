@@ -1,6 +1,5 @@
 import { truncate } from "./internal.js";
 import { readSessionJson, writeSessionJson } from "./state.js";
-import { budgetStatus, type BudgetState } from "./budget.js";
 
 export const FEATURE = "orchestration";
 export const RESEARCH_FILE = "autoresearch.json";
@@ -15,7 +14,6 @@ export type ResearchState = {
   loopInstruction?: string;
   interval?: string;
   cycles?: number;
-  doneAttempts?: number;
   lastResult?: "done" | "continue" | "unknown";
   updatedAt: string;
 };
@@ -28,7 +26,6 @@ export function defaultResearchState(kind: ResearchKind = "autoresearch"): Resea
     loopInstruction: "",
     interval: DEFAULT_RESEARCH_INTERVAL,
     cycles: 0,
-    doneAttempts: 0,
     updatedAt: "",
   };
 }
@@ -62,14 +59,12 @@ export function label(kind: ResearchKind): string {
   return kind === "autoresearch-lab" ? "🧪 Autoresearch lab" : "🔎 Autoresearch";
 }
 
-export function formatResearchState(state: ResearchState, budget?: BudgetState | null): string {
+export function formatResearchState(state: ResearchState): string {
   if (!state.instruction) {
     return `${label(state.kind)} is off.`;
   }
 
   const cycles = state.cycles ?? 0;
-  const doneAttempts = state.doneAttempts ?? 0;
   const last = state.lastResult ? `, last=${state.lastResult}` : "";
-  const budgetText = budget ? `, ${budgetStatus(budget)}` : "";
-  return `${label(state.kind)} active: ${truncate(state.instruction, 160)} — backed by /goal + /loop ${state.interval || DEFAULT_RESEARCH_INTERVAL}; cycles=${cycles}, doneAttempts=${doneAttempts}${last}${budgetText}`;
+  return `${label(state.kind)} active: ${truncate(state.instruction, 160)} — /loop ${state.interval || DEFAULT_RESEARCH_INTERVAL}; cycles=${cycles}${last}`;
 }

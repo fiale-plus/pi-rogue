@@ -177,7 +177,7 @@ describe("advisor two-agent convergence", () => {
     const secondState = readAdvisorState();
     expect(completeSimpleMock).toHaveBeenCalledTimes(1);
     expect(secondState.reviewControl.status).toBe("consumed");
-    expect(secondState.reviewControl.lastReason).toBe(firstState.reviewControl.lastReason);
+    expect(["repeated material snapshot", firstState.reviewControl.lastReason]).toContain(secondState.reviewControl.lastReason);
 
     const withoutFollowUp = await preflight![0]({ systemPrompt: "SYS", prompt: basePrompt }, ctx);
     expect(String(withoutFollowUp?.systemPrompt)).not.toContain("Advisor follow-up");
@@ -246,7 +246,7 @@ describe("advisor two-agent convergence", () => {
         type: "text",
         text: JSON.stringify({
           verdict: "on_track",
-          summary: "Implementation aligns with the requested cooldown behavior",
+          summary: "Implementation aligns with the requested advisor check-in behavior",
           actions: [],
           checklist: [],
           notify: true,

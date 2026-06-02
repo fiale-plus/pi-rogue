@@ -58,7 +58,6 @@ const MAX_FILES = 8;
 const MAX_ERRORS = 5;
 const MIN_CHECKIN_INTERVAL_MINUTES = 10;
 const MAX_CHECKIN_INTERVAL_MINUTES = 240;
-const ADVISOR_AUTORUN_COOLDOWN_TURNS = 3;
 const checkinLocks = new Set<string>();
 
 // ── SOTA models (ordered by preference) ───────────────────────────────────
@@ -92,7 +91,6 @@ interface SessionState {
   };
   reviewControl: ReviewControlState;
   advisorPauseUntilTurn?: number;
-  advisorAutoRunCooldownUntilTurn?: number;
 }
 function defaultReviewControl(): ReviewControlState {
   return {
@@ -139,7 +137,13 @@ export function normalizeAdvisorConfig(raw: Partial<AdvisorConfig> = {}): Adviso
     mode: (raw.mode === "manual" || raw.mode === "off") ? raw.mode : "auto",
     review: (raw.review === "strict" || raw.review === "off") ? raw.review : "light",
     checkins: raw.checkins === "mid-hour" ? "mid-hour" : DEFAULT_CONFIG.checkins,
-    checkinIntervalMinutes: Math.min(MAX_CHECKIN_INTERVAL_MINUTES, Math.max(MIN_CHECKIN_INTERVAL_MINUTES, Number.isFinite(interval) ? Math.round(interval) : DEFAULT_CONFIG.checkinIntervalMinutes)),
+    checkinIntervalMinutes: Math.min(
+      MAX_CHECKIN_INTERVAL_MINUTES,
+      Math.max(
+        MIN_CHECKIN_INTERVAL_MINUTES,
+        Number.isFinite(interval) ? Math.round(interval) : DEFAULT_CONFIG.checkinIntervalMinutes,
+      ),
+    ),
     checkinStartedAt: Number.isFinite(startedAt) ? startedAt : undefined,
     model: raw.model || undefined,
   };
@@ -157,7 +161,6 @@ function loadState(): SessionState {
   const raw = readJson<Partial<SessionState>>(STATE_PATH, {});
   const control = raw.reviewControl;
   const pauseUntil = Number(raw.advisorPauseUntilTurn);
-  const cooldownUntil = Number(raw.advisorAutoRunCooldownUntilTurn);
   return {
     turns: raw.turns ?? 0,
     lastTask: raw.lastTask ?? "",
@@ -190,7 +193,6 @@ function loadState(): SessionState {
       lastAppliedAt: control?.lastAppliedAt,
     },
     advisorPauseUntilTurn: Number.isFinite(pauseUntil) ? pauseUntil : undefined,
-    advisorAutoRunCooldownUntilTurn: Number.isFinite(cooldownUntil) ? cooldownUntil : undefined,
   };
 }
 
@@ -333,7 +335,6 @@ function persistReviewState(state: SessionState, includeReviewRoute: boolean): v
   persisted.reviewControl = state.reviewControl;
   persisted.followUp = state.followUp;
   persisted.advisorPauseUntilTurn = state.advisorPauseUntilTurn;
-  persisted.advisorAutoRunCooldownUntilTurn = state.advisorAutoRunCooldownUntilTurn;
   if (includeReviewRoute && state.router.review) {
     persisted.router.review = state.router.review;
   }
@@ -471,7 +472,7 @@ function sessionKey(ctx: any): string {
 type OrchestrationSnapshot = {
   goal: string;
   loop: { enabled?: boolean; interval?: string; instruction?: string };
-  research: { instruction?: string; interval?: string; cycles?: number; doneAttempts?: number; lastResult?: string };
+  research: { instruction?: string; interval?: string; cycles?: number; lastResult?: string };
 };
 
 function readOrchestrationSnapshot(ctx: any): OrchestrationSnapshot {
@@ -496,7 +497,7 @@ function orchestrationSnapshotText(ctx: any): string {
   return [
     "Orchestration:",
     `- Goal: ${goalActive ? `active — ${truncate(snapshot.goal, 360)}` : "off"}`,
-    `- Autoresearch: ${researchActive ? `active — ${truncate(snapshot.research.instruction || "", 240)}; cycles=${snapshot.research.cycles ?? 0}, doneAttempts=${snapshot.research.doneAttempts ?? 0}${snapshot.research.lastResult ? `, last=${snapshot.research.lastResult}` : ""}` : "off"}`,
+    `- Autoresearch: ${researchActive ? `active — ${truncate(snapshot.research.instruction || "", 240)}; cycles=${snapshot.research.cycles ?? 0}${snapshot.research.lastResult ? `, last=${snapshot.research.lastResult}` : ""}` : "off"}`,
     `- Loop: ${loopActive ? `active every ${snapshot.loop.interval || "?"} — ${truncate(snapshot.loop.instruction || "", 260)}` : "off"}`,
     `- Status: ${status}`,
   ].join("\n");
@@ -526,40 +527,29 @@ function isAdvisorPaused(state: SessionState, nowTurns = state.turns): boolean {
   return advisorPauseRemaining(state, nowTurns) > 0;
 }
 
-function advisorCooldownRemaining(state: SessionState, nowTurns = state.turns): number {
-  const until = state.advisorAutoRunCooldownUntilTurn;
-  if (until === undefined || Number.isNaN(until)) return 0;
-  return Math.max(0, until - nowTurns);
-}
-
-function isAdvisorCooldownActive(state: SessionState, nowTurns = state.turns): boolean {
-  return advisorCooldownRemaining(state, nowTurns) > 0;
-}
-
-function setAdvisorAutoRunCooldown(state: SessionState): void {
-  state.advisorAutoRunCooldownUntilTurn = state.turns + ADVISOR_AUTORUN_COOLDOWN_TURNS;
-}
-
 function isAdvisorAutoRunSuppressed(state: SessionState, nowTurns = state.turns): boolean {
-  return isAdvisorPaused(state, nowTurns) || isAdvisorCooldownActive(state, nowTurns);
+  return isAdvisorPaused(state, nowTurns);
 }
 
 function isAdvisorAutoRunSuppressedForTurnContext(state: SessionState, nowTurns = state.turns): boolean {
   return isAdvisorAutoRunSuppressed(state, nowTurns) || isAdvisorAutoRunSuppressed(state, nowTurns - 1);
 }
 
-function setPiRogueStatus(ctx: any, config = loadConfig(), state = loadState()): void {
-  const normalized = normalizeAdvisorConfig(config);
-  const checkin = normalized.checkins === "off" ? "checkins off" : `checkins ${normalized.checkinIntervalMinutes}m`;
-  const pause = advisorPauseRemaining(state, state.turns);
-  const cooldown = advisorCooldownRemaining(state, state.turns);
-  const pauseText = pause > 0 ? ` · pause ${pause} turn${pause === 1 ? "" : "s"}` : "";
-  const cooldownText = cooldown > 0 ? ` · cool-down ${cooldown} turn${cooldown === 1 ? "" : "s"}` : "";
-  const last = state.checkin.lastAt ? ` · last ${new Date(state.checkin.lastAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}` : "";
-  ctx.ui.setStatus("pi-rogue", `☠︎ advisor ${normalized.mode}/${normalized.review} · ${checkin}${pauseText}${cooldownText}${last}`);
+function checkinDescription(config: AdvisorConfig): string {
+  if (config.checkins === "off") return "checkins off";
+  return `checkins ${config.checkinIntervalMinutes}m`;
 }
 
-export function shouldRunCheckin(config: AdvisorConfig, state: SessionState, now = Date.now(), startedAt = now): string | null {
+function setPiRogueStatus(ctx: any, config = loadConfig(), state = loadState()): void {
+  const normalized = normalizeAdvisorConfig(config);
+  const checkin = checkinDescription(normalized);
+  const pause = advisorPauseRemaining(state, state.turns);
+  const pauseText = pause > 0 ? ` · pause ${pause} turn${pause === 1 ? "" : "s"}` : "";
+  const last = state.checkin.lastAt ? ` · last ${new Date(state.checkin.lastAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}` : "";
+  ctx.ui.setStatus("pi-rogue", `☠︎ advisor ${normalized.mode}/${normalized.review} · ${checkin}${pauseText}${last}`);
+}
+
+export function shouldRunCheckin(config: AdvisorConfig, state: SessionState, now = Date.now(), startedAt = now, options: { ignoreInterval?: boolean } = {}): string | null {
   if (isAdvisorAutoRunSuppressed(state, state.turns)) return null;
   const normalized = normalizeAdvisorConfig(config);
   if (normalized.mode === "off" || normalized.mode === "manual") return null;
@@ -568,11 +558,16 @@ export function shouldRunCheckin(config: AdvisorConfig, state: SessionState, now
     return state.checkin.queuedReason || "Queued mid-session check-in.";
   }
   if (!state.lastTask && state.notes.length === 0) return null;
+
   const lastTurn = state.checkin.lastTurn ?? 0;
   if (state.turns <= lastTurn) return null;
+  if (options.ignoreInterval) return `loop check-in after ${state.turns - lastTurn} new turn(s)`;
+
   const lastAt = state.checkin.lastAt ? Date.parse(state.checkin.lastAt) : 0;
   const intervalMs = normalized.checkinIntervalMinutes * 60_000;
-  const streamStartedAt = Number.isFinite(normalized.checkinStartedAt ?? NaN) ? (normalized.checkinStartedAt as number) : startedAt;
+  const streamStartedAt = Number.isFinite(normalized.checkinStartedAt ?? NaN)
+    ? (normalized.checkinStartedAt as number)
+    : startedAt;
   const since = Math.max(lastAt, streamStartedAt);
   if (since && now - since < intervalMs) return null;
   return `mid-hour check-in after ${state.turns - lastTurn} new turn(s)`;
@@ -597,7 +592,7 @@ async function maybeAdvisorCheckin(pi: ExtensionAPI, ctx: any, source: string): 
 
   const config = loadConfig();
   const state = loadState();
-  const reason = shouldRunCheckin(config, state, Date.now(), Date.now());
+  const reason = shouldRunCheckin(config, state, Date.now(), Date.now(), { ignoreInterval: source === "loop_tick" });
   if (!reason) {
     if (state.checkin.queued) {
       state.checkin.queued = false;
@@ -636,7 +631,6 @@ async function maybeAdvisorCheckin(pi: ExtensionAPI, ctx: any, source: string): 
     if (!completed) return false;
 
     const next = loadState();
-    setAdvisorAutoRunCooldown(next);
     next.checkin = {
       lastAt: new Date().toISOString(),
       lastTurn: next.turns,
@@ -655,13 +649,11 @@ async function maybeAdvisorCheckin(pi: ExtensionAPI, ctx: any, source: string): 
 function piRogueCockpitText(config: AdvisorConfig, state: SessionState, currentNote: string, orchestration = ""): string {
   const normalized = normalizeAdvisorConfig(config);
   const pause = advisorPauseRemaining(state, state.turns);
-  const cooldown = advisorCooldownRemaining(state, state.turns);
   return [
     "☠︎ Pi-Rogue cockpit",
     currentNote ? `Advisor: ${truncate(currentNote, 220)}` : "Advisor: no current note",
-    `Mode: ${normalized.mode} | Review: ${normalized.review} | Check-ins: ${normalized.checkins === "off" ? "off" : `${normalized.checkinIntervalMinutes}m`}`,
+    `Mode: ${normalized.mode} | Review: ${normalized.review} | Check-ins: ${checkinDescription(normalized)}`,
     pause > 0 ? `Advisor pause: ${pause} turn${pause === 1 ? "" : "s"} remaining` : "Advisor pause: off",
-    cooldown > 0 ? `Auto run cool-down: ${cooldown} turn${cooldown === 1 ? "" : "s"} remaining` : "Auto run cool-down: off",
     `Turns: ${state.turns} | Advisor calls: ${state.advisorCalls} | Cache hits: ${state.cacheHits}`,
     state.checkin.lastAt ? `Last check-in: ${new Date(state.checkin.lastAt).toLocaleString()} (${state.checkin.lastReason || "mid-hour"})` : "Last check-in: never",
     state.checkin.queued ? `Queued check-in: ${state.checkin.queuedReason || "due"}` : "",
@@ -896,9 +888,6 @@ async function doReview(pi: ExtensionAPI, ctx: any, trigger: string, delta: stri
       ].join("\n"), timestamp: new Date().toISOString() },
     ] as any[];
     const completed = await completeWithModelFallback(ctx, config, REVIEW_SYSTEM, msgs, { maxTokens: 400, reasoning: "low" as ThinkingLevel });
-    if (completed) {
-      setAdvisorAutoRunCooldown(state);
-    }
     const raw = completed?.text;
     if (!raw) {
       finalDecision = "defer";
@@ -1093,9 +1082,6 @@ export function registerAdvisor(pi: ExtensionAPI): void {
     if (state.advisorPauseUntilTurn && isAdvisorPaused(state, state.turns) === false) {
       state.advisorPauseUntilTurn = undefined;
     }
-    if (state.advisorAutoRunCooldownUntilTurn && isAdvisorCooldownActive(state, state.turns) === false) {
-      state.advisorAutoRunCooldownUntilTurn = undefined;
-    }
     saveState(state);
     setPiRogueStatus(ctx, cfg, state);
     if (cfg.review !== "off" && !suppressedThisTurn) {
@@ -1188,7 +1174,7 @@ export function registerAdvisor(pi: ExtensionAPI): void {
 
       if (arg.startsWith("checkins")) {
         ctx.ui.notify([
-          `Check-ins: ${cfg.checkins === "off" ? "off" : `${cfg.checkinIntervalMinutes}m`}`,
+          `Check-ins: ${checkinDescription(cfg)}`,
           "Managed by orchestration: /loop activates them; stopping the loop disables them.",
           orchestrationSnapshotText(ctx),
         ].join("\n"), "info");
@@ -1214,14 +1200,12 @@ export function registerAdvisor(pi: ExtensionAPI): void {
         const resolved = await resolveModel(ctx, cfg);
         const route = state.router.review ?? state.router.preflight;
         const pause = advisorPauseRemaining(state, state.turns);
-        const cooldown = advisorCooldownRemaining(state, state.turns);
         ctx.ui.notify([
           note ? `🧭 ${truncate(note, 200)}` : "",
           route ? `Router: ${summarizeRoute(route)}${route.safety ? " · safety" : ""}` : "",
           "",
-          `Mode: ${cfg.mode} | Review: ${cfg.review} | Check-ins: ${cfg.checkins === "off" ? "off" : `${cfg.checkinIntervalMinutes}m`} (orchestration-managed) | Model: ${resolved?.label || cfg.model || "auto"}`,
+          `Mode: ${cfg.mode} | Review: ${cfg.review} | Check-ins: ${checkinDescription(cfg)} (orchestration-managed) | Model: ${resolved?.label || cfg.model || "auto"}`,
           pause > 0 ? `Advisor pause: ${pause} turn${pause === 1 ? "" : "s"} remaining` : "Advisor pause: off",
-          cooldown > 0 ? `Auto run cool-down: ${cooldown} turn${cooldown === 1 ? "" : "s"} remaining` : "Auto run cool-down: off",
           `Turns: ${state.turns} | Calls: ${state.advisorCalls} | Cache hits: ${state.cacheHits}`,
           state.checkin.lastAt ? `Last check-in: ${new Date(state.checkin.lastAt).toLocaleString()} (${state.checkin.lastReason || "mid-hour"})` : "Last check-in: never",
           state.checkin.queued ? `Queued check-in: ${state.checkin.queuedReason || "due"}` : "",
@@ -1285,7 +1269,6 @@ export function registerAdvisor(pi: ExtensionAPI): void {
       }
       if (cmd === "config") {
         const pause = advisorPauseRemaining(state, state.turns);
-        const cooldown = advisorCooldownRemaining(state, state.turns);
         ctx.ui.notify([
           "Advisor config (check-ins are orchestration-managed):",
           `  mode: "${cfg.mode}" — auto (preflight+post+cache) | manual | off`,
@@ -1293,7 +1276,6 @@ export function registerAdvisor(pi: ExtensionAPI): void {
           `  checkins: "${cfg.checkins}" — set by active /loop lifecycle`,
           `  checkinIntervalMinutes: ${cfg.checkinIntervalMinutes}`,
           pause > 0 ? `  advisorPauseUntilTurn: ${pause} turn${pause === 1 ? "" : "s"} remaining` : "  advisorPauseUntilTurn: off",
-          cooldown > 0 ? `  advisorAutoRunCooldownUntilTurn: ${cooldown} turn${cooldown === 1 ? "" : "s"} remaining` : "  advisorAutoRunCooldownUntilTurn: off",
           `  model: "${cfg.model || "auto"}" — optional override for higher/advanced advisor model`,
           "",
           "Router logs: evals/advisor-router.jsonl",
@@ -1310,7 +1292,7 @@ export function registerAdvisor(pi: ExtensionAPI): void {
       if (cmd === "checkins" || cmd === "checkin") {
         ctx.ui.notify([
           "Advisor check-ins are orchestration-managed now.",
-          `Current: ${cfg.checkins === "off" ? "off" : `${cfg.checkinIntervalMinutes}m`}`,
+          `Current: ${checkinDescription(cfg)}`,
           "Create or resume /loop to activate scheduled higher-model check-ins; stop the loop to disable them.",
           orchestrationSnapshotText(ctx),
         ].join("\n"), "info");

@@ -139,32 +139,18 @@ describe("mid-hour check-ins", () => {
     ).toMatch(/mid-hour check-in/);
   });
 
-  it("skips check-in while auto run cooldown is active", () => {
+  it("loop-triggered check-ins ignore the minute interval", () => {
     const cfg = normalizeAdvisorConfig({ checkins: "mid-hour", checkinIntervalMinutes: 30 });
     const startedAt = 1_000;
-    const now = startedAt + 31 * 60_000;
+    const now = startedAt + 5 * 60_000;
     expect(
       shouldRunCheckin(cfg, state({
         turns: 5,
-        advisorAutoRunCooldownUntilTurn: 6,
+        checkin: { lastAt: new Date(startedAt).toISOString(), lastTurn: 3 },
         lastTask: "work",
         notes: ["note"],
-      }), now, startedAt),
-    ).toBeNull();
-  });
-
-  it("allows check-in after auto run cooldown expires", () => {
-    const cfg = normalizeAdvisorConfig({ checkins: "mid-hour", checkinIntervalMinutes: 30 });
-    const startedAt = 1_000;
-    const now = startedAt + 31 * 60_000;
-    expect(
-      shouldRunCheckin(cfg, state({
-        turns: 7,
-        advisorAutoRunCooldownUntilTurn: 6,
-        lastTask: "work",
-        notes: ["note"],
-      }), now, startedAt),
-    ).toMatch(/mid-hour check-in/);
+      }), now, startedAt, { ignoreInterval: true }),
+    ).toMatch(/loop check-in after/);
   });
 
   it("flushes queued check-in regardless of turn delta", () => {
@@ -185,7 +171,7 @@ describe("mid-hour check-ins", () => {
       [
         "Orchestration:",
         "- Goal: active — Autoresearch: solve advisor weaknesses",
-        "- Autoresearch: active — solve advisor weaknesses; cycles=1, doneAttempts=0",
+        "- Autoresearch: active — solve advisor weaknesses; cycles=1",
         "- Loop: active every 5m — Run one autoresearch cycle toward the active goal.",
       ].join("\n"),
       "Task: solve advisor weaknesses\nNotes:\n- found shallow mid-hour feedback",

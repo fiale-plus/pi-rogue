@@ -9,37 +9,19 @@ import {
   writeResearchState,
   type ResearchKind,
 } from "./autoresearch-state.js";
-import { appendText, featureFile } from "./internal.js";
-import { initializeBudgetState, readBudgetState } from "./budget.js";
 import { autoresearchArgumentCompletions } from "./completions.js";
 
 export function buildResearchGoal(kind: ResearchKind, instruction: string): string {
   if (kind === "autoresearch-lab") {
     return [
       `Autoresearch lab: ${instruction}`,
-      "Setup gate before implementation:",
-      "- define the source seed/objective, hypotheses, measurement method, baseline/current state, durable artifacts, and stop condition",
-      "- split the scope into independent lanes with a hypothesis, eval method, and expected artifact for each lane",
-      "- do not simplify, re-aim, or replace the user objective unless the user explicitly asks",
-      "Success criteria:",
-      "- preserve isolated/non-overlapping work where possible",
-      "- evaluate candidate findings before merging them into the main path",
-      "- run checks after integration and summarize winning/losing hypotheses",
-      "- write down convergent findings, rejected hypotheses, limitations, and follow-up seeds when complete",
+      "Compare independent lanes, evaluate evidence, integrate only safe improvements, and preserve the user objective.",
     ].join("\n");
   }
 
   return [
     `Autoresearch: ${instruction}`,
-    "Setup gate before implementation:",
-    "- define the hypothesis/objective, measurable target, baseline/current state, benchmark/evaluation command, durable artifact/log, and stop condition",
-    "- if no metric or benchmark exists, the first concrete action is to inspect and create or identify one",
-    "- do not simplify, re-aim, or replace the user objective unless the user explicitly asks",
-    "Success criteria:",
-    "- run iterative identify → implement → build/check → test/evaluate → sanity → log cycles",
-    "- preserve the benchmark/evaluation script as the durable product",
-    "- complete at least two loop cycles before declaring done unless the user manually clears it",
-    "- stop only when the metric/answer is materially improved and the result is summarized with evidence",
+    "Work iteratively: define the target/evidence, inspect, change, run checks when possible, and stop only with evidence.",
   ].join("\n");
 }
 
@@ -48,19 +30,14 @@ export function buildResearchLoopInstruction(kind: ResearchKind, instruction: st
     return [
       "Run one autoresearch-lab cycle toward the active goal.",
       `User instruction: ${instruction}`,
-      "Before changing code, confirm or create the setup: source objective, hypotheses, lane split, measurement/eval method, baseline/current state, durable artifacts, and stop condition.",
-      "Plan or update independent lanes, delegate/inspect where useful, evaluate candidate results, integrate only safe non-conflicting improvements, run checks, and log the next hypothesis.",
-      "Do not simplify or re-aim the objective unless the user explicitly asks; preserve the active research question.",
+      "Inspect current state, advance the most useful lane comparison, evaluate evidence, integrate only safe improvements, and preserve the original objective.",
     ].join("\n");
   }
 
   return [
     "Run one autoresearch cycle toward the active goal.",
     `User instruction: ${instruction}`,
-    "Before changing code, confirm or create the setup: hypothesis/objective, measurable target, baseline/current state, benchmark/evaluation command, durable artifact/log, and stop condition.",
-    "If no metric or benchmark exists, inspect and create or identify one before implementation.",
-    "Measure or define the target, inspect evidence, make the highest-leverage safe change, run checks/evaluation, record the result, and choose the next hypothesis. Do not declare GOAL_DONE before at least two autoresearch cycles have produced explicit check/evaluation evidence.",
-    "Do not simplify or re-aim the objective unless the user explicitly asks; preserve the active research question.",
+    "Inspect current state, take one concrete step, run the relevant check when possible, summarize evidence, and preserve the original objective.",
   ].join("\n");
 }
 
@@ -78,20 +55,12 @@ function registerResearchCommand(pi: ExtensionAPI, commandName: ResearchKind): v
       const resolved = !input ? "status" : ["status", "show"].includes(cmd) ? cmd : ["off", "clear", "stop"].includes(cmd) ? "clear" : "set";
 
       if (resolved === "status" || resolved === "show") {
-        ctx.ui.notify(formatResearchState(readResearchState(ctx), readBudgetState(ctx)), "info");
+        ctx.ui.notify(formatResearchState(readResearchState(ctx)), "info");
         return;
       }
 
       if (resolved === "clear") {
         const previous = readResearchState(ctx);
-        if (previous.instruction) {
-          appendText(featureFile("orchestration", "autoresearch-history.jsonl"), `${JSON.stringify({
-            at: new Date().toISOString(),
-            action: "clear",
-            previous,
-          })}\n`);
-        }
-
         clearLoop(ctx, { clearResearch: true, preserveCheckins: true });
         const clearedGoal = Boolean(previous.goal && activeGoal(ctx) === previous.goal);
         if (clearedGoal) {
@@ -124,23 +93,10 @@ function registerResearchCommand(pi: ExtensionAPI, commandName: ResearchKind): v
         return;
       }
 
-      if (previous.instruction) {
-        appendText(featureFile("orchestration", "autoresearch-history.jsonl"), `${JSON.stringify({
-          at: new Date().toISOString(),
-          action: "replace",
-          previous,
-        })}\n`);
-      }
-
       const restartSameGoal = activeGoal(ctx) === goal;
-      const goalResult = setGoal(ctx, goal, { restartDuplicate: restartSameGoal });
-      if (goalResult === "cycle") {
-        ctx.ui.notify(`${prefix} not started: detected a repeating two-goal cycle. Use /goal clear before intentionally restarting this pattern.`, "warning");
-        return;
-      }
+      setGoal(ctx, goal, { restartDuplicate: restartSameGoal });
 
       setGoalStatus(ctx, goal);
-      initializeBudgetState(ctx, commandName);
       const next = writeResearchState(ctx, {
         kind: commandName,
         instruction,
@@ -148,7 +104,6 @@ function registerResearchCommand(pi: ExtensionAPI, commandName: ResearchKind): v
         loopInstruction,
         interval: DEFAULT_RESEARCH_INTERVAL,
         cycles: 0,
-        doneAttempts: 0,
         updatedAt: "",
       });
       const loop = startLoop(pi, ctx, DEFAULT_RESEARCH_INTERVAL, loopInstruction, { triggerNow: true });

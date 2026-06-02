@@ -3,7 +3,6 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { resetAdvisorSessionContext } from "./advisor-checkins.js";
 import { endGoalCheck } from "./goal-resolution.js";
 import { clearGoal, setGoal, startGoalProcessing } from "./goal.js";
-import { recordBudgetTurn } from "./budget.js";
 import { featureFile, readText } from "./internal.js";
 
 vi.mock("./advisor-checkins.js", () => ({
@@ -67,7 +66,7 @@ describe("goal processing", () => {
     clearGoal(ctx);
   });
 
-  it("blocks proven two-goal alternating cycles before appending history", () => {
+  it("allows explicit goal changes without cycle heuristics", () => {
     const ctx = fakeCtx();
     const first = `cycle-a ${randomUUID()}`;
     const second = `cycle-b ${randomUUID()}`;
@@ -77,7 +76,7 @@ describe("goal processing", () => {
     expect(setGoal(ctx, first)).toBe("updated");
     expect(setGoal(ctx, second)).toBe("updated");
     expect(setGoal(ctx, first)).toBe("updated");
-    expect(setGoal(ctx, second)).toBe("cycle");
+    expect(setGoal(ctx, second)).toBe("updated");
 
     clearGoal(ctx);
     expect(setGoal(ctx, second)).toBe("updated");
@@ -108,22 +107,4 @@ describe("goal processing", () => {
     expect(resetAdvisorSessionContextMock).toHaveBeenCalledTimes(1);
   });
 
-  it("stops goal processing when the flow budget is exhausted", () => {
-    const ctx = fakeCtx();
-    const sent: Array<{ text: string; options?: unknown }> = [];
-    const pi = {
-      sendUserMessage: (text: string, options?: unknown) => sent.push({ text, options }),
-    } as any;
-
-    setGoal(ctx, "ship a small fix");
-    for (let i = 0; i < 20; i++) {
-      recordBudgetTurn(ctx);
-    }
-
-    const result = startGoalProcessing(pi, ctx, "ship a small fix");
-
-    expect(result).toBe("budget_exhausted");
-    expect(sent).toHaveLength(0);
-    endGoalCheck(ctx);
-  });
 });
