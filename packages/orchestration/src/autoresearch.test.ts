@@ -52,21 +52,28 @@ describe("autoresearch status", () => {
     const goal = buildResearchGoal("autoresearch", "improve advisor escalation");
     const loop = buildResearchLoopInstruction("autoresearch", "improve advisor escalation");
 
-    expect(goal).toContain("define the target/evidence");
-    expect(goal).toContain("stop only with evidence");
-    expect(loop).toContain("Inspect current state");
-    expect(loop).toContain("take one concrete step");
-    expect(loop).toContain("preserve the original objective");
+    expect(goal).toContain("measurable target");
+    expect(goal).toContain("eval/check command");
+    expect(goal).toContain("durable artifact/log");
+    expect(goal).toContain("Preserve the user objective");
+    expect(goal).toContain("summarized with evidence");
+    expect(loop).toContain("Confirm/update hypothesis");
+    expect(loop).toContain("take one concrete high-leverage step");
+    expect(loop).toContain("record result");
+    expect(loop).toContain("Do not simplify or re-aim");
   });
 
   it("keeps autoresearch-lab prompts direct", () => {
     const goal = buildResearchGoal("autoresearch-lab", "compare advisor lanes");
     const loop = buildResearchLoopInstruction("autoresearch-lab", "compare advisor lanes");
 
-    expect(goal).toContain("Compare independent lanes");
-    expect(goal).toContain("preserve the user objective");
-    expect(loop).toContain("advance the most useful lane comparison");
+    expect(goal).toContain("source objective");
+    expect(goal).toContain("lane split");
+    expect(goal).toContain("evaluate evidence before integration");
+    expect(goal).toContain("convergent findings");
+    expect(loop).toContain("Advance the most useful lane comparison");
     expect(loop).toContain("integrate only safe improvements");
+    expect(loop).toContain("Do not simplify or re-aim");
   });
 
   it("does not queue a duplicate cycle for the same active autoresearch instruction", async () => {

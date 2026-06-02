@@ -15,13 +15,17 @@ export function buildResearchGoal(kind: ResearchKind, instruction: string): stri
   if (kind === "autoresearch-lab") {
     return [
       `Autoresearch lab: ${instruction}`,
-      "Compare independent lanes, evaluate evidence, integrate only safe improvements, and preserve the user objective.",
+      "Define source objective, hypotheses, lane split, measurement method, baseline, artifacts, and stop condition.",
+      "Run independent lanes where useful; evaluate evidence before integration; preserve the user objective unless explicitly changed.",
+      "Finish with convergent findings, rejected hypotheses, limitations, checks, and follow-up seeds.",
     ].join("\n");
   }
 
   return [
     `Autoresearch: ${instruction}`,
-    "Work iteratively: define the target/evidence, inspect, change, run checks when possible, and stop only with evidence.",
+    "Define hypothesis/objective, measurable target, baseline, eval/check command, durable artifact/log, and stop condition.",
+    "Iterate: inspect evidence, make one high-leverage change, run the relevant check/eval, record result, choose next hypothesis.",
+    "Preserve the user objective unless explicitly changed; stop only when materially improved and summarized with evidence.",
   ].join("\n");
 }
 
@@ -30,14 +34,18 @@ export function buildResearchLoopInstruction(kind: ResearchKind, instruction: st
     return [
       "Run one autoresearch-lab cycle toward the active goal.",
       `User instruction: ${instruction}`,
-      "Inspect current state, advance the most useful lane comparison, evaluate evidence, integrate only safe improvements, and preserve the original objective.",
+      "Confirm/update source objective, hypotheses, lane split, measurement method, baseline, artifacts, and stop condition.",
+      "Advance the most useful lane comparison, evaluate evidence, integrate only safe improvements, run checks, and record the next hypothesis.",
+      "Do not simplify or re-aim the objective unless the user explicitly asks.",
     ].join("\n");
   }
 
   return [
     "Run one autoresearch cycle toward the active goal.",
     `User instruction: ${instruction}`,
-    "Inspect current state, take one concrete step, run the relevant check when possible, summarize evidence, and preserve the original objective.",
+    "Confirm/update hypothesis, measurable target, baseline, eval/check command, artifact/log, and stop condition.",
+    "Inspect evidence, take one concrete high-leverage step, run the relevant check/eval when possible, record result, and choose the next hypothesis.",
+    "Do not simplify or re-aim the objective unless the user explicitly asks.",
   ].join("\n");
 }
 
