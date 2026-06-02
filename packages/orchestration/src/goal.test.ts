@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { resetAdvisorSessionContext } from "./advisor-checkins.js";
+import { resetAdvisorSessionContext, setAdvisorCheckinsEnabled } from "./advisor-checkins.js";
 import { endGoalCheck } from "./goal-resolution.js";
 import { activeGoal, clearGoal, registerGoal, setGoal, startGoalProcessing } from "./goal.js";
 import { featureFile, readText } from "./internal.js";
@@ -11,6 +11,7 @@ vi.mock("./advisor-checkins.js", () => ({
 }));
 
 const resetAdvisorSessionContextMock = vi.mocked(resetAdvisorSessionContext);
+const setAdvisorCheckinsEnabledMock = vi.mocked(setAdvisorCheckinsEnabled);
 
 function fakeCtx(id = randomUUID(), idle = true) {
   return {
@@ -28,6 +29,7 @@ function fakeCtx(id = randomUUID(), idle = true) {
 describe("goal processing", () => {
   beforeEach(() => {
     resetAdvisorSessionContextMock.mockClear();
+    setAdvisorCheckinsEnabledMock.mockClear();
   });
 
   it("starts an immediate standalone goal check when no loop is active", () => {
@@ -105,6 +107,25 @@ describe("goal processing", () => {
     clearGoal(ctx);
 
     expect(resetAdvisorSessionContextMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("disables advisor check-ins when /goal clear stops the loop", async () => {
+    let handler: ((args: string, ctx: any) => Promise<void>) | undefined;
+    const pi = {
+      on: () => undefined,
+      registerCommand: (name: string, command: { handler: (args: string, ctx: any) => Promise<void> }) => {
+        if (name === "goal") handler = command.handler;
+      },
+      sendUserMessage: () => undefined,
+    } as any;
+    const ctx = fakeCtx();
+
+    registerGoal(pi);
+    setGoal(ctx, "clear lifecycle test");
+    setAdvisorCheckinsEnabledMock.mockClear();
+    await handler?.("clear", ctx);
+
+    expect(setAdvisorCheckinsEnabledMock).toHaveBeenCalledWith(false);
   });
 
   it("clears the active goal immediately when a pending check returns GOAL_DONE", async () => {

@@ -183,7 +183,7 @@ export function registerGoal(pi: ExtensionAPI): void {
         clearGoal(ctx);
         endGoalCheck(ctx);
         setGoalStatus(ctx, null);
-        clearLoop(ctx, { clearResearch: true, preserveCheckins: true });
+        clearLoop(ctx, { clearResearch: true });
         ctx.ui.notify(goal ? `Goal cleared${clearedResearch ? "; matching autoresearch status cleared" : ""}.` : "No goal to clear.", "info");
         return;
       }

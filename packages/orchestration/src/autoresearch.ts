@@ -69,7 +69,7 @@ function registerResearchCommand(pi: ExtensionAPI, commandName: ResearchKind): v
 
       if (resolved === "clear") {
         const previous = readResearchState(ctx);
-        clearLoop(ctx, { clearResearch: true, preserveCheckins: true });
+        clearLoop(ctx, { clearResearch: true });
         const clearedGoal = Boolean(previous.goal && activeGoal(ctx) === previous.goal);
         if (clearedGoal) {
           clearGoal(ctx);
