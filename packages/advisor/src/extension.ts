@@ -355,10 +355,11 @@ function recoverReviewControl(state: SessionState): void {
 }
 
 type AdvisorHintDetails = {
+  kind?: "handoff" | "answer";
   decision?: "continue" | "review" | "defer";
   reason?: string;
   summary?: string;
-  actions?: string[];
+  actions?: unknown;
 };
 
 type ReviewControlState = {
@@ -379,37 +380,77 @@ type ReviewMaterialMeta = {
   isAgentEnd: boolean;
   materialSignals?: string[];
 };
-function sendAdvisorHint(pi: ExtensionAPI, decision: "continue" | "review" | "defer", reason: string, summary: string, actions: string[] = []) {
+
+function normalizeAdvisorActions(actions: unknown): string[] {
+  const raw = Array.isArray(actions) ? actions : typeof actions === "string" ? [actions] : [];
+  return raw.map((action) => squish(action, 200)).filter(Boolean).slice(0, 2);
+}
+
+function advisorHandoffText(decision: "continue" | "review" | "defer", reason: string, summary: string, actions: unknown = []): string {
+  const limitedActions = normalizeAdvisorActions(actions);
+  return [
+    `Advisor verdict: ${decision}.`,
+    reason ? `Reason: ${reason}` : "",
+    summary ? `Summary: ${summary}` : "",
+    limitedActions.length ? `Actions: ${limitedActions.join("; ")}` : "",
+  ].filter(Boolean).join("\n");
+}
+
+function sendAdvisorHint(pi: ExtensionAPI, decision: "continue" | "review" | "defer", reason: string, summary: string, actions: unknown = []) {
+  const limitedActions = normalizeAdvisorActions(actions);
   pi.sendMessage(
     {
       customType: "advisor:llm",
-      content: reason,
+      content: advisorHandoffText(decision, reason, summary, limitedActions),
       display: true,
-      details: { decision, reason, summary, actions: actions.slice(0, 2) },
+      details: { decision, reason, summary, actions: limitedActions },
     },
     { deliverAs: "followUp" },
   );
 }
 
+function sendAdvisorAnswer(pi: ExtensionAPI, text: string) {
+  pi.sendMessage({
+    customType: "advisor:llm",
+    content: text,
+    display: true,
+    details: { kind: "answer", summary: text },
+  });
+}
+
 function renderAdvisorHint(message: any, options: { expanded?: boolean }, theme: any) {
   const details = (message?.details ?? {}) as AdvisorHintDetails;
   const customType = String(message?.customType ?? "advisor:rules");
-  const decision = details.decision ?? "defer";
   const sourceColor = customType === "advisor:llm" ? "success" : customType === "advisor:model" ? "accent" : "muted";
-  const decisionColor = decision === "review" ? "accent" : decision === "continue" ? "muted" : "dim";
   const source = theme.bold(theme.fg(sourceColor, `[${customType}]`));
+
+  if (details.kind === "answer") {
+    const body = contentText(message?.content) || details.summary || "No advisor response.";
+    const box = new Box(1, 1, (s: string) => theme.bg("customMessageBg", s));
+    box.addChild(new Text(`${theme.bold(theme.fg("success", "↗"))} ${source} ${theme.bold(theme.fg("success", "answer"))}`, 0, 0));
+    box.addChild(new Text(theme.fg("dim", body), 0, 0));
+    return box;
+  }
+
+  const decision = details.decision ?? "defer";
+  const decisionColor = decision === "review" ? "accent" : decision === "continue" ? "muted" : "dim";
   const verdict = theme.bold(theme.fg(decisionColor, decision));
   const glyph = decision === "review" ? "↗" : decision === "defer" ? "…" : "·";
   const reason = squish(details.reason || contentText(message?.content) || "no extra detail", 180);
+  const actions = normalizeAdvisorActions(details.actions);
 
   const box = new Box(1, 1, (s: string) => theme.bg("customMessageBg", s));
-  box.addChild(new Text(`${theme.bold(theme.fg(decisionColor, glyph))} ${source} ${verdict} · ${theme.fg("dim", "reason: ")}${reason}`, 0, 0));
+  box.addChild(new Text(`${theme.bold(theme.fg(decisionColor, glyph))} ${source} ${verdict}`, 0, 0));
+  box.addChild(new Text(theme.fg("dim", `reason: ${reason}`), 0, 0));
 
-  if (options.expanded && details.summary) {
+  if (details.summary) {
     box.addChild(new Text(theme.fg("dim", `summary: ${squish(details.summary, 220)}`), 0, 0));
   }
-  if (options.expanded && details.actions?.length) {
-    box.addChild(new Text(theme.fg("dim", `actions: ${details.actions.map((a) => squish(a, 80)).join(" • ")}`), 0, 0));
+  if (actions.length) {
+    box.addChild(new Text(theme.fg("dim", `actions: ${actions.map((a) => squish(a, 80)).join(" • ")}`), 0, 0));
+  }
+  if (!options.expanded && contentText(message?.content).split("\n").length > 3) {
+    box.addChild(new Text(theme.fg("dim", "Ctrl+O full advisor handoff"), 0, 0));
   }
 
   return box;
@@ -933,14 +974,15 @@ async function doReview(pi: ExtensionAPI, ctx: any, trigger: string, delta: stri
       : json.verdict === "not_done" ? "review"
         : "defer";
     finalDecision = decision;
-    finalReason = (json.reason || json.summary || "review result").slice(0, 120);
+    const rawReason = json.reason || json.summary || "review result";
+    finalReason = rawReason.slice(0, 120);
 
     const display = formatAdvisorDisplay("advisor:llm", decision, finalReason);
     writeText(CURRENT_PATH, `${display}\n`);
-    sendAdvisorHint(pi, decision, finalReason, json.summary || "", json.actions || []);
+    sendAdvisorHint(pi, decision, rawReason, json.summary || "", json.actions || []);
 
     if (json.verdict !== "on_track") {
-      state.followUp = [json.summary, ...(json.actions?.slice(0, 2) || [])].filter(Boolean).join(" — ");
+      state.followUp = [json.summary, ...normalizeAdvisorActions(json.actions)].filter(Boolean).join(" — ");
     }
 
     markReviewApplied(state, signature, trigger, finalDecision, finalReason, false);
@@ -1326,7 +1368,11 @@ export function registerAdvisor(pi: ExtensionAPI): void {
 
       // Anything else: treat as a question to the advisor
       const r = await askAdvisor(pi, ctx, a, "slash", true);
-      ctx.ui.notify(r.text, r.error ? "warning" : "info");
+      if (r.error) {
+        ctx.ui.notify(r.text, "warning");
+        return;
+      }
+      sendAdvisorAnswer(pi, r.text);
     },
   });
 }
