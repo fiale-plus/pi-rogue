@@ -17,9 +17,11 @@ vi.mock("@earendil-works/pi-ai", async () => {
 type Handler = (event: any, ctx: any) => any;
 
 type HandlerMap = Record<string, Handler[]>;
+type CommandMap = Record<string, { handler: (args: string, ctx: any) => any }>;
 
 function makeHandlers() {
   const handlers: HandlerMap = {};
+  const commands: CommandMap = {};
   const sendMessage = vi.fn();
 
   const pi = {
@@ -28,7 +30,9 @@ function makeHandlers() {
       handlers[event].push(handler);
     },
     registerMessageRenderer: () => undefined,
-    registerCommand: () => undefined,
+    registerCommand: (name: string, command: { handler: (args: string, ctx: any) => any }) => {
+      commands[name] = command;
+    },
     registerTool: vi.fn(),
     sendMessage,
     sendUserMessage: () => undefined,
@@ -38,7 +42,7 @@ function makeHandlers() {
     },
   };
 
-  return { handlers, pi: pi as any, sendMessage };
+  return { handlers, commands, pi: pi as any, sendMessage };
 }
 
 const ADVISOR_STATE_DIR = join(homedir(), ".pi", "agent", "pi-rogue", "advisor");
@@ -74,6 +78,7 @@ function mkCtx() {
 describe("advisor two-agent convergence", () => {
   let ctx: any;
   let handlers: HandlerMap;
+  let commands: CommandMap;
   let sendMessageMock: ReturnType<typeof vi.fn>;
   let completeSimpleMock: ReturnType<typeof vi.fn>;
   let priorState: string | null = null;
@@ -87,6 +92,7 @@ describe("advisor two-agent convergence", () => {
 
     const setup = makeHandlers();
     handlers = setup.handlers;
+    commands = setup.commands;
     sendMessageMock = setup.sendMessage;
 
     mkdirSync(dirname(ADVISOR_STATE_PATH), { recursive: true });
@@ -241,6 +247,31 @@ describe("advisor two-agent convergence", () => {
         details: expect.objectContaining({ actions: ["run focused check"] }),
       }),
       expect.anything(),
+    );
+  });
+
+  it("renders manual advisor answers as advisor custom messages", async () => {
+    expect(commands.advisor).toBeTruthy();
+
+    completeSimpleMock.mockResolvedValue({
+      content: [{
+        type: "text",
+        text: "Post-turn review: no merge blockers identified from the session brief.",
+      }],
+    });
+
+    await commands.advisor.handler("should we merge this pr?", ctx);
+
+    expect(sendMessageMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        customType: "advisor:llm",
+        content: "Post-turn review: no merge blockers identified from the session brief.",
+        display: true,
+        details: expect.objectContaining({
+          kind: "answer",
+          summary: "Post-turn review: no merge blockers identified from the session brief.",
+        }),
+      }),
     );
   });
 
