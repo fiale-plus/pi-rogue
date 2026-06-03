@@ -440,13 +440,17 @@ function renderAdvisorHint(message: any, options: { expanded?: boolean }, theme:
   const actions = normalizeAdvisorActions(details.actions);
 
   const box = new Box(1, 1, (s: string) => theme.bg("customMessageBg", s));
-  box.addChild(new Text(`${theme.bold(theme.fg(decisionColor, glyph))} ${source} ${verdict} · ${theme.fg("dim", "reason: ")}${reason}`, 0, 0));
+  box.addChild(new Text(`${theme.bold(theme.fg(decisionColor, glyph))} ${source} ${verdict}`, 0, 0));
+  box.addChild(new Text(theme.fg("dim", `reason: ${reason}`), 0, 0));
 
-  if (options.expanded && details.summary) {
+  if (details.summary) {
     box.addChild(new Text(theme.fg("dim", `summary: ${squish(details.summary, 220)}`), 0, 0));
   }
-  if (options.expanded && actions.length) {
+  if (actions.length) {
     box.addChild(new Text(theme.fg("dim", `actions: ${actions.map((a) => squish(a, 80)).join(" • ")}`), 0, 0));
+  }
+  if (!options.expanded && contentText(message?.content).split("\n").length > 3) {
+    box.addChild(new Text(theme.fg("dim", "Ctrl+O full advisor handoff"), 0, 0));
   }
 
   return box;
