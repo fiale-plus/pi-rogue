@@ -4,6 +4,7 @@ import { resetAdvisorSessionContext, setAdvisorCheckinsEnabled } from "./advisor
 import { endGoalCheck } from "./goal-resolution.js";
 import { activeGoal, clearGoal, registerGoal, setGoal, startGoalProcessing } from "./goal.js";
 import { featureFile, readText } from "./internal.js";
+import { clearResearchState, defaultResearchState, writeResearchState } from "./autoresearch-state.js";
 
 vi.mock("./advisor-checkins.js", () => ({
   resetAdvisorSessionContext: vi.fn(),
@@ -156,6 +157,51 @@ describe("goal processing", () => {
     await handler?.("clear", ctx);
 
     expect(setAdvisorCheckinsEnabledMock).toHaveBeenCalledWith(false);
+  });
+
+  it("records autoresearch cycle outcomes as a durable history entry", async () => {
+    const handlers: Record<string, Array<(event: any, ctx: any) => Promise<void> | void>> = {};
+    const pi = {
+      on: (name: string, handler: (event: any, ctx: any) => Promise<void> | void) => {
+        handlers[name] = [...(handlers[name] ?? []), handler];
+      },
+      registerCommand: () => undefined,
+      sendUserMessage: () => undefined,
+    } as any;
+    const ctx = fakeCtx();
+    const goal = `autoresearch durability test ${randomUUID()}`;
+    const instruction = "improve loop evidence";
+    const before = readText(featureFile("orchestration", "autoresearch-history.jsonl")).trim();
+
+    registerGoal(pi);
+    setGoal(ctx, goal);
+    startGoalProcessing(pi, ctx, goal);
+
+    writeResearchState(ctx, {
+      ...defaultResearchState("autoresearch"),
+      instruction,
+      goal,
+      loopInstruction: `Run one autoresearch cycle toward the active goal.`,
+    });
+
+    await handlers.agent_end?.[0]?.({
+      messages: [{ role: "assistant", content: "GOAL_CONTINUE: measured latency improved by 7%" }],
+    }, ctx);
+
+    const after = readText(featureFile("orchestration", "autoresearch-history.jsonl")).trim();
+    expect(after.length).toBeGreaterThan(before.length);
+
+    const entries = after
+      .split("\n")
+      .filter(Boolean)
+      .slice(-1)
+      .map((line) => JSON.parse(line));
+    const last = entries[0] as { goal: string; result: string; cycle: number; evidence: string };
+    expect(last.goal).toBe(goal);
+    expect(last.result).toBe("continue");
+    expect(last.cycle).toBeGreaterThan(0);
+    expect(last.evidence).toContain("measured latency");
+    clearResearchState(ctx);
   });
 
   it("clears the active goal immediately when a pending check returns GOAL_DONE", async () => {

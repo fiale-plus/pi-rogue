@@ -1,6 +1,12 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { appendText, contentText, featureFile, readText, sessionFile, truncate, writeText } from "./internal.js";
-import { clearResearchStateForGoal, readResearchState, writeResearchState, type ResearchState } from "./autoresearch-state.js";
+import {
+  appendResearchHistory,
+  clearResearchStateForGoal,
+  readResearchState,
+  writeResearchState,
+  type ResearchState,
+} from "./autoresearch-state.js";
 import { beginGoalCheck, buildGoalCheckPrompt, endGoalCheck, goalCheckResult, hasGoalCheckPending } from "./goal-resolution.js";
 import { clearLoop, triggerLoopTick } from "./loop.js";
 import { resetAdvisorSessionContext, setAdvisorCheckinsEnabled } from "./advisor-checkins.js";
@@ -95,12 +101,13 @@ function researchForGoal(ctx: any, goal: string): ResearchState | null {
   return state;
 }
 
-function recordResearchResult(ctx: any, state: ResearchState, result: "done" | "continue" | "unknown"): void {
-  writeResearchState(ctx, {
+function recordResearchResult(ctx: any, state: ResearchState, result: "done" | "continue" | "unknown", evidence: string): void {
+  const next = writeResearchState(ctx, {
     ...state,
     cycles: (state.cycles ?? 0) + 1,
     lastResult: result,
   });
+  appendResearchHistory(ctx, next, result, evidence);
 }
 
 export function startGoalProcessing(pi: ExtensionAPI, ctx: any, goal: string): GoalProcessingStartResult {
@@ -151,7 +158,7 @@ export function registerGoal(pi: ExtensionAPI): void {
     endGoalCheck(ctx);
 
     const research = researchForGoal(ctx, goal);
-    if (research) recordResearchResult(ctx, research, result);
+    if (research) recordResearchResult(ctx, research, result, assistantText(event));
 
     if (result === "done") {
       clearGoal(ctx);
