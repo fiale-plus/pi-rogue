@@ -338,7 +338,10 @@ describe("advisor two-agent convergence", () => {
     };
     const collapsed = messageRenderers["advisor:llm"](sent, { expanded: false }, theme).render(120).join("\n");
     const expanded = messageRenderers["advisor:llm"](sent, { expanded: true }, theme).render(120).join("\n");
+    expect(collapsed).toContain("reason:");
     expect(collapsed).not.toContain("summary:");
+    expect(expanded).toContain("Reason:");
+    expect(expanded).not.toContain("reason:");
     expect(expanded).not.toContain("Summary:");
   });
 
