@@ -36,14 +36,15 @@ jobs:
           npm version "$VERSION" --no-git-tag-version --allow-same-version
           echo "Synced packages/bundle/package.json to $VERSION"
 
-      - name: Vendor advisor + orchestration + guardrails sources for single-artefact release (leaf releases paused)
+      - name: Vendor core + advisor + orchestration + guardrails sources for single-artefact release (leaf releases paused)
         working-directory: packages/bundle
         run: |
           mkdir -p node_modules/@fiale-plus
+          cp -a ../../packages/core node_modules/@fiale-plus/pi-core
           cp -a ../../packages/advisor node_modules/@fiale-plus/pi-rogue-advisor
           cp -a ../../packages/orchestration node_modules/@fiale-plus/pi-rogue-orchestration
           cp -a ../../packages/guardrails node_modules/@fiale-plus/pi-rogue-guardrails
-          echo "Vendored local (git-at-tag) advisor, orchestration, and guardrails into bundle for bundling as single artefact"
+          echo "Vendored local (git-at-tag) core, advisor, orchestration, and guardrails into bundle for bundling as single artefact"
 
       - name: Publish bundle package
         run: npm publish ./packages/bundle --provenance --access public
