@@ -481,12 +481,12 @@ function renderAdvisorHint(message: any, options: { expanded?: boolean }, theme:
 
   const box = new Box(1, 1, (s: string) => theme.bg("customMessageBg", s));
   box.addChild(new Text(`${theme.bold(theme.fg(decisionColor, glyph))} ${source} ${verdict}`, 0, 0));
-  box.addChild(new Text(theme.fg("dim", `reason: ${reason}`), 0, 0));
 
   if (options.expanded) {
     box.addChild(new Text(theme.fg("dim", "full handoff:"), 0, 0));
     box.addChild(new Text(theme.fg("dim", fullHandoff), 0, 0));
   } else {
+    box.addChild(new Text(theme.fg("dim", `reason: ${reason}`), 0, 0));
     const summary = distinctAdvisorSummary(details.reason || "", details.summary || "");
     if (summary) {
       box.addChild(new Text(theme.fg("dim", `summary: ${squish(summary, 220)}`), 0, 0));
