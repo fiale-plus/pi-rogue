@@ -379,13 +379,24 @@ type ReviewMaterialMeta = {
   isAgentEnd: boolean;
   materialSignals?: string[];
 };
+function advisorHandoffText(decision: "continue" | "review" | "defer", reason: string, summary: string, actions: string[] = []): string {
+  const limitedActions = actions.slice(0, 2);
+  return [
+    `Advisor verdict: ${decision}.`,
+    reason ? `Reason: ${reason}` : "",
+    summary ? `Summary: ${summary}` : "",
+    limitedActions.length ? `Actions: ${limitedActions.join("; ")}` : "",
+  ].filter(Boolean).join("\n");
+}
+
 function sendAdvisorHint(pi: ExtensionAPI, decision: "continue" | "review" | "defer", reason: string, summary: string, actions: string[] = []) {
+  const limitedActions = actions.slice(0, 2);
   pi.sendMessage(
     {
       customType: "advisor:llm",
-      content: reason,
+      content: advisorHandoffText(decision, reason, summary, limitedActions),
       display: true,
-      details: { decision, reason, summary, actions: actions.slice(0, 2) },
+      details: { decision, reason, summary, actions: limitedActions },
     },
     { deliverAs: "followUp" },
   );
@@ -933,11 +944,12 @@ async function doReview(pi: ExtensionAPI, ctx: any, trigger: string, delta: stri
       : json.verdict === "not_done" ? "review"
         : "defer";
     finalDecision = decision;
-    finalReason = (json.reason || json.summary || "review result").slice(0, 120);
+    const rawReason = json.reason || json.summary || "review result";
+    finalReason = rawReason.slice(0, 120);
 
     const display = formatAdvisorDisplay("advisor:llm", decision, finalReason);
     writeText(CURRENT_PATH, `${display}\n`);
-    sendAdvisorHint(pi, decision, finalReason, json.summary || "", json.actions || []);
+    sendAdvisorHint(pi, decision, rawReason, json.summary || "", json.actions || []);
 
     if (json.verdict !== "on_track") {
       state.followUp = [json.summary, ...(json.actions?.slice(0, 2) || [])].filter(Boolean).join(" — ");

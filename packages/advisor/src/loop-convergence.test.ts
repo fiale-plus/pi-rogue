@@ -160,6 +160,17 @@ describe("advisor two-agent convergence", () => {
     const firstState = readAdvisorState();
     expect(firstState.reviewControl.lastDecision).toBe("review");
     expect(firstState.followUp).toContain("Closeout is incomplete");
+    expect(sendMessageMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        customType: "advisor:llm",
+        content: expect.stringContaining("Summary: Closeout is incomplete"),
+      }),
+      expect.anything(),
+    );
+    expect(sendMessageMock).toHaveBeenCalledWith(
+      expect.objectContaining({ content: expect.stringContaining("Actions: run focused check") }),
+      expect.anything(),
+    );
     expect(completeSimpleMock).toHaveBeenCalledTimes(1);
 
     const consumedPrompt = await preflight![0]({ systemPrompt: "SYS", prompt: basePrompt }, ctx);
