@@ -18,10 +18,12 @@ type Handler = (event: any, ctx: any) => any;
 
 type HandlerMap = Record<string, Handler[]>;
 type CommandMap = Record<string, { handler: (args: string, ctx: any) => any }>;
+type MessageRendererMap = Record<string, (message: any, options: { expanded?: boolean }, theme: any) => any>;
 
 function makeHandlers() {
   const handlers: HandlerMap = {};
   const commands: CommandMap = {};
+  const messageRenderers: MessageRendererMap = {};
   const sendMessage = vi.fn();
 
   const pi = {
@@ -29,7 +31,9 @@ function makeHandlers() {
       handlers[event] ??= [];
       handlers[event].push(handler);
     },
-    registerMessageRenderer: () => undefined,
+    registerMessageRenderer: (customType: string, renderer: MessageRendererMap[string]) => {
+      messageRenderers[customType] = renderer;
+    },
     registerCommand: (name: string, command: { handler: (args: string, ctx: any) => any }) => {
       commands[name] = command;
     },
@@ -42,7 +46,7 @@ function makeHandlers() {
     },
   };
 
-  return { handlers, commands, pi: pi as any, sendMessage };
+  return { handlers, commands, messageRenderers, pi: pi as any, sendMessage };
 }
 
 const ADVISOR_STATE_DIR = join(homedir(), ".pi", "agent", "pi-rogue", "advisor");
@@ -79,6 +83,7 @@ describe("advisor two-agent convergence", () => {
   let ctx: any;
   let handlers: HandlerMap;
   let commands: CommandMap;
+  let messageRenderers: MessageRendererMap;
   let sendMessageMock: ReturnType<typeof vi.fn>;
   let completeSimpleMock: ReturnType<typeof vi.fn>;
   let priorState: string | null = null;
@@ -93,6 +98,7 @@ describe("advisor two-agent convergence", () => {
     const setup = makeHandlers();
     handlers = setup.handlers;
     commands = setup.commands;
+    messageRenderers = setup.messageRenderers;
     sendMessageMock = setup.sendMessage;
 
     mkdirSync(dirname(ADVISOR_STATE_PATH), { recursive: true });
@@ -248,6 +254,92 @@ describe("advisor two-agent convergence", () => {
       }),
       expect.anything(),
     );
+  });
+
+  it("redacts transient clipboard image paths from emitted advisor handoffs", async () => {
+    const preflight = handlers.before_agent_start;
+    const turnEnd = handlers.turn_end;
+    const clipboardPath = "/var/folders/fm/rwczdnws5j58x7kbyn3vcx_h0000gn/T/clipboard-2026-06-04-012248-DEE3A154.png";
+
+    completeSimpleMock.mockResolvedValue({
+      content: [{
+        type: "text",
+        text: JSON.stringify({
+          verdict: "not_done",
+          summary: `The visible handoff should not include ${clipboardPath}`,
+          reason: `Expanded Ctrl+O output leaks ${clipboardPath}`,
+          actions: [`redact ${clipboardPath}`],
+          checklist: [],
+          notify: true,
+        }),
+      }],
+    });
+
+    await handlers.session_start?.[0]?.({}, ctx);
+    await preflight![0]({ systemPrompt: "SYS", prompt: `Continue the current goal ${clipboardPath}` }, ctx);
+    await turnEnd![0]({
+      toolResults: [{ toolName: "edit" }],
+      message: { role: "assistant", content: "Repo-side autoresearch is verified closed. Only optional external rollout/CI smoke remains." },
+    }, ctx);
+
+    expect(sendMessageMock).toHaveBeenCalled();
+    const sent = sendMessageMock.mock.calls[0]?.[0];
+    expect(JSON.stringify(sent)).not.toContain(clipboardPath);
+    expect(sent.content).toContain("[clipboard image]");
+    expect(readAdvisorState().followUp).toContain("[clipboard image]");
+
+    const theme = {
+      fg: (_name: string, text: string) => text,
+      bg: (_name: string, text: string) => text,
+      bold: (text: string) => text,
+    };
+    const expanded = messageRenderers["advisor:llm"](sent, { expanded: true }, theme).render(120).join("\n");
+    expect(expanded).toContain("full handoff:");
+    expect(expanded).toContain("Advisor verdict: review.");
+    expect(expanded).toContain("[clipboard image]");
+    expect(expanded).not.toContain(clipboardPath);
+  });
+
+  it("suppresses duplicate reason and summary in advisor handoffs", async () => {
+    const preflight = handlers.before_agent_start;
+    const turnEnd = handlers.turn_end;
+    const duplicate = "The agent made a safe attempt, but it did not demonstrate that the advisor post-turn review was induced.";
+
+    completeSimpleMock.mockResolvedValue({
+      content: [{
+        type: "text",
+        text: JSON.stringify({
+          verdict: "not_done",
+          reason: duplicate,
+          summary: duplicate,
+          actions: ["Invoke the real review hook if available."],
+          checklist: [],
+          notify: true,
+        }),
+      }],
+    });
+
+    await handlers.session_start?.[0]?.({}, ctx);
+    await preflight![0]({ systemPrompt: "SYS", prompt: "Continue the current goal" }, ctx);
+    await turnEnd![0]({
+      toolResults: [{ toolName: "edit" }],
+      message: { role: "assistant", content: "Repo-side autoresearch is verified closed. Only optional external rollout/CI smoke remains." },
+    }, ctx);
+
+    const sent = sendMessageMock.mock.calls[0]?.[0];
+    expect(sent.content).toContain(`Reason: ${duplicate}`);
+    expect(sent.content).not.toContain("Summary:");
+    expect(sent.details.summary).toBe("");
+
+    const theme = {
+      fg: (_name: string, text: string) => text,
+      bg: (_name: string, text: string) => text,
+      bold: (text: string) => text,
+    };
+    const collapsed = messageRenderers["advisor:llm"](sent, { expanded: false }, theme).render(120).join("\n");
+    const expanded = messageRenderers["advisor:llm"](sent, { expanded: true }, theme).render(120).join("\n");
+    expect(collapsed).not.toContain("summary:");
+    expect(expanded).not.toContain("Summary:");
   });
 
   it("renders manual advisor answers as advisor custom messages", async () => {

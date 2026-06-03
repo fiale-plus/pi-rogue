@@ -6,6 +6,7 @@ import {
   completeWithModelFallback,
   contentText,
   normalizeAdvisorConfig,
+  sanitizeAdvisorText,
   shouldRunCheckin,
   type AdvisorConfig,
 } from "./extension.js";
@@ -85,6 +86,17 @@ describe("advisor message extraction", () => {
     expect(contentText({ content: [{ type: "text", text: "done" }] })).toBe("done");
     expect(contentText([{ type: "toolResult", content: [{ type: "text", text: "ok" }] }])).toBe("ok");
     expect(contentText({ arbitrary: "shape" })).toBe("");
+  });
+
+  it("redacts transient clipboard image paths from advisor-facing text", () => {
+    const text = "see /var/folders/fm/rwczdnws5j58x7kbyn3vcx_h0000gn/T/clipboard-2026-06-04-012248-DEE3A154.png please";
+    expect(sanitizeAdvisorText(text)).toBe("see [clipboard image] please");
+    expect(contentText({ content: [{ type: "text", text }] })).toBe("see [clipboard image] please");
+  });
+
+  it("does not redact ordinary repo or temp file paths", () => {
+    const text = "inspect /Users/pavel/repos/fiale-plus/pi-rogue/packages/advisor/src/extension.ts and /tmp/benchmark-results.json";
+    expect(sanitizeAdvisorText(text)).toBe(text);
   });
 });
 
