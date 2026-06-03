@@ -10,11 +10,13 @@ Pi-Rogue is a modular Pi extension stack for **agentic session guidance** and **
 
 | Package | NPM Version | NPM Downloads | What it is |
 |---|---|---|---|
-| `@fiale-plus/pi-rogue-bundle` | [![bundle version](https://img.shields.io/npm/v/%40fiale-plus%2Fpi-rogue-bundle?style=flat-square)](https://www.npmjs.com/package/@fiale-plus/pi-rogue-bundle) | [![bundle downloads](https://img.shields.io/npm/dm/%40fiale-plus%2Fpi-rogue-bundle?style=flat-square)](https://www.npmjs.com/package/@fiale-plus/pi-rogue-bundle) | **Single consolidated artefact** for advisor + orchestration (recommended) |
+| `@fiale-plus/pi-rogue-bundle` | [![bundle version](https://img.shields.io/npm/v/%40fiale-plus%2Fpi-rogue-bundle?style=flat-square)](https://www.npmjs.com/package/@fiale-plus/pi-rogue-bundle) | [![bundle downloads](https://img.shields.io/npm/dm/%40fiale-plus%2Fpi-rogue-bundle?style=flat-square)](https://www.npmjs.com/package/@fiale-plus/pi-rogue-bundle) | **Single consolidated artefact** for advisor + orchestration + guardrails (recommended) |
 
 `@fiale-plus/pi-rogue-advisor` and `@fiale-plus/pi-rogue-orchestration` are internal packages in this repo; direct releases are paused and their logic ships only inside the bundle.
 
-Lab/greenhouse helper packages (`pi-rogue-guardrails`, `pi-rogue-brain`, `pi-rogue-repo-arch`) are internal and not published.
+`@fiale-plus/pi-rogue-guardrails` is now shipped with the bundle as a first-class command surface (`/guardrails`) while still remaining private as an internal package source.
+
+Lab/greenhouse helper packages (`pi-rogue-brain`, `pi-rogue-repo-arch`) remain internal and are not published as standalone packages.
 
 **Release policy:** Advisor and orchestration direct releases are on pause (packages private in source). All updates ship under the single `@fiale-plus/pi-rogue-bundle` artefact. See `docs/release.md` and `AGENTS.md` for the clean policy.
 
@@ -27,7 +29,7 @@ Lab/greenhouse helper packages (`pi-rogue-guardrails`, `pi-rogue-brain`, `pi-rog
 pi install npm:@fiale-plus/pi-rogue-bundle
 ```
 
-This is the single consolidated artefact. It includes advisor + orchestration logic (via bundling for a true single package).
+This is the single consolidated artefact. It includes advisor + orchestration + guardrails logic (via bundling for a true single package).
 
 **Note on paused packages:** Direct `pi install` of `@fiale-plus/pi-rogue-advisor` or `@fiale-plus/pi-rogue-orchestration` is no longer recommended and their independent releases are paused. Existing installs continue to work, but use the bundle for new work and updates. See `docs/release.md`.
 
@@ -49,10 +51,11 @@ This exposes all workspace packages for local development.
    - `/pi-rogue` — cockpit and command pointers
    - `/advisor` — strategic guidance
    - `/goal`, `/loop`, `/autoresearch`, `/autoresearch-lab` — orchestration primitives
+   - `/guardrails` — low-friction command-risk guardrails (ask-mode defaults to high-risk only)
 
 ## Published command surfaces
 
-All command surfaces below are provided by the single `@fiale-plus/pi-rogue-bundle` artefact (advisor + orchestration logic are included/bundled; their standalone packages have releases paused).
+All command surfaces below are provided by the single `@fiale-plus/pi-rogue-bundle` artefact (advisor/orchestration/guardrails logic are included/bundled; their standalone packages have releases paused).
 
 - `/advisor` — status, config, mode/review/model control, and questions
 - `/advisor status` — show active mode/review/model state and loop-owned check-ins
@@ -67,6 +70,7 @@ All command surfaces below are provided by the single `@fiale-plus/pi-rogue-bund
 - `/loop status|off|clear|stop|<interval> <instruction>`
 - `/autoresearch status|clear|<instruction>` — goal+loop-driven research flow
 - `/autoresearch-lab status|clear|<instruction>`
+- `/guardrails` — show/update command-risk policy (`/guardrails mode`, `/guardrails warn`, `/guardrails llm`, `/guardrails llm-model` (`auto|local|provider/model`), `/guardrails session`, `/guardrails add`, `/guardrails remove`)
 
 (Previously documented "Advisor package" and "Orchestration package" sections now route through the bundle only.)
 

@@ -1,12 +1,18 @@
 import { featureFile, readJson, writeJson } from "@fiale-plus/pi-core";
 
-export type GuardrailsMode = "ask" | "block" | "allow";
+export type GuardrailsMode = "off" | "ask" | "block" | "allow";
 
 export interface GuardrailsConfig {
   mode: GuardrailsMode;
   llmReview: {
     enabled: boolean;
+    model?: string;
   };
+  /**
+   * When true, "warn"-level findings still trigger confirmation.
+   * When false, "warn" only records the risk and is auto-allowed in ask mode.
+   */
+  askOnWarn: boolean;
   extraDangerousFragments: string[];
 }
 
@@ -17,22 +23,36 @@ const DEFAULT_CONFIG: GuardrailsConfig = {
   llmReview: {
     enabled: false,
   },
+  askOnWarn: false,
   extraDangerousFragments: [],
 };
 
 function normalizeMode(mode: unknown): GuardrailsMode {
-  return mode === "allow" || mode === "block" || mode === "ask" ? mode : "ask";
+  return mode === "off" || mode === "allow" || mode === "block" || mode === "ask"
+    ? mode
+    : "ask";
 }
 
 export function normalizeGuardrailsConfig(value: Partial<GuardrailsConfig>): GuardrailsConfig {
+  const normalizedFragments = Array.isArray(value.extraDangerousFragments)
+    ? [...new Set(value.extraDangerousFragments.map(String).map((fragment) => fragment.trim()).filter(Boolean))]
+    : [];
+
+  const normalizedModel = typeof value.llmReview?.model === "string" ? value.llmReview.model.trim() : undefined;
+  const canonicalModel = normalizedModel
+    ? (["local", "tiny", "binary"].includes(normalizedModel.toLowerCase())
+      ? "local"
+      : normalizedModel)
+    : undefined;
+
   return {
     mode: normalizeMode(value.mode),
     llmReview: {
       enabled: Boolean(value.llmReview?.enabled),
+      model: canonicalModel,
     },
-    extraDangerousFragments: Array.isArray(value.extraDangerousFragments)
-      ? value.extraDangerousFragments.map(String).map((fragment) => fragment.trim()).filter(Boolean)
-      : [],
+    askOnWarn: Boolean(value.askOnWarn),
+    extraDangerousFragments: normalizedFragments,
   };
 }
 

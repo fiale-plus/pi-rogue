@@ -44,7 +44,7 @@ Advisor and orchestration releases are on pause (packages marked private; no ind
 - Tag format: `pi-rogue-bundle-<semver>`
 - Release title: `<semver>`
 - Use the component prefix in the tag, not in the title.
-- Internal helper packages (guardrails/brain/repo-arch) remain lab/greenhouse and are not published independently.
+- Internal helper package `pi-rogue-guardrails` is now bundled in `@fiale-plus/pi-rogue-bundle`; `brain` and `repo-arch` remain lab/greenhouse and are not published independently.
 - Direct releases of advisor and pi-rogue-orchestration are paused per docs/release.md.
 
 ## Notes

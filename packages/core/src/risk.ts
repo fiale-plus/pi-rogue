@@ -14,6 +14,9 @@ export interface RiskScan {
 const DEFAULT_PATTERNS: RiskFinding[] = [
   { id: "rm", label: "rm", severity: "danger" },
   { id: "sudo", label: "sudo", severity: "warn" },
+  { id: "git-checkout", label: "git checkout", severity: "warn" },
+  { id: "git-restore", label: "git restore", severity: "warn" },
+  { id: "git-switch", label: "git switch", severity: "warn" },
   { id: "chmod-r", label: "chmod -R", severity: "danger" },
   { id: "chown", label: "chown", severity: "danger" },
   { id: "mkfs", label: "mkfs", severity: "danger" },
@@ -24,7 +27,6 @@ const DEFAULT_PATTERNS: RiskFinding[] = [
   { id: "curl-shell", label: "curl | sh", severity: "danger" },
   { id: "wget-shell", label: "wget | sh", severity: "danger" },
 ];
-
 function contains(command: string, fragment: string): boolean {
   return command.toLowerCase().includes(fragment.toLowerCase());
 }
@@ -44,6 +46,15 @@ export function scanShellCommand(command: string, extraFragments: string[] = [])
         break;
       case "sudo":
         if (/\bsudo\b/i.test(text)) findings.push(pattern);
+        break;
+      case "git-checkout":
+        if (/\bgit\s+checkout\b/i.test(text)) findings.push(pattern);
+        break;
+      case "git-restore":
+        if (/\bgit\s+restore\b/i.test(text)) findings.push(pattern);
+        break;
+      case "git-switch":
+        if (/\bgit\s+switch\b/i.test(text)) findings.push(pattern);
         break;
       case "chmod-r":
         if (/\bchmod\s+-R\b/i.test(text)) findings.push(pattern);

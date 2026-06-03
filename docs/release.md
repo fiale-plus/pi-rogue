@@ -36,9 +36,9 @@ Prefer the changelog entry to be done before the release is cut, not after.
 
 ## Greenhouse / paused packages
 
-- Internal helper packages (`pi-rogue-guardrails`, `pi-rogue-brain`, `pi-rogue-repo-arch`) remain lab/greenhouse scope and are not published.
+- Internal helper packages (`pi-rogue-brain`, `pi-rogue-repo-arch`) remain lab/greenhouse scope and are not published as standalone packages. `pi-rogue-guardrails` is currently shipped inside `@fiale-plus/pi-rogue-bundle` as a bundled extension.
 - `@fiale-plus/pi-rogue-advisor` and `@fiale-plus/pi-rogue-orchestration` releases are paused (see package.json "private": true). Their code evolves in this repo; updates ship exclusively via the bundle artefact.
-- `@fiale-plus/pi-rogue-bundle` is the single public/consolidated artefact for advisor + orchestration logic. Install via `pi install npm:@fiale-plus/pi-rogue-bundle`.
+- `@fiale-plus/pi-rogue-bundle` is the single public/consolidated artefact for advisor + orchestration + guardrails logic. Install via `pi install npm:@fiale-plus/pi-rogue-bundle`.
 
 ## Release process notes
 
@@ -46,7 +46,7 @@ Prefer the changelog entry to be done before the release is cut, not after.
 - The bundle publish workflow:
   - Runs checks + tests.
   - Syncs the bundle version from the tag (local only).
-  - Publishes the bundle (which bundles the advisor/orchestration logic via bundledDependencies for single-artefact install).
+  - Publishes the bundle (which bundles advisor/orchestration/guardrails logic via bundledDependencies for single-artefact install).
 - No need to release leaves first (they are no longer independently released).
 - For users: always use the bundle; direct leaf installs are deprecated/paused.
 

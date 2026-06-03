@@ -8,6 +8,10 @@
     "pi-package"
   ],
   "private": true,
+  "scripts": {
+    "check": "tsc -p ../../tsconfig.json --noEmit",
+    "test": "cd ../.. && vitest run packages/guardrails/src/*.test.ts"
+  },
   "main": "./src/index.ts",
   "exports": {
     ".": "./src/index.ts"
@@ -24,6 +28,7 @@
     "@earendil-works/pi-coding-agent": "^0.74.0"
   },
   "dependencies": {
+    "@earendil-works/pi-ai": "^0.74.1",
     "@fiale-plus/pi-core": "^0.1.0"
   },
   "publishConfig": {

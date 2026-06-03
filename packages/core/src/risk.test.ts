@@ -21,6 +21,26 @@ describe("scanShellCommand", () => {
     expect(result.findings.some((f) => f.id === "rm")).toBe(true);
   });
 
+  it("detects git checkout as a warning", () => {
+    const result = scanShellCommand("git checkout -- file.txt");
+    expect(result.safe).toBe(false);
+    expect(result.severity).toBe("warn");
+    expect(result.findings.some((f) => f.id === "git-checkout")).toBe(true);
+  });
+
+  it("detects git restore as a warning", () => {
+    const result = scanShellCommand("git restore src/index.ts");
+    expect(result.safe).toBe(false);
+    expect(result.severity).toBe("warn");
+    expect(result.findings.some((f) => f.id === "git-restore")).toBe(true);
+  });
+
+  it("detects git switch as a warning", () => {
+    const result = scanShellCommand("git switch -c feature/thing");
+    expect(result.safe).toBe(false);
+    expect(result.severity).toBe("warn");
+    expect(result.findings.some((f) => f.id === "git-switch")).toBe(true);
+  });
   it("detects rm only as a word boundary (not inside other words)", () => {
     const result = scanShellCommand("program --remove-all");
     expect(result.safe).toBe(true);
