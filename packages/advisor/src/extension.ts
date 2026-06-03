@@ -358,7 +358,7 @@ type AdvisorHintDetails = {
   decision?: "continue" | "review" | "defer";
   reason?: string;
   summary?: string;
-  actions?: string[];
+  actions?: unknown;
 };
 
 type ReviewControlState = {
@@ -379,8 +379,14 @@ type ReviewMaterialMeta = {
   isAgentEnd: boolean;
   materialSignals?: string[];
 };
-function advisorHandoffText(decision: "continue" | "review" | "defer", reason: string, summary: string, actions: string[] = []): string {
-  const limitedActions = actions.slice(0, 2);
+
+function normalizeAdvisorActions(actions: unknown): string[] {
+  const raw = Array.isArray(actions) ? actions : typeof actions === "string" ? [actions] : [];
+  return raw.map((action) => squish(action, 200)).filter(Boolean).slice(0, 2);
+}
+
+function advisorHandoffText(decision: "continue" | "review" | "defer", reason: string, summary: string, actions: unknown = []): string {
+  const limitedActions = normalizeAdvisorActions(actions);
   return [
     `Advisor verdict: ${decision}.`,
     reason ? `Reason: ${reason}` : "",
@@ -389,8 +395,8 @@ function advisorHandoffText(decision: "continue" | "review" | "defer", reason: s
   ].filter(Boolean).join("\n");
 }
 
-function sendAdvisorHint(pi: ExtensionAPI, decision: "continue" | "review" | "defer", reason: string, summary: string, actions: string[] = []) {
-  const limitedActions = actions.slice(0, 2);
+function sendAdvisorHint(pi: ExtensionAPI, decision: "continue" | "review" | "defer", reason: string, summary: string, actions: unknown = []) {
+  const limitedActions = normalizeAdvisorActions(actions);
   pi.sendMessage(
     {
       customType: "advisor:llm",
@@ -412,6 +418,7 @@ function renderAdvisorHint(message: any, options: { expanded?: boolean }, theme:
   const verdict = theme.bold(theme.fg(decisionColor, decision));
   const glyph = decision === "review" ? "↗" : decision === "defer" ? "…" : "·";
   const reason = squish(details.reason || contentText(message?.content) || "no extra detail", 180);
+  const actions = normalizeAdvisorActions(details.actions);
 
   const box = new Box(1, 1, (s: string) => theme.bg("customMessageBg", s));
   box.addChild(new Text(`${theme.bold(theme.fg(decisionColor, glyph))} ${source} ${verdict} · ${theme.fg("dim", "reason: ")}${reason}`, 0, 0));
@@ -419,8 +426,8 @@ function renderAdvisorHint(message: any, options: { expanded?: boolean }, theme:
   if (options.expanded && details.summary) {
     box.addChild(new Text(theme.fg("dim", `summary: ${squish(details.summary, 220)}`), 0, 0));
   }
-  if (options.expanded && details.actions?.length) {
-    box.addChild(new Text(theme.fg("dim", `actions: ${details.actions.map((a) => squish(a, 80)).join(" • ")}`), 0, 0));
+  if (options.expanded && actions.length) {
+    box.addChild(new Text(theme.fg("dim", `actions: ${actions.map((a) => squish(a, 80)).join(" • ")}`), 0, 0));
   }
 
   return box;
@@ -952,7 +959,7 @@ async function doReview(pi: ExtensionAPI, ctx: any, trigger: string, delta: stri
     sendAdvisorHint(pi, decision, rawReason, json.summary || "", json.actions || []);
 
     if (json.verdict !== "on_track") {
-      state.followUp = [json.summary, ...(json.actions?.slice(0, 2) || [])].filter(Boolean).join(" — ");
+      state.followUp = [json.summary, ...normalizeAdvisorActions(json.actions)].filter(Boolean).join(" — ");
     }
 
     markReviewApplied(state, signature, trigger, finalDecision, finalReason, false);

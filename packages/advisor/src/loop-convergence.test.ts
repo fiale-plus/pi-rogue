@@ -44,6 +44,7 @@ function makeHandlers() {
 const ADVISOR_STATE_DIR = join(homedir(), ".pi", "agent", "pi-rogue", "advisor");
 const ADVISOR_STATE_PATH = join(ADVISOR_STATE_DIR, "state.json");
 const ADVISOR_CONFIG_PATH = join(ADVISOR_STATE_DIR, "config.json");
+const ADVISOR_CACHE_PATH = join(ADVISOR_STATE_DIR, "cache.json");
 
 function readAdvisorState(): any {
   return JSON.parse(readFileSync(ADVISOR_STATE_PATH, "utf8"));
@@ -77,10 +78,12 @@ describe("advisor two-agent convergence", () => {
   let completeSimpleMock: ReturnType<typeof vi.fn>;
   let priorState: string | null = null;
   let priorConfig: string | null = null;
+  let priorCache: string | null = null;
 
   beforeEach(() => {
     priorState = existsSync(ADVISOR_STATE_PATH) ? readFileSync(ADVISOR_STATE_PATH, "utf8") : null;
     priorConfig = existsSync(ADVISOR_CONFIG_PATH) ? readFileSync(ADVISOR_CONFIG_PATH, "utf8") : null;
+    priorCache = existsSync(ADVISOR_CACHE_PATH) ? readFileSync(ADVISOR_CACHE_PATH, "utf8") : null;
 
     const setup = makeHandlers();
     handlers = setup.handlers;
@@ -88,6 +91,7 @@ describe("advisor two-agent convergence", () => {
 
     mkdirSync(dirname(ADVISOR_STATE_PATH), { recursive: true });
     writeFileSync(ADVISOR_CONFIG_PATH, JSON.stringify({ mode: "auto", review: "light", checkins: "off", checkinIntervalMinutes: 30 }, null, 2), "utf8");
+    writeFileSync(ADVISOR_CACHE_PATH, "{}", "utf8");
     writeFileSync(ADVISOR_STATE_PATH, JSON.stringify({
       turns: 0,
       lastTask: "",
@@ -135,6 +139,12 @@ describe("advisor two-agent convergence", () => {
       writeFileSync(ADVISOR_CONFIG_PATH, "{}", "utf8");
     } else {
       writeFileSync(ADVISOR_CONFIG_PATH, priorConfig, "utf8");
+    }
+
+    if (priorCache === null) {
+      writeFileSync(ADVISOR_CACHE_PATH, "{}", "utf8");
+    } else {
+      writeFileSync(ADVISOR_CACHE_PATH, priorCache, "utf8");
     }
   });
 
@@ -192,6 +202,46 @@ describe("advisor two-agent convergence", () => {
 
     const withoutFollowUp = await preflight![0]({ systemPrompt: "SYS", prompt: basePrompt }, ctx);
     expect(String(withoutFollowUp?.systemPrompt)).not.toContain("Advisor follow-up");
+  });
+
+  it("normalizes string actions in advisor handoffs", async () => {
+    const preflight = handlers.before_agent_start;
+    const turnEnd = handlers.turn_end;
+    expect(preflight?.length).toBe(1);
+    expect(turnEnd?.length).toBe(1);
+
+    completeSimpleMock.mockResolvedValue({
+      content: [{
+        type: "text",
+        text: JSON.stringify({
+          verdict: "not_done",
+          summary: "Closeout is incomplete",
+          reason: "Verification is missing",
+          actions: "run focused check",
+          checklist: [],
+          notify: true,
+        }),
+      }],
+    });
+
+    await handlers.session_start?.[0]?.({}, ctx);
+    await preflight![0]({ systemPrompt: "SYS", prompt: "Continue the current goal" }, ctx);
+    await turnEnd![0]({
+      toolResults: [{ toolName: "edit" }],
+      message: { role: "assistant", content: "Repo-side autoresearch is verified closed. Only optional external rollout/CI smoke remains." },
+    }, ctx);
+
+    const state = readAdvisorState();
+    expect(completeSimpleMock).toHaveBeenCalledTimes(1);
+    expect(state.followUp).toBe("Closeout is incomplete — run focused check");
+    expect(sendMessageMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        customType: "advisor:llm",
+        content: expect.stringContaining("Actions: run focused check"),
+        details: expect.objectContaining({ actions: ["run focused check"] }),
+      }),
+      expect.anything(),
+    );
   });
 
   it("does not re-run advisory review on repeated agent-end material snapshots", async () => {
