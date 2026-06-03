@@ -234,16 +234,22 @@ function hash(...parts: string[]): string {
 
 function brief(s: SessionState): string {
   const lines: string[] = [];
-  if (s.lastTask) lines.push(`Task: ${truncate(s.lastTask, 200)}`);
+  if (s.lastTask) lines.push(`Task: ${truncate(sanitizeAdvisorText(s.lastTask), 200)}`);
   if (s.turns) lines.push(`Turns: ${s.turns}`);
   if (s.notes.length) { lines.push("Notes:"); s.notes.slice(-4).forEach(n => lines.push(`- ${truncate(n, 200)}`)); }
-  if (s.files.length) lines.push(`Files: ${s.files.slice(-4).join(", ")}`);
-  if (s.errors.length) lines.push(`Errors: ${s.errors.slice(-2).join(" | ")}`);
+  if (s.files.length) lines.push(`Files: ${sanitizeAdvisorText(s.files.slice(-4).join(", "))}`);
+  if (s.errors.length) lines.push(`Errors: ${sanitizeAdvisorText(s.errors.slice(-2).join(" | "))}`);
   return lines.join("\n").slice(0, 1200);
 }
 
+const CLIPBOARD_IMAGE_PATH_RE = /(?:\/(?:private\/)?var\/folders\/[^\s"'`<>]+\/T|\/(?:tmp|var\/tmp))\/clipboard-\d{4}-\d{2}-\d{2}-[A-Za-z0-9-]+\.(?:png|jpe?g|gif|webp)\b/g;
+
+export function sanitizeAdvisorText(text: unknown): string {
+  return String(text ?? "").replace(CLIPBOARD_IMAGE_PATH_RE, "[clipboard image]");
+}
+
 function squish(t: unknown, max = 200): string {
-  const s = String(t ?? "").replace(/\s+/g, " ").trim();
+  const s = sanitizeAdvisorText(t).replace(/\s+/g, " ").trim();
   return s.length <= max ? s : s.slice(0, max - 1).trimEnd() + "…";
 }
 
@@ -386,35 +392,64 @@ function normalizeAdvisorActions(actions: unknown): string[] {
   return raw.map((action) => squish(action, 200)).filter(Boolean).slice(0, 2);
 }
 
+function comparableAdvisorText(text: string): string {
+  return sanitizeAdvisorText(text).toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+}
+
+function isRedundantAdvisorSummary(reason: string, summary: string): boolean {
+  const r = comparableAdvisorText(reason);
+  const s = comparableAdvisorText(summary);
+  if (!s) return true;
+  if (!r) return false;
+  if (r === s) return true;
+  if (Math.min(r.length, s.length) >= 60 && (r.includes(s) || s.includes(r))) return true;
+
+  const rTokens = new Set(r.split(" ").filter((token) => token.length > 2));
+  const sTokens = new Set(s.split(" ").filter((token) => token.length > 2));
+  if (rTokens.size < 8 || sTokens.size < 8) return false;
+  const overlap = [...sTokens].filter((token) => rTokens.has(token)).length;
+  return overlap / Math.max(rTokens.size, sTokens.size) >= 0.86;
+}
+
+function distinctAdvisorSummary(reason: string, summary: string): string {
+  const cleanSummary = sanitizeAdvisorText(summary).trim();
+  return isRedundantAdvisorSummary(reason, cleanSummary) ? "" : cleanSummary;
+}
+
 function advisorHandoffText(decision: "continue" | "review" | "defer", reason: string, summary: string, actions: unknown = []): string {
   const limitedActions = normalizeAdvisorActions(actions);
+  const cleanReason = sanitizeAdvisorText(reason);
+  const cleanSummary = distinctAdvisorSummary(cleanReason, summary);
   return [
     `Advisor verdict: ${decision}.`,
-    reason ? `Reason: ${reason}` : "",
-    summary ? `Summary: ${summary}` : "",
+    cleanReason ? `Reason: ${cleanReason}` : "",
+    cleanSummary ? `Summary: ${cleanSummary}` : "",
     limitedActions.length ? `Actions: ${limitedActions.join("; ")}` : "",
   ].filter(Boolean).join("\n");
 }
 
 function sendAdvisorHint(pi: ExtensionAPI, decision: "continue" | "review" | "defer", reason: string, summary: string, actions: unknown = []) {
+  const cleanReason = sanitizeAdvisorText(reason);
+  const cleanSummary = distinctAdvisorSummary(cleanReason, summary);
   const limitedActions = normalizeAdvisorActions(actions);
   pi.sendMessage(
     {
       customType: "advisor:llm",
-      content: advisorHandoffText(decision, reason, summary, limitedActions),
+      content: advisorHandoffText(decision, cleanReason, cleanSummary, limitedActions),
       display: true,
-      details: { decision, reason, summary, actions: limitedActions },
+      details: { kind: "handoff", decision, reason: cleanReason, summary: cleanSummary, actions: limitedActions },
     },
     { deliverAs: "followUp" },
   );
 }
 
 function sendAdvisorAnswer(pi: ExtensionAPI, text: string) {
+  const cleanText = sanitizeAdvisorText(text);
   pi.sendMessage({
     customType: "advisor:llm",
-    content: text,
+    content: cleanText,
     display: true,
-    details: { kind: "answer", summary: text },
+    details: { kind: "answer", summary: cleanText },
   });
 }
 
@@ -425,7 +460,7 @@ function renderAdvisorHint(message: any, options: { expanded?: boolean }, theme:
   const source = theme.bold(theme.fg(sourceColor, `[${customType}]`));
 
   if (details.kind === "answer") {
-    const body = contentText(message?.content) || details.summary || "No advisor response.";
+    const body = sanitizeAdvisorText(contentText(message?.content) || details.summary || "No advisor response.");
     const box = new Box(1, 1, (s: string) => theme.bg("customMessageBg", s));
     box.addChild(new Text(`${theme.bold(theme.fg("success", "↗"))} ${source} ${theme.bold(theme.fg("success", "answer"))}`, 0, 0));
     box.addChild(new Text(theme.fg("dim", body), 0, 0));
@@ -438,19 +473,30 @@ function renderAdvisorHint(message: any, options: { expanded?: boolean }, theme:
   const glyph = decision === "review" ? "↗" : decision === "defer" ? "…" : "·";
   const reason = squish(details.reason || contentText(message?.content) || "no extra detail", 180);
   const actions = normalizeAdvisorActions(details.actions);
+  const fullHandoff = sanitizeAdvisorText(
+    (details.reason || details.summary || actions.length)
+      ? advisorHandoffText(decision, details.reason || "", details.summary || "", actions)
+      : contentText(message?.content),
+  );
 
   const box = new Box(1, 1, (s: string) => theme.bg("customMessageBg", s));
   box.addChild(new Text(`${theme.bold(theme.fg(decisionColor, glyph))} ${source} ${verdict}`, 0, 0));
   box.addChild(new Text(theme.fg("dim", `reason: ${reason}`), 0, 0));
 
-  if (details.summary) {
-    box.addChild(new Text(theme.fg("dim", `summary: ${squish(details.summary, 220)}`), 0, 0));
-  }
-  if (actions.length) {
-    box.addChild(new Text(theme.fg("dim", `actions: ${actions.map((a) => squish(a, 80)).join(" • ")}`), 0, 0));
-  }
-  if (!options.expanded && contentText(message?.content).split("\n").length > 3) {
-    box.addChild(new Text(theme.fg("dim", "Ctrl+O full advisor handoff"), 0, 0));
+  if (options.expanded) {
+    box.addChild(new Text(theme.fg("dim", "full handoff:"), 0, 0));
+    box.addChild(new Text(theme.fg("dim", fullHandoff), 0, 0));
+  } else {
+    const summary = distinctAdvisorSummary(details.reason || "", details.summary || "");
+    if (summary) {
+      box.addChild(new Text(theme.fg("dim", `summary: ${squish(summary, 220)}`), 0, 0));
+    }
+    if (actions.length) {
+      box.addChild(new Text(theme.fg("dim", `actions: ${actions.map((a) => squish(a, 80)).join(" • ")}`), 0, 0));
+    }
+    if (fullHandoff.split("\n").length > 3) {
+      box.addChild(new Text(theme.fg("dim", "Ctrl+O full advisor handoff"), 0, 0));
+    }
   }
 
   return box;
@@ -458,15 +504,15 @@ function renderAdvisorHint(message: any, options: { expanded?: boolean }, theme:
 
 /** Extract readable text from message content (handles strings, blocks, and nested message payloads). */
 export function contentText(content: unknown): string {
-  if (typeof content === "string") return content.trim();
+  if (typeof content === "string") return sanitizeAdvisorText(content).trim();
   if (content && typeof content === "object" && !Array.isArray(content)) {
     const obj = content as Record<string, unknown>;
-    if (typeof obj.text === "string") return obj.text.trim();
+    if (typeof obj.text === "string") return sanitizeAdvisorText(obj.text).trim();
     if (obj.content !== undefined) return contentText(obj.content);
     if (obj.message !== undefined) return contentText(obj.message);
     return "";
   }
-  if (!Array.isArray(content)) return String(content ?? "").trim();
+  if (!Array.isArray(content)) return sanitizeAdvisorText(content).trim();
   const parts: string[] = [];
   for (const item of content) {
     if (!item) continue;
@@ -483,7 +529,7 @@ export function contentText(content: unknown): string {
       if (nested) parts.push(nested);
     }
   }
-  return parts.join("\n").replace(/\s+/g, " ").trim();
+  return sanitizeAdvisorText(parts.join("\n")).replace(/\s+/g, " ").trim();
 }
 
 /** Check if a tool result or message indicates an actual execution failure */
@@ -974,7 +1020,7 @@ async function doReview(pi: ExtensionAPI, ctx: any, trigger: string, delta: stri
       : json.verdict === "not_done" ? "review"
         : "defer";
     finalDecision = decision;
-    const rawReason = json.reason || json.summary || "review result";
+    const rawReason = sanitizeAdvisorText(json.reason || json.summary || "review result");
     finalReason = rawReason.slice(0, 120);
 
     const display = formatAdvisorDisplay("advisor:llm", decision, finalReason);
@@ -982,7 +1028,7 @@ async function doReview(pi: ExtensionAPI, ctx: any, trigger: string, delta: stri
     sendAdvisorHint(pi, decision, rawReason, json.summary || "", json.actions || []);
 
     if (json.verdict !== "on_track") {
-      state.followUp = [json.summary, ...normalizeAdvisorActions(json.actions)].filter(Boolean).join(" — ");
+      state.followUp = [sanitizeAdvisorText(json.summary), ...normalizeAdvisorActions(json.actions)].filter(Boolean).join(" — ");
     }
 
     markReviewApplied(state, signature, trigger, finalDecision, finalReason, false);
