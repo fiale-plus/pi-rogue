@@ -6,6 +6,8 @@ Reference data from real `pi-fiale-plus` development sessions.
 
 context-mode indexes tool output into a local FTS5 database, sending only summaries to the LLM instead of full raw output.
 
+For the proposed next layer that turns this into bounded storage, stable handles, and fast lookup mechanics, see [Context footprint broker proposal](context-footprint-broker.md).
+
 | Metric | Value |
 |---|---|
 | Session duration | 2h 22m |
