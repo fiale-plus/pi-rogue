@@ -375,9 +375,11 @@ These can be done immediately without refactoring:
    - Simple script to count label distributions from router.jsonl
    - Useful for monitoring
 
-3. **Expand REVIEW_SYSTEM prompt** — 1 hour
-   - Add 2-3 examples
-   - Add confidence calibration guidance
+3. **Expand REVIEW_SYSTEM prompt** — 1 hour ✅ **IMPLEMENTED**
+   - Added 3 examples (on_track, course_correct, not_done)
+   - Added confidence calibration guidance (0.80+, 0.60-0.79, <0.60)
+   - Added material-vs-cosmetic distinction
+   - Also expanded ADVISOR_SYSTEM with actionable guidance
 
 4. **Add /advisor model status** — 30 min
    - Show current binary gate model version, last seed update
