@@ -7,6 +7,9 @@
   "keywords": [
     "pi-package"
   ],
+  "scripts": {
+    "test": "cd ../.. && vitest run packages/core/src/*.test.ts"
+  },
   "private": true,
   "main": "./src/index.ts",
   "exports": {

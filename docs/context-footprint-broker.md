@@ -186,6 +186,15 @@ The model should be advisory only. Deterministic rules remain the fallback:
 
 This keeps routing lightning fast and prevents a weak model from losing important state.
 
+## Implementation status
+
+This PR now includes a first narrow implementation slice in `@fiale-plus/pi-core`:
+
+- `BoundedContextBroker` defines the publish, lookup, pin, prune, status, and prompt-brief contract.
+- `createInMemoryContextBroker` provides an in-process bounded broker for tests, prototypes, and future extension wiring.
+- The in-memory broker supports stable `ctx://...` handles, byte and record caps, TTL pruning, pinned artifacts, and lookup by handle, session, kind, tag, path, command prefix, branch, and text.
+- This slice is intentionally non-persistent. Durable SQLite/blob storage remains a later phase.
+
 ## Integration plan
 
 ### Phase 1: proposal and audit
