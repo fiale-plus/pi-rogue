@@ -2,6 +2,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { homedir } from "node:os";
+import { extractBinaryGateFeatureCounts } from "../packages/advisor/src/binary-gate-features.js";
 
 type BinaryLabel = "continue" | "escalate";
 interface BinaryRow {
@@ -75,99 +76,8 @@ function readJsonl<T>(file: string): T[] {
     .map((line) => JSON.parse(line) as T);
 }
 
-function tokens(text: string): string[] {
-  const norm = String(text ?? "")
-    .toLowerCase()
-    .replace(/https?:\/\/\S+/g, " url ")
-    .replace(/[^a-z0-9\s']/g, " ")
-    .replace(/\s+/g, " ")
-    .trim();
-  return norm ? norm.split(" ").filter(Boolean) : [];
-}
-
-function inc(counter: Map<string, number>, key: string, by = 1) {
-  counter.set(key, (counter.get(key) || 0) + by);
-}
-
 function extractFeatures(text: string): Map<string, number> {
-  const counts = new Map<string, number>();
-  const toks = tokens(text);
-  const lower = String(text ?? "").toLowerCase().replace(/https?:\/\/\S+/g, " url ").replace(/[^a-z0-9\s']/g, " ").replace(/\s+/g, " ").trim();
-
-  for (const n of [1, 2]) {
-    if (toks.length >= n) {
-      for (let i = 0; i <= toks.length - n; i++) {
-        inc(counts, `w${n}:${toks.slice(i, i + n).join("_")}`);
-      }
-    }
-  }
-
-  const norm = ` ${lower} `;
-  for (const n of [3, 4]) {
-    if (norm.length >= n) {
-      for (let i = 0; i <= norm.length - n; i++) {
-        const gram = norm.slice(i, i + n);
-        if (!/^\s+$/.test(gram)) {
-          inc(counts, `c${n}:${gram}`);
-        }
-      }
-    }
-  }
-
-  if (toks.length > 0) inc(counts, `pref1:${toks[0]}`);
-  if (toks.length > 1) inc(counts, `pref2:${toks.slice(0, 2).join("_")}`);
-  if (toks.length > 2) inc(counts, `pref3:${toks.slice(0, 3).join("_")}`);
-  if (text.includes("?")) inc(counts, "cue:question_mark");
-
-  const cues = [
-    "check",
-    "why",
-    "what",
-    "how",
-    "should",
-    "status",
-    "stats",
-    "log",
-    "logs",
-    "review",
-    "diff",
-    "pr",
-    "build",
-    "run",
-    "test",
-    "deploy",
-    "fix",
-    "debug",
-    "install",
-    "configure",
-    "plan",
-    "continue",
-    "resume",
-    "compact",
-    "research",
-    "update",
-    "patch",
-    "cleanup",
-    "remove",
-  ];
-  const multi = [
-    "what is",
-    "what's",
-    "safe to use",
-    "pull request",
-    "model family",
-    "how does",
-    "next step",
-    "path forward",
-    "should we",
-    "what should",
-  ];
-
-  const tokenSet = new Set(toks);
-  for (const cue of cues) if (tokenSet.has(cue)) inc(counts, `cue:${cue}`);
-  for (const cue of multi) if (lower.includes(cue)) inc(counts, `cue:${cue.replace(/\s+/g, "_")}`);
-
-  return counts;
+  return extractBinaryGateFeatureCounts(text);
 }
 
 function vectorize(counts: Map<string, number>, index: Map<string, number>, idf: number[]) {
