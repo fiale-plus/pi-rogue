@@ -1,0 +1,60 @@
+{
+  "input": "docs/benchmark-evidence/binary-gate-advisor-flow-weighted-2026-06-04/holdout.jsonl",
+  "model": "/tmp/pi-rogue-binary-extra-final/current-promoted-before-extra.json",
+  "rows": 21,
+  "counts": {
+    "continue": 11,
+    "escalate": 10
+  },
+  "accuracy": 0.9047619047619048,
+  "escalatePrecision": 1,
+  "escalateRecall": 0.8,
+  "escalateF1": 0.888888888888889,
+  "continuePrecision": 0.8461538461538461,
+  "continueRecall": 1,
+  "continueF1": 0.9166666666666666,
+  "confusion": [
+    {
+      "actual": "continue",
+      "predicted": [
+        [
+          "continue",
+          11
+        ],
+        [
+          "escalate",
+          0
+        ]
+      ]
+    },
+    {
+      "actual": "escalate",
+      "predicted": [
+        [
+          "continue",
+          2
+        ],
+        [
+          "escalate",
+          8
+        ]
+      ]
+    }
+  ],
+  "misses": [
+    {
+      "text": "Can you force a post-turn review on the last handoff before we finish this task?",
+      "source": "advisor_flow_v3",
+      "actual": "escalate",
+      "predicted": "continue",
+      "conf": 0.5802394442527399
+    },
+    {
+      "text": "Check whether this candidate is safe to promote to runtime default or hold back for more rows.",
+      "source": "advisor_flow_v3",
+      "actual": "escalate",
+      "predicted": "continue",
+      "conf": 0.78046269421536
+    }
+  ]
+}

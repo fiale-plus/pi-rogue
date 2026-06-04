@@ -1,0 +1,45 @@
+{
+  "input": "data/routing/terminal-core-heldout-split.jsonl",
+  "model": "data/routing/binary-gate-model-terminal-core-full.json",
+  "rows": 32,
+  "counts": {
+    "continue": 3,
+    "escalate": 29
+  },
+  "accuracy": 1,
+  "escalatePrecision": 1,
+  "escalateRecall": 1,
+  "escalateF1": 1,
+  "continuePrecision": 1,
+  "continueRecall": 1,
+  "continueF1": 1,
+  "confusion": [
+    {
+      "actual": "continue",
+      "predicted": [
+        [
+          "continue",
+          3
+        ],
+        [
+          "escalate",
+          0
+        ]
+      ]
+    },
+    {
+      "actual": "escalate",
+      "predicted": [
+        [
+          "continue",
+          0
+        ],
+        [
+          "escalate",
+          29
+        ]
+      ]
+    }
+  ],
+  "misses": []
+}
