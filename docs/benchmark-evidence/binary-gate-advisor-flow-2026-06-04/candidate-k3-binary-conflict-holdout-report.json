@@ -1,0 +1,95 @@
+{
+  "input": "data/routing/binary-conflict-holdout.jsonl",
+  "model": "/tmp/pi-rogue-binary-flow-2026-06-04/model-final-k3.json",
+  "rows": 60,
+  "counts": {
+    "continue": 33,
+    "escalate": 27
+  },
+  "accuracy": 0.8833333333333333,
+  "escalatePrecision": 0.8125,
+  "escalateRecall": 0.9629629629629629,
+  "escalateF1": 0.8813559322033898,
+  "continuePrecision": 0.9642857142857143,
+  "continueRecall": 0.8181818181818182,
+  "continueF1": 0.8852459016393442,
+  "confusion": [
+    {
+      "actual": "continue",
+      "predicted": [
+        [
+          "continue",
+          27
+        ],
+        [
+          "escalate",
+          6
+        ]
+      ]
+    },
+    {
+      "actual": "escalate",
+      "predicted": [
+        [
+          "continue",
+          1
+        ],
+        [
+          "escalate",
+          26
+        ]
+      ]
+    }
+  ],
+  "misses": [
+    {
+      "text": "well I have ollama cloud sub, but go with 1/2/3 also id love to ahve /local-router and then scroll options there. also see that those qwen ones are the same in statusline. also make sure the main model is truly delegating stuff to the local one ok",
+      "source": "gold",
+      "actual": "escalate",
+      "predicted": "continue",
+      "conf": 0.7390269358777334
+    },
+    {
+      "text": "hey again you run it here /private/tmp/lr-overnight/run.sh not in the main location ok. This is the git worktree. Kill anything if you started form main location and check whats up in that got worktree one",
+      "source": "gold",
+      "actual": "continue",
+      "predicted": "escalate",
+      "conf": 0.6903909678008532
+    },
+    {
+      "text": "hey can you pdate tooling and have a look on the models competing for the perf in HF, also I should have their API token in the env: - update llama cpp build we got form MTP PR branch - get llama-benchy to veryfy llms - get MTP new candidates to verify - /autoresearch on the best model to run or maybe the current qwen it is Qwen3.6 35B A3B MTP Q4_0 + ngram-mod (64K, ~36 tok/s) - research and check if you can on full/empty ctw, different size, be carful with the mem, do not spill over get detailed report as done and give me the winner",
+      "source": "gold",
+      "actual": "continue",
+      "predicted": "escalate",
+      "conf": 0.8806628704611266
+    },
+    {
+      "text": "this turn reported as \"advisor: not called — Turn reported failure\" - check when you have time and proceed ont he main path with baseline eval!",
+      "source": "gold",
+      "actual": "continue",
+      "predicted": "escalate",
+      "conf": 0.9405971542880301
+    },
+    {
+      "text": "now go to the new git worktree and fork from the latest mainline - /autoresearch on a maatter of gemma4 models use as well as ANE / Apple silicone / MLX use here. Gemma seems extremely efficient, maybe we want to use tuned one? - check hugging face. Or Apple silicon optimized one - agsin check models. On ANE and hardware capabilities - again explore options, we want to avoid laptop conversion to the room heater or lenovo P1 you know - discharging in 30 minutes. Be smart in there. Maybe use autoresearch lab skill - decide on your own",
+      "source": "gold",
+      "actual": "continue",
+      "predicted": "escalate",
+      "conf": 0.8208407696572378
+    },
+    {
+      "text": "lol, you check on error - this was a part of the log",
+      "source": "gold",
+      "actual": "continue",
+      "predicted": "escalate",
+      "conf": 0.552474922405109
+    },
+    {
+      "text": "hey lets renovate docs - on top of the latest mainline indeed - cross check if we have verything aligned to each other - remove essence traces, not going with that - make sure docs are real short and nice and maybe place them to dedicated docs location - check and indicate in the roadmap what achieved, what left - no MCP to be done here, CLI only - review documentation pack across - make it sound - next work after pr created - base on top and stack as the next one - on release flow, maybe lets take it form https://github.com/fiale-plus/tradingview-mcp-server",
+      "source": "gold",
+      "actual": "continue",
+      "predicted": "escalate",
+      "conf": 0.6493704650749896
+    }
+  ]
+}

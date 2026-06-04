@@ -1,0 +1,74 @@
+{
+  "input": "docs/benchmark-evidence/binary-gate-advisor-flow-2026-06-04/holdout.jsonl",
+  "model": "packages/advisor/assets/binary-gate-model.json",
+  "rows": 14,
+  "counts": {
+    "continue": 9,
+    "escalate": 5
+  },
+  "accuracy": 0.7142857142857143,
+  "escalatePrecision": 0.6,
+  "escalateRecall": 0.6,
+  "escalateF1": 0.6,
+  "continuePrecision": 0.7777777777777778,
+  "continueRecall": 0.7777777777777778,
+  "continueF1": 0.7777777777777778,
+  "confusion": [
+    {
+      "actual": "continue",
+      "predicted": [
+        [
+          "continue",
+          7
+        ],
+        [
+          "escalate",
+          2
+        ]
+      ]
+    },
+    {
+      "actual": "escalate",
+      "predicted": [
+        [
+          "continue",
+          2
+        ],
+        [
+          "escalate",
+          3
+        ]
+      ]
+    }
+  ],
+  "misses": [
+    {
+      "text": "use advisor to judge whether this retrain candidate is safe to promote",
+      "source": "advisor_flow_2026_06_04",
+      "actual": "escalate",
+      "predicted": "continue",
+      "conf": 0.7037153823234573
+    },
+    {
+      "text": "compare baseline and candidate binary gate results before promotion",
+      "source": "advisor_flow_2026_06_04",
+      "actual": "escalate",
+      "predicted": "continue",
+      "conf": 0.5689647862980799
+    },
+    {
+      "text": "collapsed advisor card is fine but expanded still repeats the short reason line",
+      "source": "advisor_flow_2026_06_04",
+      "actual": "continue",
+      "predicted": "escalate",
+      "conf": 0.5778940028354185
+    },
+    {
+      "text": "merge the UX PR, release the bundle, reinstall it, and report",
+      "source": "advisor_flow_2026_06_04",
+      "actual": "continue",
+      "predicted": "escalate",
+      "conf": 0.9991993950649652
+    }
+  ]
+}
