@@ -80,25 +80,28 @@ The three-stage pipeline (heuristics → binary gate → LLM review) is well-des
 
 ### 3.1 HIGH PRIORITY
 
-#### 3.1.1 Binary Gate Model Training Pipeline (Medium-High Impact)
+#### 3.1.1 Binary Gate Model Training Governance (Medium-High Impact)
 
-**Problem**: The binary gate model is seeded from a static JSON file (`binary-gate-model.json`). There is no documented retraining pipeline or evaluation framework for updating it.
+**Status after PR #85**: The binary gate now has shared runtime/training feature extraction, train/eval scripts, optional row weighting, and a concise candidate-training runbook at `docs/routing-binary-gate.md`.
+
+**Remaining gap**: Model updates still need governance rather than more raw artifact capture. Candidate reports should stay in `/tmp` by default, and promotion should happen only after explicit approval against guard slices.
 
 **Current state**:
 - Model is loaded from `assets/binary-gate-model.json` and copied to user's state directory
 - Model validation checks `kind === "binary-logreg-v1"`
-- No evaluation metrics or accuracy tracking for the model itself
+- Training/eval commands exist in `scripts/train-binary-gate.ts` and `scripts/eval-binary-gate-file.ts`
+- Guard slices and evidence policy are documented in `docs/routing-binary-gate.md`
 
 **Recommendation**:
 ```
-1. Create scripts/evaluate-binary-gate.sh — evaluate model accuracy on logged router decisions
-2. Create scripts/retrain-binary-gate.sh — retrain from router logs (evals/advisor-router.jsonl)
-3. Add model version tracking with accuracy metadata
-4. Document retraining procedure in docs/
+1. Keep raw candidate datasets/reports in /tmp unless explicitly approved for commit
+2. Track promoted model SHA and high-level metrics in PR notes or an external notebook
+3. Add optional model metadata/version fields if future releases need runtime model status
+4. Continue using guard-slice evals before replacing packages/advisor/assets/binary-gate-model.json
 ```
 
-**Effort**: 2-3 days
-**Risk**: Low — retraining is offline, doesn't affect runtime
+**Effort**: 0.5-1 day
+**Risk**: Low — governance/docs only, retraining remains offline
 
 ---
 
@@ -202,32 +205,20 @@ This means the binary gate model is largely re-encoding what the heuristics alre
 
 #### 3.2.2 Review System Prompt Quality (Medium Impact)
 
-**Current state**:
-```
-REVIEW_SYSTEM = `You are a senior reviewer. An AI agent just completed work. Assess it. Return ONLY valid JSON:
-{
-  "verdict": "on_track"|"course_correct"|"not_done",
-  ...
-}`
-```
+**Status after PR #85**: The review/advisor prompts now include richer examples, confidence calibration guidance, and material-vs-cosmetic distinctions.
 
-**Issues**:
-- System prompt is only 40 words — very minimal
-- No examples of correct/incorrect responses
-- No guidance on confidence calibration
-- No mention of what "material" changes are vs. cosmetic
+**Remaining issues**:
+- Prompt quality still needs monitoring against real review outcomes.
+- Output validation could be stricter when an LLM returns malformed JSON.
 
 **Recommendation**:
 ```
-1. Expand REVIEW_SYSTEM to include:
-   - 2-3 examples of correct JSON responses
-   - Guidance on when to use each verdict
-   - Confidence calibration instructions
-2. Add a similar system prompt for preflight classification
-3. Add a system prompt for check-in prompts (currently ad-hoc in `buildAdvisorCheckinPrompt`)
-4. Add output validation in the LLM call (e.g., reject non-JSON responses)
+1. Keep example-backed review prompts in place
+2. Add regression tests for expected verdict calibration
+3. Add stricter output validation in the LLM call (e.g., reject non-JSON responses)
+```
 
-**Effort**: 1 day
+**Effort**: 0.5-1 day
 **Risk**: Low — improves LLM output quality without changing architecture
 
 ---
@@ -348,18 +339,18 @@ REVIEW_SYSTEM = `You are a senior reviewer. An AI agent just completed work. Ass
 
 | Priority | Area | Impact | Effort | Risk |
 |----------|------|--------|--------|------|
-| **High** | Binary gate retraining pipeline | High | 2-3d | Low |
+| **High** | Binary gate training governance | High | 0.5-1d | Low |
 | **High** | Review decision simplification | High | 1-2d | Medium |
 | **High** | State recovery robustness | Medium | 1d | Low |
 | **Medium** | Feature overlap audit | Medium | 2-3d | Low |
-| **Medium** | System prompt quality | Medium | 1d | Low |
+| **Medium** | System prompt monitoring/validation | Medium | 0.5-1d | Low |
 | **Medium** | Router log analysis | Medium | 1-2d | Low |
 | **Low** | State file size growth | Low | 1d | Low |
 | **Low** | Test coverage gaps | Low | 2-3d | Low |
 | **Low** | Config schema validation | Low | 1d | Low |
 | **Low** | Documentation | Low | 1-2d | Low |
 
-**Total estimated effort**: ~12-18 days
+**Total estimated effort**: ~10-16 days
 
 ---
 
