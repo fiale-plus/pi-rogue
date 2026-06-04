@@ -4,6 +4,13 @@ import { join, dirname } from "node:path";
 import { homedir } from "node:os";
 import { registerAdvisor } from "./extension.js";
 
+const testHome = vi.hoisted(() => `/tmp/pi-rogue-advisor-state-versioning-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+
+vi.mock("node:os", async () => {
+  const actual = await vi.importActual<typeof import("node:os")>("node:os");
+  return { ...actual, homedir: () => testHome };
+});
+
 vi.mock("@earendil-works/pi-ai", async () => {
   const actual = await vi.importActual<typeof import("@earendil-works/pi-ai")>("@earendil-works/pi-ai");
   return { ...actual, completeSimple: vi.fn() };
@@ -218,5 +225,3 @@ describe("state versioning and recovery", () => {
     expect(recovered.reviewControl.lastDecision).toBe("review");
   });
 });
-
-

@@ -6,6 +6,13 @@ import { join } from "node:path";
 import { completeSimple } from "@earendil-works/pi-ai";
 import { registerAdvisor } from "./extension.js";
 
+const testHome = vi.hoisted(() => `/tmp/pi-rogue-advisor-loop-convergence-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+
+vi.mock("node:os", async () => {
+  const actual = await vi.importActual<typeof import("node:os")>("node:os");
+  return { ...actual, homedir: () => testHome };
+});
+
 vi.mock("@earendil-works/pi-ai", async () => {
   const actual = await vi.importActual<typeof import("@earendil-works/pi-ai")>("@earendil-works/pi-ai");
   return {
