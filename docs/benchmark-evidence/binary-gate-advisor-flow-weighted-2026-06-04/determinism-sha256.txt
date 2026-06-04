@@ -1,0 +1,2 @@
+d5336ca3cc5b5bc733c22b38a5fe8f3dac8f2232c897267644bf7220fdf6b456  /tmp/pi-rogue-binary-weighted-final/model-a.json
+d5336ca3cc5b5bc733c22b38a5fe8f3dac8f2232c897267644bf7220fdf6b456  /tmp/pi-rogue-binary-weighted-final/model-b.json

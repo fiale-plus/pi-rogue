@@ -1,0 +1,473 @@
+{
+  "input": "data/routing/binary-gate.jsonl",
+  "model": "packages/advisor/assets/binary-gate-model.json",
+  "rows": 2445,
+  "counts": {
+    "continue": 1273,
+    "escalate": 1172
+  },
+  "accuracy": 0.9750511247443763,
+  "escalatePrecision": 0.9751924721984602,
+  "escalateRecall": 0.9726962457337884,
+  "escalateF1": 0.9739427595044852,
+  "continuePrecision": 0.9749216300940439,
+  "continueRecall": 0.9772191673212883,
+  "continueF1": 0.9760690466849745,
+  "confusion": [
+    {
+      "actual": "continue",
+      "predicted": [
+        [
+          "continue",
+          1244
+        ],
+        [
+          "escalate",
+          29
+        ]
+      ]
+    },
+    {
+      "actual": "escalate",
+      "predicted": [
+        [
+          "continue",
+          32
+        ],
+        [
+          "escalate",
+          1140
+        ]
+      ]
+    }
+  ],
+  "misses": [
+    {
+      "text": "hey local model is dead slow can you look inside to understand the reason",
+      "source": "gold",
+      "actual": "escalate",
+      "predicted": "continue",
+      "conf": 0.8102459473092549
+    },
+    {
+      "text": "hey lets renovate docs - on top of the latest mainline indeed - cross check if we have verything aligned to each other - remove essence traces, not going with that - make sure docs are real short and nice and maybe place them to dedicated docs location - check and indicate in the roadmap what achieved, what left - no MCP to be done here, CLI only - review documentation pack across - make it sound - next work after pr created - base on top and stack as the next one - on release flow, maybe lets take it form https://github.com/fiale-plus/tradingview-mcp-server",
+      "source": "gold",
+      "actual": "continue",
+      "predicted": "escalate",
+      "conf": 0.9981068475782144
+    },
+    {
+      "text": "- ok enemies - lets make them BFS optimized memoized, map single sweep using with maybe updates in case if character went too far from last calculation. Do not change enemies behavior dynamically. Always that way, determined guys. - character - lets use BFS with maybe some adjustments if hitting enemy on the path to the gold, or about to hit enemi in BFS traceback - again memoize, maybe reversed way or something? maybe we can use somehow combined BFS? Think. - lets make sure character knows it should not get into self shot pits - only if he can jump through or dig through. Maybe this \"only\" part too advanced for now, lets make sure it does not jump into own pits. But maybe it can walk over enemies got in the pits! - go ahead with that C option on heuristic on top maybe? anyway I feel we real need to autoresearch here",
+      "source": "gold",
+      "actual": "escalate",
+      "predicted": "continue",
+      "conf": 0.9605943080603804
+    },
+    {
+      "text": "also see error for agent calls - make sure al is intact",
+      "source": "gold",
+      "actual": "escalate",
+      "predicted": "continue",
+      "conf": 0.8414076630642132
+    },
+    {
+      "text": "can you also make this output more compact after each call \" Advisor review ⏳ not done The work is not ready for PR: the closeout route reports not_done with errors present, and the provided notes/delta are not inspectable beyond placeholder objects. Resolve the reported errors before opening a PR. Provide a clear summary of changed files and completed work. Run validation/tests and include results in the PR readiness update. Check: Errors cleared Files reviewed Tests or validation completed\" it is too much",
+      "source": "gold",
+      "actual": "continue",
+      "predicted": "escalate",
+      "conf": 0.9890112851545679
+    },
+    {
+      "text": "here the final version for you Created the **`repo-arch reflex` PRD** in canvas. Small implementation summary table: | Module | Purpose | First implementation | | ------------------------- | ---------------------------------- | ---------------------------------------------- | | `reflex classify-command` | Allow / ask / block shell commands | Deterministic rules + package script detection | | `reflex classify-edit` | Detect risky file edits | Diff paths + fragile file scoring | | `reflex test-plan` | Recommend tests/checks | Co-change + churn + related test files | | `reflex install-pi` | Integrate with Pi auto mode | Pre-action hook returning JSON decision | | `reflex events` | Capture approvals/blocks/overrides | Append-only `.repo-arch/reflex/events.jsonl` | | `reflex dataset` | Generate training data | Export events + synthetic risky/safe examples | | `reflex train` | Train local classifier | 7B teacher → 1.5B/3B student adapter | | `session ingest` | Learn from agent failures | Convert Pi traces into lessons/guardrails | Recommended build order: 1. Policy-only command guard 2. File-edit risk classifier 3. Repo-aware fragile-file + test-plan signals 4. Pi hook 5. Dataset export 6. Teacher labeling 7. Local small-model classifier 8. Session ingestion loop - you read and h\\then we can go home today",
+      "source": "gold",
+      "actual": "escalate",
+      "predicted": "continue",
+      "conf": 0.9280885605833564
+    },
+    {
+      "text": "hey restart like this happened panic(cpu 0 caller 0xfffffe0039903cfc): watchdog timeout: no checkins from watchdogd in 91 seconds (180 total checkins since monitoring last enabled) Debugger message: panic Memory ID: 0xff OS release type: User OS version: 25D2128 Kernel version: Darwin Kernel Version 25.3.0: Wed Jan 28 20:56:35 PST 2026; root:xnu-12377.91.3~2/RELEASE_ARM64_T6030 Fileset Kernelcache UUID: F629F5EE7590F62423798373DE913059 Kernel UUID: ED6F46C0-AC29-3B82-9587-F85F3084DC28 Boot session UUID: 1F8E44DE-035B-4A4E-8FE1-E1ADEAD95C9C iBoot version: iBoot-13822.81.10 iBoot Stage 2 version: iBoot-13822.81.10 secure boot?: YES roots installed: 0 Paniclog version: 15 Debug Header address: 0xfffffe0017641000 Debug Header entry count: 3 TXM load address: 0xfffffe00275a8000 TXM UUID: FC4B4161-29AA-3A66-8A86-5211332F59FB Debug Header kernelcache load address: 0xfffffe00375a8000 Debug Header kernelcache UUID: F629F5EE-7590-F624-2379-8373DE913059 SPTM load address: 0xfffffe00175a8000 SPTM UUID: A09E79C0-0056-3666-BDCD-7FD5DFBFF701 KernelCache slide: 0x00000000305a4000 KernelCache base: 0xfffffe00375a8000 Kernel slide: 0x00000000305ac000 Kernel text base: 0xfffffe00375b0000 Kernel text exec slide: 0x0000000031db8000 Kernel text exec base: 0xfffffe0038dbc000 mach_absolute_time: 0xaad02b411 Epoch Time: sec usec Boot : 0x69f350df 0x000e21a4 Sleep : 0x00000000 0x00000000 Wake : 0x00000000 0x00000000 Calendar: 0x69f3584d 0x0000f810 Zone info: Zone map: 0xfffffe1242000000 - 0xfffffe3842000000 . VM : 0xfffffe1242000000 - 0xfffffe180e000000 . RO : 0xfffffe180e000000 - 0xfffffe1aa8000000 . GEN0 : 0xfffffe1aa8000000 - 0xfffffe2074000000 . GEN1 : 0xfffffe2074000000 - 0xfffffe2640000000 . GEN2 : 0xfffffe2640000000 - 0xfffffe2c0c000000 . GEN3 : 0xfffffe2c0c000000 - 0xfffffe31d8000000 . DATA : 0xfffffe31d8000000 - 0xfffffe3842000000 Metadata: 0xfffffe4ea8010000 - 0xfffffe4eb1810000 Bitmaps : 0xfffffe4eb1810000 - 0xfffffe4eb81bc000 Extra : 0 - 0 CORE 0 [EACC0] recently retired instr at 0xfffffe0038f88a30 CORE 1 [EACC0] recently retired instr at 0xfffffe0038f8a0d4 CORE 2 [EACC0] recently retired instr at 0xfffffe0038f8a0d4 CORE 3 [EACC0] recently retired instr at 0xfffffe0038f8a0d4 CORE 4 [EACC0] recently retired instr at 0xfffffe0038f8a0d4 CORE 5 [EACC0] recently retired instr at 0xfffffe0038f8a0d4 CORE 6 [PACC1] recently retired instr at 0xfffffe0038f8a0d4 CORE 7 [PACC1] recently retired instr at 0xfffffe0038f8a0d4 CORE 8 [PACC1] recently retired instr at 0xfffffe0038f8a0d4 CORE 9 [PACC1] recently retired instr at 0xfffffe0038f8a0d4 CORE 10 [PACC1] recently retired instr at 0xfffffe0038f8a0d4 CORE 11 [PACC1] recently retired instr at 0xfffffe0038f8a0d4 TPIDRx_ELy = {1: 0xfffffe2642430720 0: 0x0000000000000000 0ro: 0x0000000000000000 } CORE 0 is the one that panicked. Check the full backtrace for details. CORE 1: PC=0xfffffe0038e4b998, LR=0xfffffe0038e4b998, FP=0xfffffe98d8e6bed0 CORE 2: PC=0xfffffe0038e4b998, LR=0xfffffe0038e4b998, FP=0xfffffe98dabbfed0 CORE 3: PC=0xfffffe0038e4b998, LR=0xfffffe0038e4b998, FP=0xfffffe98dac13ed0 CORE 4: PC=0xfffffe0038e4b998, LR=0xfffffe0038e4b998, FP=0xfffffe98da3fbed0 CORE 5: PC=0xfffffe0038e4b998, LR=0xfffffe0038e4b998, FP=0xfffffe98dabd7ed0 CORE 6: PC=0xfffffe0038e4b998, LR=0xfffffe0038e4b998, FP=0xfffffe98da407ed0 CORE 7: PC=0xfffffe0038e4b998, LR=0xfffffe0038e4b998, FP=0xfffffe98da41fed0 CORE 8: PC=0xfffffe0038e4b998, LR=0xfffffe0038e4b998, FP=0xfffffe98da577ed0 CORE 9: PC=0xfffffe0038f84ad4, LR=0xfffffe0038f84ad0, FP=0xfffffe98d9f9be60 CORE 10: PC=0xfffffe0038e4b998, LR=0xfffffe0038e4b998, FP=0xfffffe98da3efed0 CORE 11: PC=0xfffffe0038e4b998, LR=0xfffffe0038e4b998, FP=0xfffffe98d8cd3ed0 Compressor Info: 7% of compressed pages limit (OK) and 21% of segments limit (OK) with 14 swapfiles and OK swap space Total cpu_usage: 25969968 Thread task pri cpu_usage 0xfffffe2643177f00 WindowServer 79 0 0xfffffe2643aa6ec0 com.apple.DriverKit-AppleBCMWLAN 63 0 0xfffffe2643206ec0 corespeechd 60 0 0xfffffe2642f18620 WallpaperAerialsExtension 49 0 0xfffffe2642dbf6e0 cmux 47 0 Panicked task 0xfffffe2b0bf8c7a8: 0 pages, 659 threads: pid 0: kernel_task Panicked thread: 0xfffffe2642430720, backtrace: 0xfffffecffd8a7770, tid: 523 lr: 0xfffffe0038e0ddc0 fp: 0xfffffecffd8a7810 lr: 0xfffffe0038f80a80 fp: 0xfffffecffd8a7880 lr: 0xfffffe0038f7edf4 fp: 0xfffffecffd8a7940 lr: 0xfffffe0038dbf918 fp: 0xfffffecffd8a7950 lr: 0xfffffe0038e0e0d0 fp: 0xfffffecffd8a7e70 lr: 0xfffffe003970a224 fp: 0xfffffecffd8a7e90 lr: 0xfffffe0039903cfc fp: 0xfffffecffd8a7ee0 lr: 0xfffffe00399029e4 fp: 0xfffffecffd8a7f20 lr: 0xfffffe00398ff604 fp: 0xfffffecffd8a7f40 lr: 0xfffffe003a4071e0 fp: 0xfffffecffd8a7fc0 lr: 0xfffffe0038f823ac fp: 0xfffffecffd8a7fe0 lr: 0xfffffe0038dbf9bc fp: 0xfffffecffd8a7ff0 lr: 0xfffffe0038e4b998 fp: 0xfffffe98dac07ed0 lr: 0xfffffe0038e4bba0 fp: 0xfffffe98dac07f20 lr: 0xfffffe0038dc028c fp: 0x0000000000000000 Kernel Extensions in backtrace: com.apple.driver.AppleInterruptControllerV3(1.0d1)[D7DF58C6-E091-3903-B178-0F4C675374C6]@0xfffffe003a404020->0xfffffe003a4086b7 dependency: com.apple.driver.AppleARMPlatform(1.0.2)[61C5815C-29CD-3680-96B7-22406C9881C3]@0xfffffe00398a56a0->0xfffffe00398fdbcf com.apple.driver.AppleARMWatchdogTimer(1.0)[41DF9136-892F-3A3B-BFFF-72AA1E46BE93]@0xfffffe00398fdbd0->0xfffffe0039903db3 dependency: com.apple.driver.AppleARMPlatform(1.0.2)[61C5815C-29CD-3680-96B7-22406C9881C3]@0xfffffe00398a56a0->0xfffffe00398fdbcf last started kext at 952744748: com.apple.filesystems.autofs 3.0 (addr 0xfffffe00381c3c60, size 5927) loaded kexts: com.apple.filesystems.autofs 3.0 com.apple.driver.AppleTopCaseHIDEventDriver 9430.1 com.apple.driver.CoreKDL 1 com.apple.driver.AppleBiometricServices 1 com.apple.driver.AppleAOPVoiceTrigger 500.14 com.apple.driver.DiskImages.ReadWriteDiskImage 493.0.0 com.apple.driver.DiskImages.UDIFDiskImage 493.0.0 com.apple.driver.DiskImages.RAMBackingStore 493.0.0 com.apple.driver.DiskImages.FileBackingStore 493.0.0 com.apple.driver.AppleThunderboltIP 4.0.3 com.apple.driver.SEPHibernation 1 com.apple.driver.AppleUSBDeviceNCM 5.0.0 com.apple.driver.AppleSmartBatteryManager 161.0.0 com.apple.driver.AppleFileSystemDriver 3.0.1 com.apple.driver.ApplePMP 1 com.apple.nke.l2tp 1.9 com.apple.filesystems.tmpfs 1 com.apple.driver.ApplePMPFirmware 1 com.apple.AppleEmbeddedSimpleSPINORFlasher 1 com.apple.filesystems.nfs 1 com.apple.filesystems.lifs 1 com.apple.filesystems.apfs 2632.80.1 com.apple.IOTextEncryptionFamily 1.0.0 com.apple.filesystems.hfs.kext 704.60.4 com.apple.security.BootPolicy 1 com.apple.BootCache 40 com.apple.AppleFSCompression.AppleFSCompressionTypeZlib 1.0.0 com.apple.AppleFSCompression.AppleFSCompressionTypeDataless 1.0.0d1 com.apple.driver.AppleSmartIO2 1 com.apple.driver.AppleJPEGDriver 7.7.2 com.apple.driver.AppleProResHW 526.5 com.apple.driver.AppleAVD 908 com.apple.driver.AppleMobileDispT603S-DCP 140.0 com.apple.driver.AudioDMAController-T6030 530.10 com.apple.driver.AppleSerialShim 1 com.apple.driver.AppleTypeCRetimer 1.0.0 com.apple.driver.AppleDPDisplayTCON 1 com.apple.AGXG15S 345.20.4 com.apple.driver.AppleT6030CLPC 1 com.apple.driver.AppleT6030SOCTuner 1 com.apple.driver.AppleCS42L84Audio 930.11 com.apple.driver.AppleSN012776Amp 930.11 com.apple.driver.AppleAVE2 905.29.1 com.apple.driver.usb.AppleSynopsysUSB40XHCI 1 com.apple.driver.AppleEventLogHandler 1 com.apple.driver.AppleS5L8960XNCO 1 com.apple.driver.AppleT6030PMGR 1 com.apple.driver.AppleS8000AES 1 com.apple.driver.AppleS8000DWI 1.0.0d1 com.apple.driver.AppleInterruptControllerV3 1.0.0d1 com.apple.driver.AppleBluetoothModule 1 com.apple.driver.AppleBCMWLANBusInterfacePCIe 1 com.apple.driver.AppleSamsungSerial 1.0.0d1 com.apple.driver.AppleT8110DART 1 com.apple.driver.AppleS5L8920XPWM 1.0.0d1 com.apple.driver.AppleSPIMC 1 com.apple.driver.AppleS5L8940XI2C 1.0.0d2 com.apple.driver.AppleT6030 1 com.apple.driver.AppleM68Buttons 1.0.0d1 com.apple.driver.AppleSDXC 3.5.4 com.apple.iokit.IOUserEthernet 1.0.1 com.apple.driver.usb.AppleUSBUserHCI 1 com.apple.iokit.IOKitRegistryCompatibility 1 com.apple.iokit.EndpointSecurity 1 com.apple.driver.AppleDiskImages2 514.80.3 com.apple.AppleSystemPolicy 2.0.0 com.apple.kec.InvalidateHmac 1 com.apple.kec.AppleEncryptedArchive 1 com.apple.driver.driverkit.serial 6.0.0 com.apple.driver.AppleHIDKeyboard 9410.2 com.apple.driver.AppleActuatorDriver 9430.5 com.apple.driver.AppleMultitouchDriver 9430.5 com.apple.driver.AppleMesaSEPDriver 100.99 com.apple.iokit.IOBiometricFamily 1 com.apple.iokit.IOAVBFamily 1400.10 com.apple.driver.AppleALSColorSensor 1.0.0d1 com.apple.EXBrightCalibrationConsumer 1.0.0 com.apple.driver.AppleAOPAudio 500.14 com.apple.driver.DiskImages.KernelBacked 493.0.0 com.apple.driver.AppleXsanScheme 3 com.apple.driver.AppleSEPHDCPManager 1.0.1 com.apple.driver.AppleTrustedAccessory 1 com.apple.iokit.AppleSEPGenericTransfer 1 com.apple.driver.AppleUVDMDriver 1.0.0 com.apple.driver.AppleUVDM 1.0.0 com.apple.driver.usb.networking 5.0.0 com.apple.driver.AppleConvergedIPCOLYBTControl 1 com.apple.driver.AppleConvergedPCI 1 com.apple.driver.AppleBluetoothDebug 1 com.apple.driver.AppleThunderboltUSBDownAdapter 1.0.4 com.apple.driver.AppleThunderboltDPInAdapter 8.5.1 com.apple.driver.AppleThunderboltDPAdapterFamily 8.5.1 com.apple.driver.AppleThunderboltPCIDownAdapter 4.1.1 com.apple.driver.AppleBTM 1.0.1 com.apple.driver.AppleAuthCP 1.0.0 com.apple.AGXFirmwareKextG15SRTBuddy 1 com.apple.AGXFirmwareKextRTBuddy64 345.20.4 com.apple.nke.ppp 1.9 com.apple.driver.AppleDCPDPTXProxy 1.0.0 com.apple.driver.DCPDPFamilyProxy 1 com.apple.driver.AppleBSDKextStarter 3 com.apple.kext.triggers 1.0 com.apple.driver.usb.AppleUSBHostPacketFilter 1.0 com.apple.driver.IOHIDPowerSource 1 com.apple.driver.AppleCallbackPowerSource 1 com.apple.driver.AppleDiagnosticDataAccessReadOnly 1.0.0 com.apple.filesystems.hfs.encodings.kext 1 com.apple.driver.AppleSyntheticGameController 13.3.1 com.apple.plugin.IOgPTPPlugin 1420.2 com.apple.driver.AppleStockholmControl 1.0.0 com.apple.iokit.IONVMeFamily 2.1.0 com.apple.driver.AppleNANDConfigAccess 1.0.0 com.apple.driver.AppleSSE 1.0 com.apple.driver.AppleHPM 3.4.4 com.apple.driver.AppleHIDTransportFIFO 9420.1 com.apple.driver.AppleHIDTransportSCMCommon 9420.1 com.apple.driver.AppleHIDTransport 9420.1 com.apple.driver.AppleInputDeviceSupport 9420.1 com.apple.driver.AppleDockChannel 1 com.apple.driver.DCPAVFamilyProxy 1 com.apple.driver.AppleSPMIPMU 1.0.1 com.apple.driver.AppleDialogPMU 1.0.1 com.apple.iokit.IOMobileGraphicsFamily-DCP 343.0.0 com.apple.iokit.IOMobileGraphicsFamily 343.0.0 com.apple.driver.AppleM2ScalerCSCDriver 265.0.0 com.apple.driver.AppleSART 1 com.apple.driver.AppleSPMI 1.0.1 com.apple.driver.AppleSPU 1 com.apple.driver.AppleDCP 1 com.apple.driver.AppleFirmwareKit 1 com.apple.iokit.IOGPUFamily 129.3.2 com.apple.driver.AppleCSEmbeddedAudio 930.11 com.apple.driver.AppleEmbeddedAudio 930.11 com.apple.iokit.AppleARMIISAudio 520.2 com.apple.driver.IISAudioIsolatedStreamECProxy 520.2 com.apple.driver.ExclavesAudioKext 300.59 com.apple.driver.ApplePassthroughPPM 3.0 com.apple.driver.AppleUSBXDCIARM 1.0 com.apple.driver.AppleUSBXDCI 1.0 com.apple.iokit.IOUSBDeviceFamily 2.0.0 com.apple.driver.usb.AppleSynopsysUSBXHCI 1 com.apple.driver.usb.AppleUSBXHCI 1.2 com.apple.driver.AppleEmbeddedUSBHost 1 com.apple.driver.usb.AppleUSBHub 1.2 com.apple.driver.usb.AppleUSBHostCompositeDevice 1.2 com.apple.driver.AppleT8122TypeCPhy 1 com.apple.driver.AppleH13CameraInterface 10.300.0 com.apple.driver.ApplePMGR 1 com.apple.driver.AppleA7IOP-ASCWrap-v6 1.0.2 com.apple.driver.AppleARMWatchdogTimer 1 com.apple.driver.AppleThunderboltNHI 7.2.81 com.apple.driver.AppleDisplayCrossbar 1.0.0 com.apple.iokit.IODisplayPortFamily 1.0.0 com.apple.driver.AppleTypeCPhy 1 com.apple.driver.AppleA7IOP-MXWrap-v1 1.0.2 com.apple.driver.AppleBluetoothDebugService 1 com.apple.driver.AppleBCMWLANCore 1.0.0 com.apple.iokit.IO80211Family 1200.13.1 com.apple.driver.IOImageLoader 1.0.0 com.apple.driver.AppleOLYHAL 1 com.apple.driver.AppleMCA2-T6030 1000.4 com.apple.driver.AppleEmbeddedAudioLibs 500.4 com.apple.driver.AppleFirmwareUpdateKext 1 com.apple.driver.AppleT8122PCIeC 1 com.apple.iokit.IOThunderboltFamily 9.3.3 com.apple.driver.AppleT6020PCIeCPIODMA 1 com.apple.driver.AppleT6030PCIe 1 com.apple.driver.AppleT6020PCIePIODMA 1 com.apple.driver.AppleMobileApNonce 1 com.apple.driver.AppleGPIOICController 1.0.2 com.apple.driver.AppleEverestErrorHandler 1 com.apple.driver.AppleMultiFunctionManager 1 com.apple.driver.corecapture 1.0.4 com.apple.driver.AppleEmbeddedPCIE 1 com.apple.driver.ApplePIODMA 1 com.apple.iokit.IOTimeSyncFamily 1420.2 com.apple.driver.DiskImages 493.0.0 com.apple.iokit.IOGraphicsFamily 599 com.apple.iokit.IOBluetoothFamily 9.0.0 com.apple.driver.AppleUIO 1 com.apple.driver.AppleT6030ANEHAL 9.300.3 com.apple.driver.AppleSEPKeyStore 2 com.apple.driver.AppleUSBTDM 557 com.apple.iokit.IOUSBMassStorageDriver 272.80.3 com.apple.iokit.IOPCIFamily 2.9 com.apple.iokit.IOUSBHostFamily 1.2 com.apple.iokit.IOPortFamily 1.0 com.apple.driver.AppleUSBHostMergeProperties 1.2 com.apple.driver.usb.AppleUSBCommon 1.0 com.apple.driver.AppleSMC 3.1.9 com.apple.driver.AppleEmbeddedTempSensor 1.0.0 com.apple.driver.AppleARMPMU 1.0 com.apple.iokit.IOAccessoryManager 1.0.0 com.apple.driver.AppleOnboardSerial 1.0 com.apple.iokit.IOSerialFamily 11 com.apple.iokit.IOSCSIBlockCommandsDevice 541.40.1 com.apple.iokit.IOSCSIArchitectureModelFamily 541.40.1 com.apple.driver.AppleRSMChannel 1 com.apple.iokit.IORSMFamily 1 com.apple.driver.AppleLockdownMode 1 com.apple.driver.AppleIPAppender 1.0 com.apple.iokit.IOSkywalkFamily 1.0 com.apple.driver.mDNSOffloadUserClient 1.0.1b8 com.apple.iokit.IONetworkingFamily 3.4 com.apple.driver.AppleH11ANEInterface 9.300.0 com.apple.driver.RTBuddy 1.0.0 com.apple.driver.AppleFDEKeyStore 28.30 com.apple.driver.AppleEffaceableStorage 1.0 com.apple.driver.AppleCredentialManager 1.0 com.apple.driver.AppleSEPManager 1.0.1 com.apple.driver.IODARTFamily 1 com.apple.driver.AppleA7IOP 1.0.2 com.apple.driver.IOSlaveProcessor 1 com.apple.driver.AppleBiometricSensor 2 com.apple.iokit.IOHIDFamily 2.0.0 com.apple.AUC 1.0 com.apple.iokit.IOSurface 393.3.2 com.apple.iokit.IOAVFamily 1.0.0 com.apple.iokit.IOHDCPFamily 1.0.0 com.apple.iokit.IOCECFamily 1 com.apple.iokit.IOAudio2Family 1.0 com.apple.driver.AppleIISController 500.2 com.apple.driver.AppleAudioClockLibs 500.4 com.apple.driver.FairPlayIOKit 72.14.0 com.apple.driver.AppleARMPlatform 1.0.2 com.apple.iokit.IOSlowAdaptiveClockingFamily 1.0.0 com.apple.iokit.IOReportFamily 47 com.apple.security.quarantine 4 com.apple.security.sandbox 300.0 com.apple.iokit.IOStorageFamily 2.1 com.apple.kext.AppleMatch 1.0.0d1 com.apple.driver.AppleMobileFileIntegrity 1.0.5 com.apple.iokit.CoreAnalyticsFamily 1 com.apple.security.AppleImage4 7.0.0 com.apple.kext.CoreTrust 1 com.apple.iokit.IOCryptoAcceleratorFamily 1.0.1 com.apple.kec.pthread 1 com.apple.kec.Libm 1 com.apple.kec.Compression 1.0 com.apple.kec.corecrypto 26.0 ** Stackshot Succeeded ** Bytes Traced 394215 (Uncompressed 949760) ** seems you guilty here, does it ring the bell? Can you be careful? continue run",
+      "source": "gold",
+      "actual": "continue",
+      "predicted": "escalate",
+      "conf": 0.7645323447288039
+    },
+    {
+      "text": "check in 10 minutes and print - Ill leave laptop at the table",
+      "source": "gold",
+      "actual": "escalate",
+      "predicted": "continue",
+      "conf": 0.8829716290959599
+    },
+    {
+      "text": "hey can you pdate tooling and have a look on the models competing for the perf in HF, also I should have their API token in the env: - update llama cpp build we got form MTP PR branch - get llama-benchy to veryfy llms - get MTP new candidates to verify - /autoresearch on the best model to run or maybe the current qwen it is Qwen3.6 35B A3B MTP Q4_0 + ngram-mod (64K, ~36 tok/s) - research and check if you can on full/empty ctw, different size, be carful with the mem, do not spill over get detailed report as done and give me the winner",
+      "source": "gold",
+      "actual": "continue",
+      "predicted": "escalate",
+      "conf": 0.6865540097118388
+    },
+    {
+      "text": "i guess done with training, how it went? make me browser sim for 3 levels now",
+      "source": "gold",
+      "actual": "continue",
+      "predicted": "escalate",
+      "conf": 0.6900763725992591
+    },
+    {
+      "text": "hey, fixes: - the player is the one in the blue suit - the enemies are those whites, not berries. - also make sure you are using rope tile for horizontal rope and ladder for the ladder",
+      "source": "gold",
+      "actual": "continue",
+      "predicted": "escalate",
+      "conf": 0.8251972129730738
+    },
+    {
+      "text": "Task: Quickly inspect pi-local-router and related config for any remaining obvious cleanup or validation steps. Do not edit files. Return terse checklist with file paths/commands.",
+      "source": "gold",
+      "actual": "escalate",
+      "predicted": "continue",
+      "conf": 0.9910229811961889
+    },
+    {
+      "text": "Task: Assess whether we should clean up Ollama duplicate models before starting a new autoresearch round focused on caller-side params, thinking sweep, and disk cleanup. Return concise recommendation with keep/delete list and whether approval is needed.",
+      "source": "gold",
+      "actual": "continue",
+      "predicted": "escalate",
+      "conf": 0.6443922091252005
+    },
+    {
+      "text": "go reserch on fast model alternatives and work on the options for my local big - maybe effort level or what to make it faster",
+      "source": "gold",
+      "actual": "continue",
+      "predicted": "escalate",
+      "conf": 0.94476516550867
+    },
+    {
+      "text": "maybe work in git worktree and setup benchmark - try avoid expensive tests",
+      "source": "gold",
+      "actual": "continue",
+      "predicted": "escalate",
+      "conf": 0.6139415837861324
+    },
+    {
+      "text": "while we are in the fixes - go to the latest mainline fork in git worktree and /autoresearch on beautiful and proper README/AGENTS/CLAUDE md here ok",
+      "source": "pi_session",
+      "actual": "continue",
+      "predicted": "escalate",
+      "conf": 0.6442734450586636
+    },
+    {
+      "text": "I guess update docs and onboarding info - also we badly need harness-universal onboarding skill - so person can configure/reconfigure tool seamlessly",
+      "source": "pi_session",
+      "actual": "escalate",
+      "predicted": "continue",
+      "conf": 0.898369097850546
+    },
+    {
+      "text": "hey yeah, my thinking on the silly assistant and where it could be useful in my tasks: - I am going through a ton of visual invo over my screen, a ton of meetings. And I real would love if silly forgets nothing and for example - would track all my action points form everywhere. Bonus point - smartly arrange them - so real important a the big alarm (figuratively) and smaller ones either just FYI or omitted. - that flows I have say at work they are really specific. Like for example: - some project guided by the project management skill or some other AI aotuomatioon - some other project drive by the other skill - real recurring flows I can describe on myself as they popping up all the time - like certain regional market support wioth recurring questions there - or maybe we have a lot of chat history in certain channels or maybe top 10 channels and then it goes to rel specific flows to remember about - maybe it is could be research on AI related topics. Or far better - agent can watch my research. Look for the similar signals in the input and mix and match and bring insights. Like - verify recently active channels on the similar topics and so on The highest prio I would say: - driving projects not letting a single ball to fall on the flow - capturing my meetings, parsing any output , matching to say gemini notes if any resurfaced and storing to the memory for raw input, insights, action points. Thatd be super awesome. One more thing: - any use of a hermes harness existing in the OSS space? - any use of Omi stack at any part? Maybe we can be insi=pired and try something? And indeed I want to make it happen for my personal research actiovities - GEN SWE. investments, new roles search, research on how to bring more visibility to profile - whatever Im doing based on the knowledge of my persona Also - now real important- what if we supercharge it with some API? Does it make sense? For which part? Where and when? and for which environment? In the cosporate env I dont think I can go out of the private on board AI limits ever, right?",
+      "source": "pi_session",
+      "actual": "escalate",
+      "predicted": "continue",
+      "conf": 0.6844076752574367
+    },
+    {
+      "text": "exclude .autoresearch from git control, make sure config for the advisor is short and sweet and UX is the best, compare to existing other options and to advisor in claude, meke our version the best and the most powerful in the flows of the advisor wit the least complicated config. Same time make sure it is not worse than advisor-coach local so I can abandon it. run /autoresearch on the objective I described here. If previous /autoresearch not run - make sure you did everything and went through the cycles for both",
+      "source": "pi_session",
+      "actual": "escalate",
+      "predicted": "continue",
+      "conf": 0.9175161082527947
+    },
+    {
+      "text": "exclude .autoresearch from git control, make sure config for the advisor is short and sweet and UX is the best, compare to existing other options and to advisor in claude, meke our version the best and the most powerful in the flows of the advisor wit the least complicated config. Same time make sure it is not worse than advisor-coach local so I can abandon it. run /autoresearch on the objective I described here. If previous /autoresearch not run - make sure you did everything and went through the cycles for both remember to use current advisor where appropriate",
+      "source": "pi_session",
+      "actual": "escalate",
+      "predicted": "continue",
+      "conf": 0.8687520455752309
+    },
+    {
+      "text": "yeah, my thinking is: - loop is minimalistic promitive, real simple, real sweet and short. Like we beat an event with some interval (?) though how do we go then if schedule recurring is not the primary approach? do we need loop at all? - goal is the add on on top where we have an objective I think to follow. the side quests deviation logic - unsure if we have to put it to the goal or to the loop btw - that side quest thing and recovery - then autoresearch and autoresearch-lab commands where we are following goal with very specific superset of instructions from the autoressearch we are having already - has to be shipped through the extension wdyt on this",
+      "source": "pi_session",
+      "actual": "continue",
+      "predicted": "escalate",
+      "conf": 0.6185694151604361
+    },
+    {
+      "text": "yeah I want you to deactivate them automatically when you deactivate goal or autoresearch, inded they should go on when we ask for goal or autoresearch back. There is no current goal I guess. So report me on: - goal unset and checkin deactivation bugfixes - merged PR rollback if needed - readiness to continue on smaller scopes research afterwards",
+      "source": "pi_session",
+      "actual": "continue",
+      "predicted": "escalate",
+      "conf": 0.8263380351333941
+    },
+    {
+      "text": "merged, get latest mainline, make release all levels, install latest bundle, prepare for the next task",
+      "source": "pi_session",
+      "actual": "continue",
+      "predicted": "escalate",
+      "conf": 0.8419177860300842
+    },
+    {
+      "text": "there could be some other files for autoresearch for example - scripts, binaries and such, shall we cleanup and archive them as well? on N-th tick idea - we want checkins and timed ticking checkins running on schedule - but not in a middle of the ongoing run. More of a steering style - if nothing in progress that checkup runs immediately, if turn is in flight - checup gets in the queue. What would be easier and more robust?",
+      "source": "pi_session",
+      "actual": "continue",
+      "predicted": "escalate",
+      "conf": 0.6243702802009288
+    },
+    {
+      "text": "super cool, try setup this with /autoresearch deep Got it — you're on MLX (mlx-lm or similar). That's a strong choice for M3 Apple Silicon, especially for this MoE model (only ~3B active params). Your 30 t/s is solid, but we can push it higher with the right quant + tweaks. Quick Wins for MLX on Qwen3.6-35B-A3B (36 GB M3) Switch to Unsloth's official MLX quants (best for this exact model) Unsloth provides optimized 4-bit / 8-bit / dynamic MLX versions that load faster and run better than generic conversions. Recommended: 4-bit (fits comfortably in 36 GB with room for 128K context). Or 8-bit if you want higher quality and have headroom. Install script (one-liner from Unsloth):Bashcurl -fsSL https://raw.githubusercontent.com/unslothai/unsloth/refs/heads/main/scripts/install_qwen3_6_mlx.sh | sh source ~/.unsloth/unsloth_qwen3_6_mlx/bin/activateThen load e.g.:Pythonfrom mlx_lm import load, generate model, tokenizer = load(\"unsloth/Qwen3.6-35B-A3B-UD-MLX-4bit\") # or -MLX-8bit Optimized generation call (copy-paste this as your base)Pythonresponse = generate( model=model, tokenizer=tokenizer, prompt=your_prompt, temp=0.7, top_p=0.95, top_k=40, min_p=0.1, max_tokens=16384, repetition_penalty=1.0, # For thinking/preserve mode if needed: # extra_eos_tokens=[\"<|im_end|>\"] or use chat template with preserve_thinking )Add verbose=True during testing to see real t/s. Server mode (for OpenAI-compatible API, like your llama-server setup) Use mlx_lm.server or LM Studio with MLX backend (easiest). Or via Rapid-MLX / oMLX wrappers for extra speed knobs:Bash# Example with Rapid-MLX (if installed) rapid-mlx serve unsloth/Qwen3.6-35B-A3B-UD-MLX-4bit --prefill-step-size 8192 --port 8001Higher prefill-step-size helps long-context prompt processing. Other MLX-Specific Boosts Dtype fix (big on M3): Some MLX loads default to bf16 (emulated/slower on older M chips). Force fp16 where possible for +20-25% on some setups. Speculative decoding: Available in mlx-lm but mixed results on MoE models like this one — a tiny draft (0.5-1.5B) can help dense models but sometimes slows MoE due to overhead. Test a small Qwen draft carefully; start without it. Context & memory: 128K works but monitor unified memory usage. Stick to 4-bit for stability. MLX handles unified memory very well, but prefill can still be the bottleneck at very long contexts (llama.cpp is often more stable there). Latest mlx-lm + mlx: pip install -U mlx mlx-lm — 2026 versions have big Qwen MoE improvements. Expected Speeds on M3 36 GB (Qwen3.6-35B-A3B) Good 4-bit MLX setup: 50-80+ t/s generation (short-medium context). With long 128K context: Expect some drop, but still better than baseline. If prefill feels slow → that's common in MLX; consider hybrid use (MLX for generation, llama.cpp latest for heavy long-context sessions). If you're getting exactly 30 t/s right now, share: Which exact MLX model/quant you're loading (UD-MLX-4bit etc.) Your current generate/server command Typical context length in use I can give you a more precise tuned script or debug the bottleneck. MLX is already one of the fastest paths on your hardware — we're just polishing it. (If you actually meant you're not on MLX and want to stick with llama.cpp, let me know and we'll double down on the speculative + latest build from before.) - and run it to find better setup",
+      "source": "pi_session",
+      "actual": "escalate",
+      "predicted": "continue",
+      "conf": 0.6250449295069033
+    },
+    {
+      "text": "hey continue sdeep /autoresearch with this Great research — MLX 3-bit clearly wins on raw speed + efficiency. For the 4-bit version (38.7 t/s, ~21 GB, better quality than 3-bit), here are targeted suggestions to squeeze more performance or improve the quality/speed balance while keeping the higher fidelity. 1. Quick Parameter & Sampler Tweaks (Biggest Easy Wins) The default sampler is good, but you can push decode TPS closer to 42+ without much quality loss: Pythonfrom mlx_lm import load, generate from mlx_lm.sample_utils import make_sampler model, tokenizer = load(\"unsloth/Qwen3.6-35B-A3B-UD-MLX-4bit\") sampler = make_sampler( temp=0.7, # or 0.6-0.65 for more focused/coding outputs top_p=0.92, # Slightly tighter than 0.95 → faster + coherent top_k=30, # Lower from 40 reduces branching min_p=0.05, # Raise from 0.1 for less \"junk\" tokens repetition_penalty=1.05 # Light penalty helps speed on long gens ) response = generate( model=model, tokenizer=tokenizer, prompt=your_prompt, max_tokens=16384, sampler=sampler, verbose=True, # New/important: repetition_context_size=512, # Helps long-context speed # Try this for speculative-like boost if available in your mlx-lm version: # draft_model=\"unsloth/Qwen2.5-1.5B-Instruct-MLX-4bit\" # test carefully on MoE ) Test these combos (run 5-10 short benchmarks): temp=0.65 + top_p=0.90 + min_p=0.05 → often +3-6 t/s with minimal coherence drop. For coding/agentic work: lower temp (0.6) + stronger repetition_penalty. 2. Server & Prefill Optimizations Update your start-mlx-server.sh with these flags for better real-world throughput: Bashmlx_lm.server \\ --model unsloth/Qwen3.6-35B-A3B-UD-MLX-4bit \\ --port 8001 \\ --prefill-step-size 4096 \\ # or 8192 — balances TTFT vs memory --max-kv-size 131072 \\ # Explicit 128K --batch-size 1 \\ # Single user, but try 2 if multi --trust-remote-code Higher prefill-step-size (8192+) helps long-context prompt processing speed (your research noted it doesn't affect decode much, but improves overall feel). Add --quantize or check for any 4-bit specific cache tweaks in latest mlx-lm. 3. Quality-Focused Tradeoffs (Why Use 4-bit Over 3-bit) Better for: Complex reasoning, tool calling, vision (if using mlx-vlm), long multi-turn agents, creative tasks. 3-bit is great for raw speed but can lose nuance on edge cases. Memory headroom: At 21 GB you still have ~15 GB free on 36 GB — plenty for 128K KV cache + system. Hybrid setup: Use 4-bit as primary, fall back to 3-bit for very long / high-volume sessions via your models.json routing. 4. Advanced / Experimental Speculative decoding (if your mlx-lm version supports a draft model): A small 1-2B Qwen MLX draft can add 20-40% on some workloads, but test it — MoE models sometimes see neutral or negative gains due to expert routing overhead. Dtype / precision: Force fp16 if the 4-bit load defaults to bf16 (small win on M3). Update everything: pip install -U mlx mlx-lm — monthly gains are common for Qwen MoE. Benchmark script tweak: Add torch.compile style options or custom kernels if available in Unsloth's MLX fork.",
+      "source": "pi_session",
+      "actual": "continue",
+      "predicted": "escalate",
+      "conf": 0.6106477439002147
+    },
+    {
+      "text": "alright, looks good? how do I use it form my machine after start?",
+      "source": "pi_session",
+      "actual": "escalate",
+      "predicted": "continue",
+      "conf": 0.8174982246993238
+    },
+    {
+      "text": "oh that advisor line [advisor: skip, Change looks complete.] - lowercase only please. Also lets go do the extended training please iterate and get me enhanced adapter",
+      "source": "pi_session",
+      "actual": "continue",
+      "predicted": "escalate",
+      "conf": 0.6418437371001311
+    },
+    {
+      "text": "looks misaligned: [advisor:llm] continue · reason: local gate predicts review local gate predicts review means: the local classifier recommends advisor review.",
+      "source": "pi_session",
+      "actual": "continue",
+      "predicted": "escalate",
+      "conf": 0.837117498183654
+    },
+    {
+      "text": "sure, keep autoresearch running, investigate differen toptions there",
+      "source": "pi_session",
+      "actual": "escalate",
+      "predicted": "continue",
+      "conf": 0.5313288767127775
+    },
+    {
+      "text": "compare since yesterday from the moment we installed working extension verison",
+      "source": "pi_session",
+      "actual": "escalate",
+      "predicted": "continue",
+      "conf": 0.532799447806672
+    },
+    {
+      "text": "interesting it is preconfigurd Skip waiting Vast.ai Instance: 35776926 NVIDIA GeForce RTX 5090 GPU CPU Memory Container Disk Applications Manage Your Services Tunnels Open New Ports Supervisor Process Management Instance Logs Debugging Tools & Help Resources & Guides Instance Logs Copy Logs Download Logs WebSocket connected at 11:51:22 PM Connected to log stream SSH key propagation complete. 2026-04-28 21:50:36 [INFO] Provisioner starting (version 1) 2026-04-28 21:50:36 [INFO] --- Phase 1b: Extensions --- 2026-04-28 21:50:36 [DEBUG] Marked stage 'extensions' complete (hash=85ae813fbcdf) 2026-04-28 21:50:36 [INFO] No HuggingFace token found ($HF_TOKEN not set) 2026-04-28 21:50:36 [INFO] No CivitAI token found ($CIVITAI_TOKEN not set) 2026-04-28 21:50:36 [INFO] --- Phase 2b: Early file writes --- 2026-04-28 21:50:36 [INFO] No files to write (write_files) 2026-04-28 21:50:36 [DEBUG] Marked stage 'write_files' complete (hash=1f22235f90d8) 2026-04-28 21:50:36 [INFO] --- Phase 3: APT packages --- 2026-04-28 21:50:36 [INFO] No apt packages to install 2026-04-28 21:50:36 [DEBUG] Marked stage 'apt' complete (hash=6d0145d249f5) 2026-04-28 21:50:36 [INFO] --- Phase 4: Git repos --- 2026-04-28 21:50:36 [INFO] No git repos to clone 2026-04-28 21:50:36 [DEBUG] Marked stage 'git' complete (hash=fce8dd0e3224) 2026-04-28 21:50:36 [INFO] --- Phase 5: Pip packages --- 2026-04-28 21:50:36 [DEBUG] Marked stage 'pip' complete (hash=3c62660df3d0) 2026-04-28 21:50:36 [INFO] --- Phase 5b: Conda packages --- 2026-04-28 21:50:36 [DEBUG] Marked stage 'conda' complete (hash=4f9b7726f081) 2026-04-28 21:50:36 [INFO] --- Phase 6: Downloads --- 2026-04-28 21:50:36 [INFO] No downloads to process 2026-04-28 21:50:36 [DEBUG] Marked stage 'downloads' complete (hash=7c58e5530854) 2026-04-28 21:50:36 [INFO] --- Phase 7: Supervisor services --- 2026-04-28 21:50:36 [INFO] No supervisor services to register 2026-04-28 21:50:36 [DEBUG] Marked stage 'services' complete (hash=a79d52b180fd) 2026-04-28 21:50:36 [INFO] --- Phase 7b: Late file writes --- 2026-04-28 21:50:36 [INFO] No files to write (write_files_late) 2026-04-28 21:50:36 [DEBUG] Marked stage 'write_files_late' complete (hash=a36632ecc9f9) 2026-04-28 21:50:36 [INFO] --- Phase 8: Post commands --- 2026-04-28 21:50:36 [DEBUG] Marked stage 'post_commands' complete (hash=71f608077d36) 2026-04-28 21:50:36 [INFO] Provisioning complete! Skipping pyworker startup (not serverless) Refusing to start jupyter (/.launch managing) Waiting for /etc/portal.yaml before starting syncthing... Skipping syncthing startup (not in /etc/portal.yaml) Waiting for /etc/portal.yaml before starting tensorboard... Skipping tensorboard startup (not in /etc/portal.yaml) Waiting for /etc/portal.yaml before starting llama... Starting Llama.cpp ggml_cuda_init: found 1 CUDA devices (Total VRAM: 32109 MiB): Device 0: NVIDIA GeForce RTX 5090, compute capability 12.0, VMM: yes, VRAM: 32109 MiB common_download_file_single_online: HEAD failed, status: 404 no remote preset found, skipping ***** * * * Automatic login is enabled via the 'Open' button * Your web credentials are: vastai / 7b343b15c32ddb7b4fe5e2ecf3cfe69f670cd138d86ac67299d50beed6004b4b * * To make API requests, pass an Authorization header (Authorization: Bearer 7b343b15c32ddb7b4fe5e2ecf3cfe69f670cd138d86ac67299d50beed6004b4b) * * ***** Starting Caddy... {\"level\":\"info\",\"ts\":1777413040.2583303,\"msg\":\"using config from file\",\"file\":\"/etc/Caddyfile\"} {\"level\":\"info\",\"ts\":1777413040.2631047,\"msg\":\"adapted config to JSON\",\"adapter\":\"caddyfile\"} {\"level\":\"info\",\"ts\":1777413040.2658153,\"logger\":\"admin\",\"msg\":\"admin endpoint started\",\"address\":\"localhost:2019\",\"enforce_origin\":false,\"origins\":[\"//localhost:2019\",\"//[::1]:2019\",\"//127.0.0.1:2019\"]} {\"level\":\"info\",\"ts\":1777413040.266994,\"logger\":\"tls.cache.maintenance\",\"msg\":\"started background certificate maintenance\",\"cache\":\"0xc0009d7880\"} {\"level\":\"warn\",\"ts\":1777413040.2926097,\"logger\":\"http\",\"msg\":\"HTTP/3 skipped because it requires TLS\",\"network\":\"tcp\",\"addr\":\":1111\"} {\"level\":\"warn\",\"ts\":1777413040.2930741,\"logger\":\"http\",\"msg\":\"HTTP/2 skipped because it requires TLS\",\"network\":\"tcp\",\"addr\":\":1111\"} {\"level\":\"info\",\"ts\":1777413040.2930849,\"logger\":\"http.log\",\"msg\":\"server running\",\"name\":\"srv0\",\"protocols\":[\"h1\",\"h2\",\"h3\"]} {\"level\":\"warn\",\"ts\":1777413040.2930982,\"logger\":\"http\",\"msg\":\"HTTP/3 skipped because it requires TLS\",\"network\":\"tcp\",\"addr\":\":8000\"} {\"level\":\"warn\",\"ts\":1777413040.2931457,\"logger\":\"http\",\"msg\":\"HTTP/2 skipped because it requires TLS\",\"network\":\"tcp\",\"addr\":\":8000\"} {\"level\":\"info\",\"ts\":1777413040.2931511,\"logger\":\"http.log\",\"msg\":\"server running\",\"name\":\"srv1\",\"protocols\":[\"h1\",\"h2\",\"h3\"]} {\"level\":\"info\",\"ts\":1777413040.2934384,\"msg\":\"autosaved config (load with --resume flag)\",\"file\":\"/root/.config/caddy/autosave.json\"} {\"level\":\"info\",\"ts\":1777413040.2934484,\"msg\":\"serving initial configuration\"} {\"level\":\"info\",\"ts\":1777413040.2995427,\"logger\":\"tls\",\"msg\":\"cleaning storage unit\",\"storage\":\"FileStorage:/root/.local/share/caddy\"} {\"level\":\"info\",\"ts\":1777413040.3013058,\"logger\":\"tls\",\"msg\":\"finished cleaning storage units\"} Waiting for /etc/portal.yaml before starting tunnel_manager... INFO Using path tunnel_manager.py INFO Resolved absolute path /opt/portal-aio/tunnel_manager/tunnel_manager.py INFO Searching for package file structure from directories with __init__.py files INFO Importing from /opt/portal-aio/tunnel_manager ╭── Python module file ──╮ │ │ │ 🐍 tunnel_manager.py │ │ │ ╰────────────────────────╯ INFO Importing module tunnel_manager INFO Found importable FastAPI app ╭───── Importable FastAPI app ─────╮ │ │ │ from tunnel_manager import app │ │ │ ╰──────────────────────────────────╯ INFO Using import string tunnel_manager:app ╭─────────── FastAPI CLI - Production mode ───────────╮ │ │ │ Serving at: http://127.0.0.1:11112 │ │ │ │ API docs: http://127.0.0.1:11112/docs │ │ │ │ Running in production mode, for development use: │ │ │ │ fastapi dev │ │ │ ╰─────────────────────────────────────────────────────╯ INFO: Started server process [635] INFO: Waiting for application startup. INFO: Application startup complete. INFO: Uvicorn running on http://127.0.0.1:11112 (Press CTRL+C to quit) Waiting for /etc/portal.yaml before starting instance_portal... INFO Using path portal.py INFO Resolved absolute path /opt/portal-aio/portal/portal.py INFO Searching for package file structure from directories with __init__.py files INFO Importing from /opt/portal-aio/portal ╭─ Python module file ─╮ │ │ │ 🐍 portal.py │ │ │ ╰──────────────────────╯ INFO Importing module portal INFO Found importable FastAPI app ╭─ Importable FastAPI app ─╮ │ │ │ from portal import app │ │ │ ╰──────────────────────────╯ INFO Using import string portal:app ╭─────────── FastAPI CLI - Production mode ───────────╮ │ │ │ Serving at: http://127.0.0.1:11111 │ │ │ │ API docs: http://127.0.0.1:11111/docs │ │ │ │ Running in production mode, for development use: │ │ │ │ fastapi dev │ │ │ ╰─────────────────────────────────────────────────────╯ INFO: Started server process [634] INFO: Waiting for application startup. 2026-04-28 21:50:40,848 - log_monitor - INFO - Starting log monitoring in /var/log/portal 2026-04-28 21:50:40,848 - log_monitor - INFO - New file: ssh-keys.log, size=30 INFO: Application startup complete. INFO: Uvicorn running on http://127.0.0.1:11111 (Press CTRL+C to quit) 2026-04-28 21:50:40,850 - log_monitor - INFO - New file: provisioning.log, size=1994 2026-04-28 21:50:40,851 - log_monitor - INFO - New file: cron.log, size=0 2026-04-28 21:50:40,851 - log_monitor - INFO - New file: pyworker.log, size=43 2026-04-28 21:50:40,852 - log_monitor - INFO - New file: jupyter.log, size=46 2026-04-28 21:50:40,852 - log_monitor - INFO - New file: syncthing.log, size=111 2026-04-28 21:50:40,852 - log_monitor - INFO - New file: tensorboard.log, size=115 2026-04-28 21:50:40,853 - log_monitor - INFO - New file: llama.log, size=325 2026-04-28 21:50:40,853 - log_monitor - INFO - New file: caddy.log, size=2115 2026-04-28 21:50:40,854 - log_monitor - INFO - New file: tunnel_manager.log, size=4304 2026-04-28 21:50:40,854 - log_monitor - INFO - New file: instance_portal.log, size=5167 [http://localhost:1111] 2026-04-28T21:50:40Z INF Thank you for trying Cloudflare Tunnel. Doing so, without a Cloudflare account, is a quick way to experiment and try it out. However, be aware that these account-less Tunnels have no uptime guarantee, are subject to the Cloudflare Online Services Terms of Use (https://www.cloudflare.com/website-terms/), and Cloudflare reserves the right to investigate your use of Tunnels for violations of such terms. If you intend to use Tunnels in production you should use a pre-created named tunnel by following: https://developers.cloudflare.com/cloudflare-one/connections/connect-apps [http://localhost:1111] 2026-04-28T21:50:40Z INF Requesting new quick Tunnel on trycloudflare.com... [http://localhost:1111] 2026-04-28T21:50:44Z INF +--------------------------------------------------------------------------------------------+ [http://localhost:1111] 2026-04-28T21:50:44Z INF | Your quick Tunnel has been created! Visit it at (it may take some time to be reachable): | [http://localhost:1111] 2026-04-28T21:50:44Z INF | https://thesis-bible-foo-poison.trycloudflare.com | Default Tunnel started for Instance Portal (http://localhost:1111) - https://thesis-bible-foo-poison.trycloudflare.com [http://localhost:1111] 2026-04-28T21:50:44Z INF +--------------------------------------------------------------------------------------------+ [http://localhost:1111] 2026-04-28T21:50:44Z INF Cannot determine default configuration path. No file [config.yml config.yaml] in [~/.cloudflared ~/.cloudflare-warp ~/cloudflare-warp /etc/cloudflared /usr/local/etc/cloudflared] [http://localhost:1111] 2026-04-28T21:50:44Z INF Version 2026.3.0 (Checksum 4a9e50e6d6d798e90fcd01933151a90bf7edd99a0a55c28ad18f2e16263a5c30) [http://localhost:1111] 2026-04-28T21:50:44Z INF GOOS: linux, GOVersion: go1.24.13, GoArch: amd64 [http://localhost:1111] 2026-04-28T21:50:44Z INF Settings: map[ha-connections:1 no-tls-verify:true url:http://localhost:1111] [http://localhost:1111] 2026-04-28T21:50:44Z INF Environmental variables map[TUNNEL_TRANSPORT_PROTOCOL:http2] [http://localhost:1111] 2026-04-28T21:50:44Z INF Autoupdate frequency is set autoupdateFreq=86400000 [http://localhost:1111] 2026-04-28T21:50:44Z INF Generated Connector ID: 2403f998-dcad-4516-abe6-ff83de781f13 [http://localhost:8000] 2026-04-28T21:50:46Z INF Thank you for trying Cloudflare Tunnel. Doing so, without a Cloudflare account, is a quick way to experiment and try it out. However, be aware that these account-less Tunnels have no uptime guarantee, are subject to the Cloudflare Online Services Terms of Use (https://www.cloudflare.com/website-terms/), and Cloudflare reserves the right to investigate your use of Tunnels for violations of such terms. If you intend to use Tunnels in production you should use a pre-created named tunnel by following: https://developers.cloudflare.com/cloudflare-one/connections/connect-apps [http://localhost:8000] 2026-04-28T21:50:46Z INF Requesting new quick Tunnel on trycloudflare.com... [http://localhost:1111] 2026-04-28T21:50:49Z INF Initial protocol http2 [http://localhost:1111] 2026-04-28T21:50:49Z INF ICMP proxy will use 172.17.0.3 as source for IPv4 [http://localhost:1111] 2026-04-28T21:50:49Z INF ICMP proxy will use ::1 in zone lo as source for IPv6 [http://localhost:1111] 2026-04-28T21:50:49Z INF ICMP proxy will use 172.17.0.3 as source for IPv4 [http://localhost:1111] 2026-04-28T21:50:49Z INF ICMP proxy will use ::1 in zone lo as source for IPv6 [http://localhost:1111] 2026-04-28T21:50:49Z INF Starting metrics server on 127.0.0.1:20241/metrics [http://localhost:1111] 2026-04-28T21:50:49Z INF Registered tunnel connection connIndex=0 connection=1101e7b3-b4ca-426a-b288-a2b6ba60089c event=0 ip=198.41.200.233 location=cph03 protocol=http2 [http://localhost:8000] 2026-04-28T21:50:50Z INF +--------------------------------------------------------------------------------------------+ [http://localhost:8000] 2026-04-28T21:50:50Z INF | Your quick Tunnel has been created! Visit it at (it may take some time to be reachable): | [http://localhost:8000] 2026-04-28T21:50:50Z INF | https://expires-springfield-closer-mechanism.trycloudflare.com | Default Tunnel started for Llama.cpp UI (http://localhost:8000) - https://expires-springfield-closer-mechanism.trycloudflare.com [http://localhost:8000] 2026-04-28T21:50:50Z INF +--------------------------------------------------------------------------------------------+ [http://localhost:8000] 2026-04-28T21:50:50Z INF Cannot determine default configuration path. No file [config.yml config.yaml] in [~/.cloudflared ~/.cloudflare-warp ~/cloudflare-warp /etc/cloudflared /usr/local/etc/cloudflared] [http://localhost:8000] 2026-04-28T21:50:50Z INF Version 2026.3.0 (Checksum 4a9e50e6d6d798e90fcd01933151a90bf7edd99a0a55c28ad18f2e16263a5c30) [http://localhost:8000] 2026-04-28T21:50:50Z INF GOOS: linux, GOVersion: go1.24.13, GoArch: amd64 [http://localhost:8000] 2026-04-28T21:50:50Z INF Settings: map[ha-connections:1 no-tls-verify:true url:http://localhost:8000] [http://localhost:8000] 2026-04-28T21:50:50Z INF Environmental variables map[TUNNEL_TRANSPORT_PROTOCOL:http2] [http://localhost:8000] 2026-04-28T21:50:50Z INF Autoupdate frequency is set autoupdateFreq=86400000 [http://localhost:8000] 2026-04-28T21:50:50Z INF Generated Connector ID: 6f789a2f-afb5-450c-b344-47c4aa21edcf [http://localhost:8000] 2026-04-28T21:50:50Z INF Initial protocol http2 [http://localhost:8000] 2026-04-28T21:50:50Z INF ICMP proxy will use 172.17.0.3 as source for IPv4 [http://localhost:8000] 2026-04-28T21:50:50Z INF ICMP proxy will use ::1 in zone lo as source for IPv6 [http://localhost:8000] 2026-04-28T21:50:50Z INF ICMP proxy will use 172.17.0.3 as source for IPv4 [http://localhost:8000] 2026-04-28T21:50:50Z INF ICMP proxy will use ::1 in zone lo as source for IPv6 [http://localhost:8000] 2026-04-28T21:50:50Z INF Starting metrics server on 127.0.0.1:20242/metrics [http://localhost:8000] 2026-04-28T21:50:51Z INF Registered tunnel connection connIndex=0 connection=1c44f0f0-8603-4fda-9663-627df4e8a920 event=0 ip=198.41.200.53 location=cph01 protocol=http2 [https://localhost:8080] 2026-04-28T21:50:52Z INF Thank you for trying Cloudflare Tunnel. Doing so, without a Cloudflare account, is a quick way to experiment and try it out. However, be aware that these account-less Tunnels have no uptime guarantee, are subject to the Cloudflare Online Services Terms of Use (https://www.cloudflare.com/website-terms/), and Cloudflare reserves the right to investigate your use of Tunnels for violations of such terms. If you intend to use Tunnels in production you should use a pre-created named tunnel by following: https://developers.cloudflare.com/cloudflare-one/connections/connect-apps [https://localhost:8080] 2026-04-28T21:50:52Z INF Requesting new quick Tunnel on trycloudflare.com... [https://localhost:8080] 2026-04-28T21:50:57Z INF +--------------------------------------------------------------------------------------------+ [https://localhost:8080] 2026-04-28T21:50:57Z INF | Your quick Tunnel has been created! Visit it at (it may take some time to be reachable): | [https://localhost:8080] 2026-04-28T21:50:57Z INF | https://genealogy-karl-expense-titten.trycloudflare.com | Default Tunnel started for Jupyter (https://localhost:8080) - https://genealogy-karl-expense-titten.trycloudflare.com [https://localhost:8080] 2026-04-28T21:50:57Z INF +--------------------------------------------------------------------------------------------+ [https://localhost:8080] 2026-04-28T21:50:57Z INF Cannot determine default configuration path. No file [config.yml config.yaml] in [~/.cloudflared ~/.cloudflare-warp ~/cloudflare-warp /etc/cloudflared /usr/local/etc/cloudflared] [https://localhost:8080] 2026-04-28T21:50:57Z INF Version 2026.3.0 (Checksum 4a9e50e6d6d798e90fcd01933151a90bf7edd99a0a55c28ad18f2e16263a5c30) [https://localhost:8080] 2026-04-28T21:50:57Z INF GOOS: linux, GOVersion: go1.24.13, GoArch: amd64 [https://localhost:8080] 2026-04-28T21:50:57Z INF Settings: map[ha-connections:1 no-tls-verify:true url:https://localhost:8080] [https://localhost:8080] 2026-04-28T21:50:57Z INF Environmental variables map[TUNNEL_TRANSPORT_PROTOCOL:http2] [https://localhost:8080] 2026-04-28T21:50:57Z INF Autoupdate frequency is set autoupdateFreq=86400000 [https://localhost:8080] 2026-04-28T21:50:57Z INF Generated Connector ID: cd87ef74-babb-4f10-bf74-7da0e234bf60 [https://localhost:8080] 2026-04-28T21:50:57Z INF Initial protocol http2 [https://localhost:8080] 2026-04-28T21:50:57Z INF ICMP proxy will use 172.17.0.3 as source for IPv4 [https://localhost:8080] 2026-04-28T21:50:57Z INF ICMP proxy will use ::1 in zone lo as source for IPv6 [https://localhost:8080] 2026-04-28T21:50:57Z INF ICMP proxy will use 172.17.0.3 as source for IPv4 [https://localhost:8080] 2026-04-28T21:50:57Z INF ICMP proxy will use ::1 in zone lo as source for IPv6 [https://localhost:8080] 2026-04-28T21:50:57Z INF Starting metrics server on 127.0.0.1:20243/metrics [https://localhost:8080] 2026-04-28T21:50:57Z INF Registered tunnel connection connIndex=0 connection=9de1c68b-a83b-485b-87fb-29fe13f13f3b event=0 ip=198.41.200.113 location=cph03 protocol=http2 INFO: ('213.114.248.187', 0) - \"WebSocket /ws-logs?_=1777413082080\" [accepted] 2026-04-28 21:51:22,230 - log_monitor - INFO - WebSocket client 140336297466000 connected, total clients: 1 INFO: connection open Waiting for /etc/portal.yaml before starting llama... Starting Llama.cpp ggml_cuda_init: found 1 CUDA devices (Total VRAM: 32109 MiB): Device 0: NVIDIA GeForce RTX 5090, compute capability 12.0, VMM: yes, VRAM: 32109 MiB common_download_file_single_online: HEAD failed, status: 404 no remote preset found, skipping Downloading mmproj-BF16.gguf ─────────────────────────────────────── 100% Downloading Qwen3.5-35B-A3B-UD-Q5_K_XL.gguf ───────────────────── 87%",
+      "source": "pi_session",
+      "actual": "continue",
+      "predicted": "escalate",
+      "conf": 0.6543804684613773
+    },
+    {
+      "text": "hey check project for low hanging fruits",
+      "source": "claude_history",
+      "actual": "escalate",
+      "predicted": "continue",
+      "conf": 0.9839207162346877
+    },
+    {
+      "text": "hey lets brainstorm the idea of cli app which is starting in terminal and playing google music which I have account from, should be easy, right? there should be several components: current song with play/back/forward, up next list with next songs, volume slider, mute button, the area with jumping equalizer bars which popping with the music, something else?",
+      "source": "claude_history",
+      "actual": "continue",
+      "predicted": "escalate",
+      "conf": 0.6377419610267356
+    },
+    {
+      "text": "see sample output  what is the curent date \n\n⏺ Task(Refresh YouTube Music status)\n  ⎿  Backgrounded agent (↓ to manage · ctrl+o to expand)\n\n⏺ The current date is January 11, 2026.\n\n⏺ Agent \"Refresh YouTube Music status\" completed.\n\n⏺ Is there anything else you'd like to know?\n\n❯ what is the curent date \n\n⏺ Task(Refresh YouTube Music status)\n  ⎿  Backgrounded agent (↓ to manage · ctrl+o to expand)\n\n⏺ The current date is January 11, 2026.\n\n⏺ Agent \"Refresh YouTube Music status\" completed.\n\n⏺ Anything else I can help with? as well as background agent log: Backgrounded agent                                                                                        \n  ⎿  Prompt:\n       Get current song from YouTube Music tab 69007912 using mcp__claude-in-chrome__javascript_tool, then run\n       /Users/pavel/repos/tmp/clude-status/claude-status-hub/bin/update-bridge.sh with the song info\n\n⏺ The current date is January 11, 2026.                                                               12:11 AM  claude-opus-4-5-20251101\n\n⏺ Agent \"Refresh YouTube Music status\" completed.\n\n∴ Thinking…\n\n  The background task completed. The user didn't ask about it, and I was instructed not to mention it. I already answered the user's question\n  about the date. I don't need to say anything else unless they ask another question.\n\n⏺ Anything else I can help with?    . For some reason status line is empty - no music info at all",
+      "source": "claude_history",
+      "actual": "escalate",
+      "predicted": "continue",
+      "conf": 0.8612425614287398
+    },
+    {
+      "text": "yes please investigate and implement it",
+      "source": "claude_history",
+      "actual": "escalate",
+      "predicted": "continue",
+      "conf": 0.7409610238715266
+    },
+    {
+      "text": "Bug Fix: Context Window Display\n\n  Problem: The statusline script reads the wrong JSON field for context usage.\n\n  Expected (incorrect):\n  ctx_used=$(echo \"$input\" | jq -r '.context_window.current_usage.input_tokens // 0')\n\n  Actual data from Claude Code:\n  {\n    \"context_window\": {\n      \"total_input_tokens\": 98401,\n      \"total_output_tokens\": 28783,\n      \"context_window_size\": 200000,\n      \"current_usage\": null,\n      \"used_percentage\": null,\n      \"remaining_percentage\": null\n    }\n  }\n\n  Fix: Change line ~29 in bin/statusline.sh:\n  ctx_used=$(echo \"$input\" | jq -r '.context_window.total_input_tokens // 0')\n\n  Note: The current_usage object is always null. Use total_input_tokens instead.",
+      "source": "claude_history",
+      "actual": "escalate",
+      "predicted": "continue",
+      "conf": 0.9505670011552773
+    },
+    {
+      "text": "see if you want to use it for readme looks nice, also worth to have there a few or three PRs",
+      "source": "claude_history",
+      "actual": "continue",
+      "predicted": "escalate",
+      "conf": 0.628490828223116
+    },
+    {
+      "text": "now command \"/hub-list\" it feels it has to become \"/hub-tree\", wdyt. if looks good - update it as well as all references",
+      "source": "claude_history",
+      "actual": "escalate",
+      "predicted": "continue",
+      "conf": 0.7573833581523894
+    },
+    {
+      "text": "autocompact ahndoff is about current session tbh - how to help you to plan better, 6% of contexat remaining right now. Good Q on user authored skills - choose specific location, document in that magic skill creation guide for you and use for writes of new integrations and reads form there. Cross session broadcast would be super cool, maybe plan for later? hehe painless slack integration is essenial, something where user auth against understandable flow, not where browser debug shared tokens are expiring and have to be reprovisioned manually - too much friction",
+      "source": "claude_history",
+      "actual": "escalate",
+      "predicted": "continue",
+      "conf": 0.6394098840049666
+    },
+    {
+      "text": "for jira browser based I guess we need user to provide url in wizard or so\nfor github merge instructions could be per org like org1 - regular merge with squash, org1/repoN - here merge over merge commit, org2 - everything over /aviator merge\noh, supercool think - smart \"/hub-focus\" - it can check calendar, and tackle on options - ram into existing meerings and decline those and /or message organizer, disable slack alerts and how, what to show on status",
+      "source": "claude_history",
+      "actual": "continue",
+      "predicted": "escalate",
+      "conf": 0.8726039657732558
+    },
+    {
+      "text": "yeah go ahead, overwrite existing pr commit, add tests and version there",
+      "source": "claude_history",
+      "actual": "escalate",
+      "predicted": "continue",
+      "conf": 0.7593726839266277
+    },
+    {
+      "text": "Implement the following plan:\n\n# 1.4.0 Roadmap: Slack Contextual Actions\n\n## Summary\n\nCreate `hub-ack-slack.md` - the missing contextual action handler for Slack VIP DM alerts. Users can view messages and send smart replies directly from Claude Code.\n\n## Scope\n\n**In scope:**\n- `hub-ack-slack.md` skill with view + smart reply\n- Chrome MCP as primary connection method\n- Template-based replies with AI context adaptation\n\n**Out of scope (future):**\n- Knowledge source search (Confluence/Notion)\n- Focus mode Slack status integration\n- Playwright fallback\n\n## Implementation\n\n### 1. Create `hub-ack-slack.md`\n\n**Location:** `plugins/claude-status-hub/skills/hub-ack-slack.md`\n\n**Flow:**\n```\nAlert detected → /hub-ack → Route to hub-ack-slack.md →\n  1. Fetch message details via Chrome MCP\n  2. Display: sender, timestamp, message preview\n  3. Present reply options (templates + AI-adapted)\n  4. User selects → Send via Chrome MCP\n  5. Mark alert as handled in bridge\n```\n\n**Reply templates:**\n- \"On it!\"\n- \"Let me check and get back to you\"\n- \"Thanks, will follow up\"\n- \"Got it, working on this now\"\n- AI adapts template based on message context (question vs request vs FYI)\n\n### 2. Update `hub-ack.md` routing\n\nAdd Slack alert type detection and routing to `hub-ack-slack.md`.\n\n### 3. Chrome MCP integration for replies\n\nUse existing `tool-slack.md` patterns:\n- Find Slack tab\n- Navigate to DM conversation\n- Input reply text\n- Send message\n\n## Files to modify\n\n| File | Change |\n|------|--------|\n| `skills/hub-ack-slack.md` | **CREATE** - Main skill |\n| `skills/hub-ack.md` | Add Slack routing |\n| `skills/tool-slack.md` | Add reply/send functions if needed |\n| `.claude-plugin/plugin.json` | Bump to 1.4.0 |\n| `.claude-plugin/marketplace.json` | Bump to 1.4.0 |\n\n## Verification\n\n1. Setup: Have Slack tab open with VIP DM configured\n2. Trigger: Receive DM from VIP person\n3. Refresh: `/hub` should show Slack alert\n4. Ack: `/hub-ack` should route to Slack handler\n5. View: Should display message preview\n6. Reply: Select template → message sent via Chrome MCP\n7. Clear: Alert marked as handled\n\n\nIf you need specific details from before exiting plan mode (like exact code snippets, error messages, or content you generated), read the full transcript at: /Users/pavel/.claude/projects/-Users-pavel-repos-fiale-plus-fiale-claude-plugins/e308b301-955e-49b9-bf97-821c57a630ae.jsonl",
+      "source": "claude_history",
+      "actual": "escalate",
+      "predicted": "continue",
+      "conf": 0.6902095321493988
+    },
+    {
+      "text": "now can you plan on root README and hub status plugin README updates. The one in plugin needs:\n- update on the concept of \"/hub-setup\" -> \"/hub-<monitor cfg>\" -> alert -> \"/hub-ack\" in the **context** and relevant actions\n- provide killing examples\n- list features in the documentation on what is possible for each dimension",
+      "source": "claude_history",
+      "actual": "escalate",
+      "predicted": "continue",
+      "conf": 0.9220899626108683
+    },
+    {
+      "text": "hey can you go https://github.com/fiale-plus/fiale-claude-plugins/pull/44 , remove fix commit and make initial change look like the broken code is not intentional - the goal is to pretend we are having real issue there",
+      "source": "claude_history",
+      "actual": "escalate",
+      "predicted": "continue",
+      "conf": 0.5570902812584553
+    },
+    {
+      "text": "I see {\"error\":\"Moltbot gateway failed to start\",\"details\":\"ProcessExitedBeforeReadyError: Process exited with code 1 before becoming ready. Waiting for: port 18789 (TCP)\",\"hint\":\"Check worker logs with: wrangler tail\"}",
+      "source": "claude_history",
+      "actual": "continue",
+      "predicted": "escalate",
+      "conf": 0.9430435447761806
+    },
+    {
+      "text": "/Users/pavel/Downloads/Maxi\\ ICA\\ Stormarknad\\ Nacka\\ 2025-12-14.pdf /Users/pavel/Downloads/Maxi\\ ICA\\ Stormarknad\\ Nacka\\ 2025-12-23.pdf /Users/pavel/Downloads/Maxi\\ ICA\\ Stormarknad\\ Nacka\\ 2025-12-26.pdf /Users/pavel/Downloads/Maxi\\ ICA\\ Stormarknad\\ Nacka\\ 2025-12-28.pdf /Users/pavel/Downloads/Maxi\\ ICA\\ Stormarknad\\ Nacka\\ 2025-12-31\\ \\(1\\).pdf /Users/pavel/Downloads/Maxi\\ ICA\\ Stormarknad\\ Nacka\\ 2025-12-31.pdf /Users/pavel/Downloads/Maxi\\ ICA\\ Stormarknad\\ Nacka\\ 2026-01-10.pdf /Users/pavel/Downloads/Maxi\\ ICA\\ Stormarknad\\ Nacka\\ 2026-01-15.pdf /Users/pavel/Downloads/Maxi\\ ICA\\ Stormarknad\\ Nacka\\ 2026-01-21.pdf /Users/pavel/Downloads/Maxi\\ ICA\\ Stormarknad\\ Nacka\\ 2026-02-07.pdf nah these are actual source ones, create md from them - items, prices, dates",
+      "source": "claude_history",
+      "actual": "continue",
+      "predicted": "escalate",
+      "conf": 0.7957949401265072
+    },
+    {
+      "text": "my top of mind:\n- make sure I am up to date and leading in the auonomous generative software engnineering, so:\n  - onboarding automaiton, I am kicking off in new setups in a no time with like my cfg-init repo old school and maybe somehting new for AI bootstrap like opinionated setup of plugins (marketplace) and specific org projects and knowledge base setup\n  - given knowldge base/projects is different for each org and team this is real make sense to worjk on something (plugin?) which aggregates knowledge base to linked graph with maybe obsidian on top and this local brain flows, so that each project links back to the others and some team root locaiton (versioned in the repo). So plugin might want to install from the scratch: other plugins, knowledge sources, repos, root docs location to work with. MAybe we should work with project docs as with obsidian linked files, emerging concept!\n  - on a matter of coding we should have somehting that discover specific team projects structure, surface, relations and how to implement what and where to look for docs and so on\n  - on a matter of live feedback and personal efficiency, that make sense to have something that tracks all, ALL channels available (slack, gemini meeting summaries, jira, whatever) and posting daily/weekly dumps real helpful to individual and maybe team if we'd have team autonomous assistant\n\n- make sure we are dealing alright with immigraiton cases in our family\n  - spouse citizenship application\n  - sone citizenship notification\n\n- track our workation trip to italy 11-24 April, we have tickets, but we did not plan much yet, we should. its all in personal automated assistent as of now",
+      "source": "claude_history",
+      "actual": "escalate",
+      "predicted": "continue",
+      "conf": 0.6657106188664035
+    },
+    {
+      "text": "hey what about local brain flows using local memory somehow to integrate content?\nThree-Scope Memory Model - what about team scope above all projects? like everything else or cross projects collab, maybe team project could be merged with project?\nwhat about project level and shared above all projects level went to docs for the project and linked to MEMORY? So esentially obsidian vault per project and cross all proejcts for the team\nalso how do I configure auto memory, what the exact config - I see ome CLAUDE.md files in defaults, maybe then we dont have override or what, let meknow",
+      "source": "claude_history",
+      "actual": "escalate",
+      "predicted": "continue",
+      "conf": 0.7880127927729517
+    },
+    {
+      "text": "hey, while autoresearch is running here. Can you continue your work in the new branch on top of the current commit in the worktree with remaining changes - I want you to create new pr form those",
+      "source": "claude_history",
+      "actual": "continue",
+      "predicted": "escalate",
+      "conf": 0.6395819517265251
+    },
+    {
+      "text": "looks good, note I want it running on a side in a smaller part of my terminal - maybe in a footer smaller section - or in a side narrower section. Also I am mostly in ghostty in mac we can focus on that. So maybe we even can zoom the selected session across the top span shared among all sessions or something and zoom back again - would be perfect",
+      "source": "claude_history",
+      "actual": "escalate",
+      "predicted": "continue",
+      "conf": 0.9603574383503103
+    },
+    {
+      "text": "git status says we on main, not pr branch",
+      "source": "claude_history",
+      "actual": "escalate",
+      "predicted": "continue",
+      "conf": 0.7283058754589015
+    },
+    {
+      "text": "can you use superpowers plugin debug skill",
+      "source": "claude_history",
+      "actual": "escalate",
+      "predicted": "continue",
+      "conf": 0.9699476741080225
+    },
+    {
+      "text": "also compound calls with & have to be verified for their parts and if safe -approved going to the regular path",
+      "source": "claude_history",
+      "actual": "continue",
+      "predicted": "escalate",
+      "conf": 0.5172648494101415
+    },
+    {
+      "text": "now work on the directons form big five findings in parallel, meticulously verifying updates and if API adjusted - running new calls as well. be ready to create 5 PRs",
+      "source": "claude_history",
+      "actual": "continue",
+      "predicted": "escalate",
+      "conf": 0.8274565370430271
+    },
+    {
+      "text": "see bug report tempalte here [Pasted text #1 +48 lines] again - share me title / desc",
+      "source": "claude_history",
+      "actual": "escalate",
+      "predicted": "continue",
+      "conf": 0.922759969424426
+    },
+    {
+      "text": "btw, I dont mind to trade speed for quality - if model layers have to be offloaded to the disk or what to make it work. Or maybe its just fine as it goes right now - seed and autoresearch in case if its worth it. In autoresearch mode I am anyway not present - so thats fine to run it for longer if we can have better results",
+      "source": "claude_history",
+      "actual": "continue",
+      "predicted": "escalate",
+      "conf": 0.5462296941222988
+    },
+    {
+      "text": "hey whats the agent is spinning here, kill it i guess? Also take notes about twitter and linkedinposts https://x.com/pavelhacks/status/2035454568549462204 https://x.com/pavelhacks/status/2035448075636883739 and https://www.linkedin.com/feed/update/urn:li:activity:7441219204826943488 - you can check them over MCP",
+      "source": "claude_history",
+      "actual": "continue",
+      "predicted": "escalate",
+      "conf": 0.6126139906998979
+    },
+    {
+      "text": "do you want to run autoresearch in worktrees? if just implementation - thats ok to have all together. Though if you can autoresearch on the best way to implement - do in worktrees",
+      "source": "claude_history",
+      "actual": "continue",
+      "predicted": "escalate",
+      "conf": 0.6373358993153048
+    },
+    {
+      "text": "hey use /playground to render this data for different machines/token providers. Double check how in/out/cache r&w proced by vendors first before drawing money figures I real interested in comprehensive and full picture",
+      "source": "claude_history",
+      "actual": "escalate",
+      "predicted": "continue",
+      "conf": 0.630439811192251
+    },
+    {
+      "text": "hey can you check whats on th diff against remote main - I think we should reset local changes",
+      "source": "claude_history",
+      "actual": "escalate",
+      "predicted": "continue",
+      "conf": 0.5414200968369961
+    }
+  ]
+}
