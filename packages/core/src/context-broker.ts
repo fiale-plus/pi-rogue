@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { safeName, truncate } from "./text.js";
+import { safeName } from "./text.js";
 
 export type ContextArtifactKind =
   | "tool_output"
@@ -105,6 +105,28 @@ function normalizeNeedle(value: string | undefined): string {
   return String(value ?? "").trim().toLowerCase();
 }
 
+function truncateUtf8(text: string, maxBytes: number): string {
+  const limit = Math.max(0, Math.floor(maxBytes));
+  if (Buffer.byteLength(text, "utf8") <= limit) return text;
+  if (limit === 0) return "";
+
+  const ellipsis = "…";
+  const ellipsisBytes = Buffer.byteLength(ellipsis, "utf8");
+  const contentLimit = Math.max(0, limit - ellipsisBytes);
+  let used = 0;
+  let result = "";
+
+  for (const char of text) {
+    const bytes = Buffer.byteLength(char, "utf8");
+    if (used + bytes > contentLimit) break;
+    result += char;
+    used += bytes;
+  }
+
+  if (Buffer.byteLength(result + ellipsis, "utf8") <= limit) return result + ellipsis;
+  return result;
+}
+
 function artifactMatches(artifact: ContextArtifact, query: ContextLookupQuery): boolean {
   if (query.id && artifact.id !== query.id) return false;
   if (query.handle && artifact.handle !== query.handle) return false;
@@ -151,8 +173,8 @@ export function createInMemoryContextBroker(options: ContextBrokerOptions = {}):
     };
   }
 
-  function prune(now = Date.now()): ContextBrokerStatus {
-    artifacts = artifacts.filter((artifact) => artifact.pinned || !artifact.expiresAt || artifact.expiresAt > now);
+  function prune(now = Date.now(), protectedIds = new Set<string>()): ContextBrokerStatus {
+    artifacts = artifacts.filter((artifact) => artifact.pinned || protectedIds.has(artifact.id) || !artifact.expiresAt || artifact.expiresAt > now);
 
     const withinCaps = (): boolean => {
       const current = status();
@@ -162,7 +184,7 @@ export function createInMemoryContextBroker(options: ContextBrokerOptions = {}):
     while (!withinCaps()) {
       const candidate = artifacts
         .map((artifact, index) => ({ artifact, index }))
-        .filter(({ artifact }) => !artifact.pinned)
+        .filter(({ artifact }) => !artifact.pinned && !protectedIds.has(artifact.id))
         .sort((a, b) => a.artifact.createdAt - b.artifact.createdAt)[0];
 
       if (!candidate) break;
@@ -192,7 +214,7 @@ export function createInMemoryContextBroker(options: ContextBrokerOptions = {}):
       bytes: Buffer.byteLength(payload, "utf8"),
       sha256,
       payload,
-      summary: truncate(String(input.summary || payload).replace(/\s+/g, " ").trim(), summaryBytes),
+      summary: truncateUtf8(String(input.summary || payload).replace(/\s+/g, " ").trim(), summaryBytes),
       tags: normalizeList(input.tags),
       paths: normalizeList(input.paths),
       command: input.command?.trim() || undefined,
@@ -203,7 +225,7 @@ export function createInMemoryContextBroker(options: ContextBrokerOptions = {}):
     };
 
     artifacts = [artifact, ...artifacts];
-    prune(now);
+    prune(now, new Set([artifact.id]));
     return artifact;
   }
 
@@ -238,7 +260,7 @@ export function createInMemoryContextBroker(options: ContextBrokerOptions = {}):
       "Lookup: use broker lookup by handle/path/tag/kind/session before replaying raw payloads.",
     ];
 
-    return truncate(lines.join("\n"), budget);
+    return truncateUtf8(lines.join("\n"), budget);
   }
 
   return {

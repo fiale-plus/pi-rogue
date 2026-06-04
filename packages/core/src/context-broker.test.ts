@@ -62,13 +62,24 @@ describe("createInMemoryContextBroker", () => {
     expect(broker.status().bytes).toBe(5);
   });
 
+  it("preserves the returned handle when a new artifact exceeds maxBytes", () => {
+    const broker = createInMemoryContextBroker({ maxBytes: 4, defaultTtlMs: 0 });
+    const artifact = broker.publish({ sessionId: "s", kind: "tool_output", payload: "oversized", createdAt: 1 });
+
+    expect(broker.lookup({ id: artifact.id })).toEqual([artifact]);
+    expect(broker.lookup({ handle: artifact.handle })).toEqual([artifact]);
+    expect(broker.status().bytes).toBe(Buffer.byteLength("oversized", "utf8"));
+  });
+
   it("keeps pinned artifacts visible while pruning unpinned records", () => {
-    const broker = createInMemoryContextBroker({ maxRecords: 1, defaultTtlMs: 0 });
+    const broker = createInMemoryContextBroker({ maxRecords: 2, defaultTtlMs: 0 });
     const pinned = broker.publish({ sessionId: "s", kind: "diff", payload: "important", pinned: true, createdAt: 1 });
-    const newer = broker.publish({ sessionId: "s", kind: "diff", payload: "temporary", createdAt: 2 });
+    const older = broker.publish({ sessionId: "s", kind: "diff", payload: "temporary", createdAt: 2 });
+    const newer = broker.publish({ sessionId: "s", kind: "diff", payload: "latest", createdAt: 3 });
 
     expect(broker.lookup({ id: pinned.id })).toEqual([pinned]);
-    expect(broker.lookup({ id: newer.id })).toEqual([]);
+    expect(broker.lookup({ id: older.id })).toEqual([]);
+    expect(broker.lookup({ id: newer.id })).toEqual([newer]);
     expect(broker.status().pinnedRecords).toBe(1);
   });
 
@@ -94,8 +105,25 @@ describe("createInMemoryContextBroker", () => {
 
     const brief = broker.renderBrief();
 
-    expect(Buffer.byteLength(brief, "utf8")).toBeLessThanOrEqual(182);
+    expect(Buffer.byteLength(brief, "utf8")).toBeLessThanOrEqual(180);
     expect(brief).toContain("Context Broker");
     expect(brief).toContain("ctx://session/s/tool_output/");
+  });
+
+  it("enforces prompt brief budgets by UTF-8 byte length", () => {
+    const broker = createInMemoryContextBroker({ briefBytes: 170 });
+    broker.publish({
+      sessionId: "emoji-session",
+      kind: "tool_output",
+      payload: "✅".repeat(200),
+      summary: "✅ 測試 passed ".repeat(20),
+      tags: ["測試", "✅"],
+      paths: ["packages/核心/✅.ts"],
+    });
+
+    const brief = broker.renderBrief({ budgetBytes: 170 });
+
+    expect(Buffer.byteLength(brief, "utf8")).toBeLessThanOrEqual(170);
+    expect(brief).toContain("Context Broker");
   });
 });
