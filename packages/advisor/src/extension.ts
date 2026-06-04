@@ -5,7 +5,7 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Box, Text } from "@earendil-works/pi-tui";
 import { completeSimple, type ThinkingLevel } from "@earendil-works/pi-ai";
 import { Type } from "typebox";
-import { featureFile, readText, truncate, writeText } from "./internal.js";
+import { featureFile, readText, truncate, writeText, atomicWriteText } from "./internal.js";
 import { advisorArgumentCompletions, piRogueArgumentCompletions } from "./completions.js";
 import {
   appendRouteLog,
@@ -58,6 +58,7 @@ const MAX_FILES = 8;
 const MAX_ERRORS = 5;
 const MIN_CHECKIN_INTERVAL_MINUTES = 10;
 const MAX_CHECKIN_INTERVAL_MINUTES = 240;
+const STATE_VERSION = 1;
 const checkinLocks = new Set<string>();
 
 // ── SOTA models (ordered by preference) ───────────────────────────────────
@@ -70,6 +71,8 @@ const SOTA_CHAIN: Array<{ provider: string; model: string; label: string }> = [
 
 // ── Internal state ────────────────────────────────────────────────────────
 interface SessionState {
+  /** State schema version for migration support */
+  _v?: number;
   turns: number;
   lastTask: string;
   notes: string[];
@@ -159,9 +162,18 @@ function saveConfig(c: AdvisorConfig) {
 
 function loadState(): SessionState {
   const raw = readJson<Partial<SessionState>>(STATE_PATH, {});
+  // Handle state versioning: migrate old versions to current
+  const version = raw._v ?? 0;
+  if (version < STATE_VERSION) {
+    // Migrate: ensure reviewControl has all fields
+    if (raw.reviewControl && !raw.reviewControl.lastAppliedAt) {
+      (raw.reviewControl as any).lastAppliedAt = new Date().toISOString();
+    }
+  }
   const control = raw.reviewControl;
   const pauseUntil = Number(raw.advisorPauseUntilTurn);
   return {
+    _v: STATE_VERSION,
     turns: raw.turns ?? 0,
     lastTask: raw.lastTask ?? "",
     notes: (raw.notes ?? []).map(noteText).filter(Boolean).slice(-MAX_NOTES),
@@ -197,7 +209,7 @@ function loadState(): SessionState {
 }
 
 function saveState(s: SessionState) {
-  writeJson(STATE_PATH, s);
+  atomicWriteText(STATE_PATH, JSON.stringify(s, null, 2) + "\n");
 }
 
 function loadCache(): Record<string, string> {
@@ -210,7 +222,7 @@ function saveCache(c: Record<string, string>) {
     entries.sort((a, b) => a[0].localeCompare(b[0]));
     for (const [k] of entries.slice(0, entries.length - MAX_CACHE)) delete c[k];
   }
-  writeJson(CACHE_PATH, c);
+  atomicWriteText(CACHE_PATH, JSON.stringify(c, null, 2) + "\n");
 }
 
 // ── Prompts ───────────────────────────────────────────────────────────────
