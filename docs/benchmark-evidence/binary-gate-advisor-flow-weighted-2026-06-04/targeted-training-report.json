@@ -1,0 +1,69 @@
+{
+  "input": "/tmp/pi-rogue-pr85-extra-pass-redo-1780608647/train.jsonl",
+  "rows": 2752,
+  "weightedRows": 2855,
+  "train": 2202,
+  "test": 550,
+  "binaryCounts": {
+    "escalate": 1406,
+    "continue": 1346
+  },
+  "sourceCounts": {
+    "gold": 339,
+    "pi_session": 756,
+    "claude_history": 1350,
+    "terminal-bench-core-0.1.1": 216,
+    "advisor_flow_2026_06_04": 44,
+    "advisor_flow_v3": 47
+  },
+  "majority": {
+    "label": "escalate",
+    "accuracy": 0.5109090909090909,
+    "correct": 281,
+    "total": 550
+  },
+  "logistic": {
+    "accuracy": 0.8854545454545455,
+    "bestEpoch": 39,
+    "escalate": {
+      "precision": 0.8865248226950354,
+      "recall": 0.8896797153024911,
+      "f1": 0.8880994671403197,
+      "support": 281
+    },
+    "continue": {
+      "precision": 0.8843283582089553,
+      "recall": 0.8810408921933085,
+      "f1": 0.8826815642458101,
+      "support": 269
+    },
+    "confusion": [
+      {
+        "actual": "continue",
+        "predicted": [
+          [
+            "continue",
+            237
+          ],
+          [
+            "escalate",
+            32
+          ]
+        ]
+      },
+      {
+        "actual": "escalate",
+        "predicted": [
+          [
+            "continue",
+            31
+          ],
+          [
+            "escalate",
+            250
+          ]
+        ]
+      }
+    ]
+  }
+}

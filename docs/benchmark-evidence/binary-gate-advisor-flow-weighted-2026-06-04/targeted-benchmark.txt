@@ -1,0 +1,13 @@
+
+> pi-rogue@0.1.0 binary:benchmark
+> npx tsx scripts/benchmark-binary-gate.ts
+
+Model file: 538KB, features: 6000, labels: continue, escalate
+
+--- Performance ---
+Cold load: 1.2ms
+Single prediction (TTFS): 0.034ms
+Average per prediction: 0.023ms
+Throughput: 43473 predictions/sec
+Batch: 2000 predictions in 46ms
+Sample: continue (95.3%)
