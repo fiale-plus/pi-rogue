@@ -1,6 +1,7 @@
 #!/usr/bin/env tsx
 import fs from "node:fs";
 import path from "node:path";
+import { extractBinaryGateFeatureCounts } from "../packages/advisor/src/binary-gate-features.js";
 
 const DEFAULT_INPUT = path.join(process.cwd(), "data", "routing", "binary-gate.jsonl");
 const DEFAULT_MODEL = path.join(process.cwd(), "data", "routing", "binary-gate-model.json");
@@ -28,41 +29,16 @@ function parseArgs(argv: string[]) {
   };
 }
 
-interface BinaryRow { id: string; text: string; label: "escalate" | "continue"; source: string; sourceLabel?: string; cwd?: string; }
-interface Example { text: string; label: string; weight?: number; }
+interface BinaryRow { id: string; text: string; label: "escalate" | "continue"; source: string; sourceLabel?: string; cwd?: string; weight?: number; }
+interface Example { text: string; label: string; weight: number; }
 interface ModelArtifact { kind: "binary-logreg-v1"; labels: string[]; features: string[]; idf: number[]; bias: number[]; weights: number[][]; config: Record<string, unknown>; }
 
-function tokens(text: string): string[] {
-  const norm = String(text ?? "").toLowerCase().replace(/https?:\/\/\S+/g,' url ').replace(/[^a-z0-9\s']/g,' ').replace(/\s+/g,' ').trim();
-  return norm ? norm.split(" ").filter(Boolean) : [];
+function extractFeatures(text: string): Map<string, number> {
+  return extractBinaryGateFeatureCounts(text);
 }
 
-function inc(m: Map<string, number>, k: string, b = 1) { m.set(k, (m.get(k) || 0) + b); }
-
-function extractFeatures(text: string) {
-  const counts = new Map<string, number>();
-  const toks = tokens(text);
-  const lower = String(text ?? "").toLowerCase().replace(/https?:\/\/\S+/g,' url ').replace(/[^a-z0-9\s']/g,' ').replace(/\s+/g,' ').trim();
-  for (const n of [1, 2]) {
-    if (toks.length >= n) for (let i = 0; i <= toks.length - n; i++) inc(counts, `w${n}:${toks.slice(i, i + n).join("_")}`);
-  }
-  const norm = ` ${lower} `;
-  for (const n of [3, 4]) {
-    if (norm.length >= n) for (let i = 0; i <= norm.length - n; i++) {
-      const g = norm.slice(i, i + n);
-      if (!/^\s+$/.test(g)) inc(counts, `c${n}:${g}`);
-    }
-  }
-  if (toks.length > 0) inc(counts, `pref1:${toks[0]}`);
-  if (toks.length > 1) inc(counts, `pref2:${toks.slice(0, 2).join("_")}`);
-  if (toks.length > 2) inc(counts, `pref3:${toks.slice(0, 3).join("_")}`);
-  if (text.includes("?")) inc(counts, "cue:question_mark");
-  const cues = ["check","why","what","how","should","status","stats","log","logs","review","diff","pr","build","run","test","deploy","fix","debug","install","configure","plan","continue","resume","compact","research","update","patch","cleanup","remove"];
-  const multi = ["what is","what's","safe to use","pull request","model family","how does","next step","path forward","should we","what should"];
-  const ts = new Set(toks);
-  for (const c of cues) if (ts.has(c)) inc(counts, `cue:${c}`);
-  for (const c of multi) if (lower.includes(c)) inc(counts, `cue:${c.replace(/\s+/g,"_")}`);
-  return counts;
+function inc(m: Map<string, number>, key: string, by = 1): void {
+  m.set(key, (m.get(key) || 0) + by);
 }
 
 function shuffle<T>(items: T[], seed: number): T[] {
@@ -111,10 +87,16 @@ function predict(vec: { I: number[]; V: number[] }, w: number[][], b: number[]):
 
 function predictProbs(vec: { I: number[]; V: number[] }, w: number[][], b: number[]): number[] { const s = b.slice(); for (let c = 0; c < w.length; c++) { let v = s[c]; const wt = w[c]; for (let i = 0; i < vec.I.length; i++) v += wt[vec.I[i]] * vec.V[i]; s[c] = v; } return softmax(s); }
 
+function normalizeWeight(weight: unknown): number {
+  const value = Number(weight ?? 1);
+  if (!Number.isFinite(value) || value <= 0) return 1;
+  return Math.min(value, 20);
+}
+
 function main() {
   const args = parseArgs(process.argv.slice(2));
   const rows = fs.readFileSync(args.input, "utf8").split(/\n+/).filter(Boolean).map((l) => JSON.parse(l) as BinaryRow);
-  const examples = rows.map(r => ({ text: r.text, label: r.label }));
+  const examples = rows.map(r => ({ text: r.text, label: r.label, weight: normalizeWeight(r.weight) }));
   const { train, test } = stratifiedSplit(examples, 0.8, 42);
   const { features, index, idf, vectors: trainVecs } = buildFeatureSpace(train, 6000, 2);
   const testVecs = test.map(r => {
@@ -137,9 +119,10 @@ function main() {
   for (let ep = 1; ep <= epochs; ep++) {
     for (const idx of shuffle(epochOrder, ep + 42)) {
       const v = trainVecs[idx], y = trainY[idx];
+      const weight = train[idx]?.weight ?? 1;
       const probs = predictProbs(v, w, b);
       for (let c = 0; c < 2; c++) {
-        const err = (probs[c] - (c === y ? 1 : 0));
+        const err = (probs[c] - (c === y ? 1 : 0)) * weight;
         b[c] -= lr * err;
         for (let i = 0; i < v.I.length; i++) w[c][v.I[i]] = w[c][v.I[i]] * (1 - lr * l2) - lr * err * v.V[i];
       }
@@ -177,7 +160,7 @@ function main() {
 
   const model: ModelArtifact = { kind: "binary-logreg-v1", labels, features, idf, bias: bb, weights: bw, config: { epochs, learningRate: lr, l2 } };
   const report = {
-    input: args.input, rows: rows.length, train: train.length, test: test.length,
+    input: args.input, rows: rows.length, weightedRows: examples.reduce((sum, row) => sum + row.weight, 0), train: train.length, test: test.length,
     binaryCounts: rows.reduce((a: Record<string, number>, r: BinaryRow) => { a[r.label] = (a[r.label] || 0) + 1; return a; }, {}),
     sourceCounts: rows.reduce((a: Record<string, number>, r: BinaryRow) => { a[r.source] = (a[r.source] || 0) + 1; return a; }, {}),
     majority: { label: "escalate", accuracy: testY.filter(y => y === 1).length / testY.length, correct: testY.filter(y => y === 1).length, total: testY.length },

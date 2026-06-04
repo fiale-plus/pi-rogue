@@ -3,6 +3,7 @@ import { copyFileSync, existsSync, mkdirSync, readFileSync, statSync } from "nod
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { appendText, featureFile, truncate } from "./internal.js";
+import { extractBinaryGateFeatureCounts } from "./binary-gate-features.js";
 
 export type AdvisorPhase = "preflight" | "review" | "closeout";
 export type PreflightLabel = "continue" | "escalate_to_advisor" | "need_more_context" | "low_confidence";
@@ -85,43 +86,8 @@ function loadBinaryGate(): BinaryGateModel | null {
   } catch { _binaryGateCache = null; return null; }
 }
 
-function binaryGateTokens(text: string): string[] {
-  const norm = String(text ?? "").toLowerCase()
-    .replace(/https?:\/\/\S+/g, " url ")
-    .replace(/[^a-z0-9\s']/g, " ")
-    .replace(/\s+/g, " ").trim();
-  return norm ? norm.split(" ").filter(Boolean) : [];
-}
-
 function binaryGateFeatures(text: string, model: BinaryGateModel) {
-  const toks = binaryGateTokens(text);
-  const lower = String(text ?? "").toLowerCase()
-    .replace(/https?:\/\/\S+/g, " url ")
-    .replace(/[^a-z0-9\s']/g, " ")
-    .replace(/\s+/g, " ").trim();
-  const counts = new Map<string, number>();
-  const inc = (k: string, b = 1) => counts.set(k, (counts.get(k) || 0) + b);
-  for (const n of [1, 2]) {
-    if (toks.length >= n) for (let i = 0; i <= toks.length - n; i++)
-      inc(`w${n}:${toks.slice(i, i + n).join("_")}`);
-  }
-  const norm = ` ${lower} `;
-  for (const n of [3, 4]) {
-    if (norm.length >= n) for (let i = 0; i <= norm.length - n; i++) {
-      const g = norm.slice(i, i + n);
-      if (!/^\s+$/.test(g)) inc(`c${n}:${g}`);
-    }
-  }
-  if (toks.length > 0) inc(`pref1:${toks[0]}`);
-  if (toks.length > 1) inc(`pref2:${toks.slice(0, 2).join("_")}`);
-  if (toks.length > 2) inc(`pref3:${toks.slice(0, 3).join("_")}`);
-  if (text.includes("?")) inc("cue:question_mark");
-  const cues = ["check","why","what","how","should","status","stats","log","logs","review","diff","pr","build","run","test","deploy","fix","debug","install","configure","plan","continue","resume","compact","research","update","patch","cleanup","remove"];
-  const multi = ["what is","what's","safe to use","pull request","model family","how does","next step","path forward","should we","what should"];
-  const ts = new Set(toks);
-  for (const c of cues) if (ts.has(c)) inc(`cue:${c}`);
-  for (const c of multi) if (lower.includes(c)) inc(`cue:${c.replace(/\s+/g,"_")}`);
-
+  const counts = extractBinaryGateFeatureCounts(text);
   const index = new Map(model.features.map((f, i) => [f, i]));
   const pairs: Array<[number, number]> = [];
   let nrm = 0;
@@ -129,7 +95,8 @@ function binaryGateFeatures(text: string, model: BinaryGateModel) {
     const idx = index.get(feature);
     if (idx === undefined) continue;
     const value = (1 + Math.log(tf)) * model.idf[idx];
-    pairs.push([idx, value]); nrm += value * value;
+    pairs.push([idx, value]);
+    nrm += value * value;
   }
   const scale = nrm > 0 ? 1 / Math.sqrt(nrm) : 1;
   pairs.sort((a, b) => a[0] - b[0]);

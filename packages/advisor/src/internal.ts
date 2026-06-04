@@ -1,4 +1,4 @@
-import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { appendFileSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { homedir } from "node:os";
 
@@ -45,4 +45,19 @@ export function writeText(filePath: string, text: string): void {
 export function appendText(filePath: string, text: string): void {
   ensureParent(filePath);
   appendFileSync(filePath, text, "utf8");
+}
+
+/** Write text atomically: write to temp file, then rename. Falls back to direct write on failure. */
+export function atomicWriteText(filePath: string, text: string): void {
+  const tempPath = filePath + ".tmp";
+  try {
+    writeText(tempPath, text);
+    try { renameSync(tempPath, filePath); } catch {
+      // If rename fails (e.g., cross-device), fall back to overwrite
+      writeText(filePath, text);
+    }
+  } catch {
+    // If temp write fails, try direct write
+    writeText(filePath, text);
+  }
 }

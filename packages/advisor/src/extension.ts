@@ -5,7 +5,7 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Box, Text } from "@earendil-works/pi-tui";
 import { completeSimple, type ThinkingLevel } from "@earendil-works/pi-ai";
 import { Type } from "typebox";
-import { featureFile, readText, truncate, writeText } from "./internal.js";
+import { featureFile, readText, truncate, writeText, atomicWriteText } from "./internal.js";
 import { advisorArgumentCompletions, piRogueArgumentCompletions } from "./completions.js";
 import {
   appendRouteLog,
@@ -58,6 +58,7 @@ const MAX_FILES = 8;
 const MAX_ERRORS = 5;
 const MIN_CHECKIN_INTERVAL_MINUTES = 10;
 const MAX_CHECKIN_INTERVAL_MINUTES = 240;
+const STATE_VERSION = 1;
 const checkinLocks = new Set<string>();
 
 // ── SOTA models (ordered by preference) ───────────────────────────────────
@@ -70,6 +71,8 @@ const SOTA_CHAIN: Array<{ provider: string; model: string; label: string }> = [
 
 // ── Internal state ────────────────────────────────────────────────────────
 interface SessionState {
+  /** State schema version for migration support */
+  _v?: number;
   turns: number;
   lastTask: string;
   notes: string[];
@@ -159,9 +162,18 @@ function saveConfig(c: AdvisorConfig) {
 
 function loadState(): SessionState {
   const raw = readJson<Partial<SessionState>>(STATE_PATH, {});
+  // Handle state versioning: migrate old versions to current
+  const version = raw._v ?? 0;
+  if (version < STATE_VERSION) {
+    // Migrate: ensure reviewControl has all fields
+    if (raw.reviewControl && !raw.reviewControl.lastAppliedAt) {
+      (raw.reviewControl as any).lastAppliedAt = new Date().toISOString();
+    }
+  }
   const control = raw.reviewControl;
   const pauseUntil = Number(raw.advisorPauseUntilTurn);
   return {
+    _v: STATE_VERSION,
     turns: raw.turns ?? 0,
     lastTask: raw.lastTask ?? "",
     notes: (raw.notes ?? []).map(noteText).filter(Boolean).slice(-MAX_NOTES),
@@ -197,7 +209,7 @@ function loadState(): SessionState {
 }
 
 function saveState(s: SessionState) {
-  writeJson(STATE_PATH, s);
+  atomicWriteText(STATE_PATH, JSON.stringify(s, null, 2) + "\n");
 }
 
 function loadCache(): Record<string, string> {
@@ -210,21 +222,50 @@ function saveCache(c: Record<string, string>) {
     entries.sort((a, b) => a[0].localeCompare(b[0]));
     for (const [k] of entries.slice(0, entries.length - MAX_CACHE)) delete c[k];
   }
-  writeJson(CACHE_PATH, c);
+  atomicWriteText(CACHE_PATH, JSON.stringify(c, null, 2) + "\n");
 }
 
 // ── Prompts ───────────────────────────────────────────────────────────────
 
-const ADVISOR_SYSTEM = `You are a senior engineering advisor. Use the session brief only. Return terse, specific advice with concrete recommendations. 200 words max.`;
+const ADVISOR_SYSTEM = `You are a senior engineering advisor. Use the session brief only. Return terse, specific advice with concrete recommendations. 200 words max.
 
-const REVIEW_SYSTEM = `You are a senior reviewer. An AI agent just completed work. Assess it. Return ONLY valid JSON:
-{
-  "verdict": "on_track"|"course_correct"|"not_done",
-  "summary": "1-2 sentence assessment",
-  "actions": ["action1"],
-  "checklist": ["item"],
-  "notify": false
-}`;
+## Guidance
+- Focus on actionable insights, not summaries of what was done.
+- If no issues found, say so briefly — do not invent problems.
+- Flag security concerns, architecture risks, and test gaps.
+- Reference specific files or lines when possible.`;
+
+const REVIEW_SYSTEM = `You are a senior reviewer. An AI agent just completed work. Assess it and return ONLY valid JSON.
+
+## Verdicts
+- **on_track**: Work is complete. Changes are correct, tests pass (if applicable), no outstanding issues. This is the default for clearly finished work.
+- **course_correct**: Work is mostly done but needs specific changes. Minor fixes, adjustments, or refinements required. Be specific about what needs to change.
+- **not_done**: Work is incomplete, failing, or has critical errors. The agent has not finished the task. Include what is missing or broken.
+
+## Confidence Calibration
+- 0.80+ = clear signal (e.g., explicit "done" with file changes, or explicit errors)
+- 0.60-0.79 = moderate signal (e.g., partial completion, some issues noted)
+- <0.60 = weak signal — defer rather than force a verdict
+
+## Guidelines
+- Focus on MATERIAL changes (logic, behavior, correctness). Ignore cosmetic changes (formatting, comments, whitespace).
+- If the agent explicitly states "done"/"fixed"/"implemented" AND file changes are small/simple → on_track.
+- If the agent states "done" BUT there are errors or incomplete logic → course_correct or not_done.
+- If the agent states "incomplete"/"wip"/"todo" → not_done.
+- Actions should be concrete next steps (2 max), not vague suggestions.
+- Checklist items are optional — include only when there are specific verification steps.
+- notify is always false for this system.
+
+## Examples
+
+Example 1 (on_track):
+{ "verdict": "on_track", "summary": "Added new endpoint and tests pass", "actions": [], "checklist": ["Verify endpoint returns 200"], "notify": false }
+
+Example 2 (course_correct):
+{ "verdict": "course_correct", "summary": "Refactored module but error handling was removed", "actions": ["Restore error handling in handleRequest"], "checklist": [], "notify": false }
+
+Example 3 (not_done):
+{ "verdict": "not_done", "summary": "Migration script has syntax errors and missing table reference", "actions": ["Fix syntax errors in migration.sql", "Add missing users table reference"], "checklist": ["Verify migration runs cleanly"], "notify": false }`;
 
 // ── Helpers ───────────────────────────────────────────────────────────────
 
