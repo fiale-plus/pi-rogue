@@ -101,6 +101,8 @@ Use this lane to evaluate when fast models such as `gpt-5.3-codex-spark` are goo
 
 ## Train the binary gate
 
+See `docs/routing-binary-gate.md` for the candidate-training runbook, guard slices, promotion bar, and evidence policy.
+
 ```bash
 npm run binary:build
 npm run binary:train
