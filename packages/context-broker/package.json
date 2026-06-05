@@ -1,0 +1,27 @@
+{
+  "name": "@fiale-plus/pi-rogue-context-broker",
+  "version": "0.1.0",
+  "description": "Beta context broker runtime for Pi-Rogue. In-memory bounded broker implementation behind explicit opt-in.",
+  "private": true,
+  "type": "module",
+  "license": "MIT",
+  "keywords": [
+    "pi-package"
+  ],
+  "scripts": {
+    "check": "tsc -p ../../tsconfig.json --noEmit",
+    "test": "cd ../.. && vitest run packages/context-broker/src/*.test.ts"
+  },
+  "main": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@fiale-plus/pi-core": "^0.1.0"
+  },
+  "files": [
+    "src",
+    "README.md",
+    "package.json"
+  ]
+}

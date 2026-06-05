@@ -2,11 +2,12 @@
 
 Shared helpers for the Pi-Rogue workspace.
 
-Includes the first bounded context broker contract and in-memory implementation:
+Includes shared bounded context broker contracts:
 
-- `createInMemoryContextBroker()` stores artifacts behind stable `ctx://...` handles.
-- Lookups support handle, session, kind, tag, path, command prefix, branch, and text filters.
-- Omitted summaries become metadata-only placeholders, keeping raw payloads out of prompt briefs by default.
-- Pruning enforces per-session record/byte caps, TTL expiry on reads, and pinned-artifact retention.
+- `BoundedContextBroker`
+- `ContextArtifact` / `ContextArtifactInput`
+- lookup, retention, and status type definitions
+
+The executable in-memory implementation lives in `@fiale-plus/pi-rogue-context-broker`.
 
 Install locally from this repo root: `npm install`

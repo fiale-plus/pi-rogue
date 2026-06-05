@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
-import { createInMemoryContextBroker } from "./context-broker.js";
+import { createInMemoryContextBroker } from "./index.js";
 
 describe("createInMemoryContextBroker", () => {
   it("publishes stable, unique handles and looks up artifacts by handle", () => {
