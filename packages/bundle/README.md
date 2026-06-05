@@ -30,12 +30,14 @@ npm install
 - **Lab / internal helpers are excluded from this bundle.**
 - The beta context-broker runtime is bundled for opt-in experiments but is not registered/enabled by default.
 - Opt-in consumers can import the runtime through the bundle subpath: `@fiale-plus/pi-rogue-bundle/context-broker`.
+- Set `PI_CONTEXT_BROKER_ENABLED=true` before starting Pi to register the beta `/context` command surface.
 - `@fiale-plus/pi-rogue-bundle` is the only published surface for the logic.
 - Internal helper packages (`@fiale-plus/pi-rogue-guardrails`, `@fiale-plus/pi-rogue-brain`, `@fiale-plus/pi-rogue-repo-arch`) are maintained separately in the lab section and not published.
 
 ## Command surface
 
-- `/advisor`, `/goal`, `/loop`, `/autoresearch`, `/autoresearch-lab` plus status/config/command paths (all provided via the bundle).
+- Default: `/advisor`, `/goal`, `/loop`, `/autoresearch`, `/autoresearch-lab` plus status/config/command paths (all provided via the bundle).
+- Opt-in beta: `PI_CONTEXT_BROKER_ENABLED=true` adds `/context status`, `/context brief`, `/context lookup <handle|text>`, `/context pin <handle>`, and `/context prune` with autocomplete.
 
 ## Status
 
