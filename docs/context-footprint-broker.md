@@ -203,13 +203,14 @@ This keeps routing lightning fast and prevents a weak model from losing importan
 
 ## Implementation status
 
-This PR now includes a first narrow implementation slice in `@fiale-plus/pi-core`:
+The current beta implementation is split across a shared contract package and a runtime package:
 
-- `BoundedContextBroker` defines the publish, lookup, pin, prune, status, and prompt-brief contract.
-- `createInMemoryContextBroker` provides an in-process bounded broker for tests, prototypes, and future extension wiring.
+- `@fiale-plus/pi-core` owns the `BoundedContextBroker` contract and shared artifact/query/status types.
+- `@fiale-plus/pi-rogue-context-broker` owns `createInMemoryContextBroker`, the executable in-process bounded broker for tests, prototypes, and future extension wiring.
 - The in-memory broker supports stable `ctx://...` handles, per-session byte and record caps, TTL pruning on reads, pinned artifacts, and lookup by handle, session, kind, tag, path, command prefix, branch, and text.
 - Omitted summaries render as metadata-only placeholders so raw payload text is not injected into prompt briefs by default.
-- This slice is intentionally non-persistent. Durable SQLite/blob storage remains a later phase.
+- This slice is intentionally non-persistent and disabled by default in the bundle. Durable SQLite/blob storage remains a later phase.
+- Bundle consumers can explicitly import the beta runtime from `@fiale-plus/pi-rogue-bundle/context-broker`; the private leaf package is not a separate public install target.
 
 ## Priority roadmap
 
@@ -224,6 +225,8 @@ This PR now includes a first narrow implementation slice in `@fiale-plus/pi-core
 - Capture large tool outputs, test logs, diffs, file snapshots, advisor briefs, brain notes, and subagent results.
 - Store raw payloads behind handles; inject only summaries, metadata, and handles into live prompts.
 - Preserve deterministic routing defaults before adding model advice.
+- Integrate with Pi session files deliberately: `tool_result` capture alone is observability, but it does not reduce prompt load because raw tool-result messages are still present in the session path.
+- To actually reduce context, wire broker capture into the `context` hook or tool-result rewriting so the LLM sees broker summaries/handles while the raw payload remains retrievable from broker storage.
 
 ### 3. Advisor and brain integration
 
@@ -237,6 +240,7 @@ This PR now includes a first narrow implementation slice in `@fiale-plus/pi-core
 - Add SQLite metadata, blob storage by SHA-256, session event JSONL, and summary files.
 - Add per-session locking or atomic append for concurrent tool calls.
 - Make session resume reconstruct briefs from durable handles instead of transcript replay.
+- Persist broker metadata as custom entries or sidecar JSONL only after defining branch/resume semantics; `CustomEntry` does not enter LLM context, while `CustomMessageEntry` does.
 
 ### 5. Retrieval quality and safety
 
