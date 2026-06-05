@@ -1,9 +1,13 @@
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { registerContextBrokerBeta, shouldEnableContextBrokerBeta } from "./extension.js";
 
 function createPiMock() {
   const handlers = new Map<string, any[]>();
   const commands = new Map<string, any>();
+  const tools = new Map<string, any>();
   const pi: any = {
     on(name: string, handler: any) {
       handlers.set(name, [...(handlers.get(name) ?? []), handler]);
@@ -11,8 +15,11 @@ function createPiMock() {
     registerCommand(name: string, options: any) {
       commands.set(name, options);
     },
+    registerTool(tool: any) {
+      tools.set(tool.name, tool);
+    },
   };
-  return { pi, handlers, commands };
+  return { pi, handlers, commands, tools };
 }
 
 function createCtx(entries: any[] = []) {
@@ -61,12 +68,13 @@ describe("context broker beta enablement", () => {
     expect(shouldEnableContextBrokerBeta()).toBe(true);
   });
 
-  it("registers /context with command completions", () => {
-    const { pi, commands } = createPiMock();
+  it("registers /context with command completions and the context_lookup tool", () => {
+    const { pi, commands, tools } = createPiMock();
     registerContextBrokerBeta(pi);
 
     const command = commands.get("context");
     expect(command).toBeTruthy();
+    expect(tools.has("context_lookup")).toBe(true);
     expect(command.getArgumentCompletions("")?.map((item: any) => item.value.trim())).toEqual([
       "status",
       "brief",
@@ -194,6 +202,257 @@ describe("context broker beta enablement", () => {
     expect(notifications.at(-1)?.message).toContain("payload:");
     expect(payload).toContain("[truncated: omitted");
     expect(Buffer.byteLength(payload, "utf8")).toBeLessThanOrEqual(50);
+  });
+
+  it("context_lookup tool dereferences handles for exact evidence", async () => {
+    const { pi, handlers, commands, tools } = createPiMock();
+    registerContextBrokerBeta(pi, { lookupBytes: 500 });
+    const { ctx } = createCtx();
+
+    await runHandlers(handlers, "session_start", { type: "session_start" }, ctx);
+    await runHandlers(handlers, "tool_result", {
+      type: "tool_result",
+      toolCallId: "call-tool-lookup",
+      toolName: "bash",
+      input: { command: "echo evidence" },
+      content: [{ type: "text", text: "exact evidence payload" }],
+      isError: false,
+    }, ctx);
+    const handle = commands.get("context").getArgumentCompletions("lookup ")?.[0].value.replace(/^lookup /, "");
+    const result = await tools.get("context_lookup").execute("lookup-call", { handle }, undefined, undefined, ctx);
+
+    expect(result.content[0].text).toContain(handle);
+    expect(result.content[0].text).toContain("exact evidence payload");
+  });
+
+  it("context_lookup refuses empty unfocused payload-dumping calls", async () => {
+    const { pi, handlers, tools } = createPiMock();
+    registerContextBrokerBeta(pi, { lookupBytes: 500 });
+    const { ctx } = createCtx();
+
+    await runHandlers(handlers, "session_start", { type: "session_start" }, ctx);
+    await runHandlers(handlers, "tool_result", {
+      type: "tool_result",
+      toolCallId: "call-empty-lookup",
+      toolName: "bash",
+      input: { command: "echo hidden" },
+      content: [{ type: "text", text: "payload must not dump" }],
+      isError: false,
+    }, ctx);
+
+    const result = await tools.get("context_lookup").execute("lookup-call", {}, undefined, undefined, ctx);
+
+    expect(result.content[0].text).toContain("requires a focused filter");
+    expect(result.content[0].text).not.toContain("payload must not dump");
+  });
+
+  it("rewrites large historical tool results in context to live broker handles", async () => {
+    const { pi, handlers, commands } = createPiMock();
+    registerContextBrokerBeta(pi, { rewriteThresholdBytes: 40, lookupBytes: 500 });
+    const { ctx, notifications } = createCtx();
+    const raw = "RAW_TOOL_OUTPUT_" + "x".repeat(100);
+
+    await runHandlers(handlers, "session_start", { type: "session_start" }, ctx);
+    const result = await handlers.get("context")?.[0]({
+      type: "context",
+      messages: [
+        { role: "assistant", content: [{ type: "toolCall", id: "call-large", name: "bash", arguments: { command: "printf raw" } }] },
+        { role: "toolResult", toolCallId: "call-large", toolName: "bash", content: [{ type: "text", text: raw }], isError: false, timestamp: 1 },
+      ],
+    }, ctx);
+
+    const text = result.messages[1].content[0].text;
+    const handle = text.match(/ctx:\/\/\S+/)?.[0];
+    expect(text).toContain("Context broker artifact: ctx://");
+    expect(text).toContain("Raw payload omitted from prompt");
+    expect(text).not.toContain(raw);
+
+    await commands.get("context").handler(`lookup ${handle}`, ctx);
+    expect(notifications.at(-1)?.message).toContain("RAW_TOOL_OUTPUT_");
+  });
+
+  it("leaves small tool results and excluded bash outputs unchanged in context", async () => {
+    const { pi, handlers } = createPiMock();
+    registerContextBrokerBeta(pi, { rewriteThresholdBytes: 40 });
+    const { ctx } = createCtx();
+    const secret = "SECRET_TOKEN=" + "z".repeat(80);
+
+    await runHandlers(handlers, "session_start", { type: "session_start" }, ctx);
+    const result = await handlers.get("context")?.[0]({
+      type: "context",
+      messages: [
+        { role: "toolResult", toolCallId: "small", toolName: "read", content: [{ type: "text", text: "small" }], isError: false, timestamp: 1 },
+        { role: "bashExecution", command: "echo secret", output: secret, exitCode: 0, cancelled: false, truncated: false, excludeFromContext: true, timestamp: 2 },
+      ],
+    }, ctx);
+
+    expect(result).toBeUndefined();
+  });
+
+  it("does not collapse repeated bash rewrites for the same command and timestamp", async () => {
+    const { pi, handlers, commands } = createPiMock();
+    registerContextBrokerBeta(pi, { rewriteThresholdBytes: 20 });
+    const { ctx, notifications } = createCtx();
+    const firstRaw = "FIRST_RAW_" + "x".repeat(80);
+    const secondRaw = "SECOND_RAW_" + "y".repeat(80);
+    const sameTimestamp = Date.now();
+
+    await runHandlers(handlers, "session_start", { type: "session_start" }, ctx);
+    const result = await handlers.get("context")?.[0]({
+      type: "context",
+      messages: [
+        { role: "bashExecution", command: "npm test", output: firstRaw, exitCode: 0, cancelled: false, truncated: false, timestamp: sameTimestamp },
+        { role: "bashExecution", command: "npm test", output: secondRaw, exitCode: 0, cancelled: false, truncated: false, timestamp: sameTimestamp },
+      ],
+    }, ctx);
+
+    const firstHandle = result.messages[0].output.match(/ctx:\/\/\S+/)?.[0];
+    const secondHandle = result.messages[1].output.match(/ctx:\/\/\S+/)?.[0];
+    expect(firstHandle).toBeTruthy();
+    expect(secondHandle).toBeTruthy();
+    expect(firstHandle).not.toBe(secondHandle);
+
+    await commands.get("context").handler(`lookup ${secondHandle}`, ctx);
+    expect(notifications.at(-1)?.message).toContain("SECOND_RAW_");
+    expect(notifications.at(-1)?.message).not.toContain("FIRST_RAW_");
+  });
+
+  it("does not emit dead handles when one context pass exceeds retention caps", async () => {
+    const { pi, handlers, commands } = createPiMock();
+    registerContextBrokerBeta(pi, { rewriteThresholdBytes: 1, maxRecords: 2, lookupBytes: 500 });
+    const { ctx, notifications } = createCtx();
+
+    await runHandlers(handlers, "session_start", { type: "session_start" }, ctx);
+    const result = await handlers.get("context")?.[0]({
+      type: "context",
+      messages: [0, 1, 2].map((index) => ({
+        role: "toolResult",
+        toolCallId: `call-${index}`,
+        toolName: "bash",
+        content: [{ type: "text", text: `RAW_${index}_` + "x".repeat(20) }],
+        isError: false,
+        timestamp: Date.now() + index,
+      })),
+    }, ctx);
+
+    const handles = result.messages
+      .map((message: any) => String(message.content?.[0]?.text ?? "").match(/ctx:\/\/\S+/)?.[0])
+      .filter(Boolean);
+    expect(handles.length).toBeLessThanOrEqual(2);
+    expect(result.messages.some((message: any) => String(message.content?.[0]?.text ?? "").includes("RAW_0_"))).toBe(true);
+
+    for (const handle of handles) {
+      await commands.get("context").handler(`lookup ${handle}`, ctx);
+      expect(notifications.at(-1)?.message).not.toContain("No context artifacts matched");
+      expect(notifications.at(-1)?.message).toContain("RAW_");
+    }
+  });
+
+  it("redacts secrets before storing and displaying payloads", async () => {
+    const { pi, handlers, commands } = createPiMock();
+    registerContextBrokerBeta(pi);
+    const { ctx, notifications } = createCtx();
+
+    await runHandlers(handlers, "session_start", { type: "session_start" }, ctx);
+    await runHandlers(handlers, "tool_result", {
+      type: "tool_result",
+      toolCallId: "secret-call",
+      toolName: "bash",
+      input: { command: "echo token=abc123456789", password: "hunter2" },
+      content: [{ type: "text", text: "OPENAI_API_KEY=sk-abcdefghijklmnop" }],
+      details: { nested: { apiKey: "object-secret-value" } },
+      isError: false,
+    }, ctx);
+
+    const lookupCompletion = commands.get("context").getArgumentCompletions("lookup ")?.[0];
+    await commands.get("context").handler(lookupCompletion.value, ctx);
+
+    expect(notifications.at(-1)?.message).not.toContain("abc123456789");
+    expect(notifications.at(-1)?.message).not.toContain("hunter2");
+    expect(notifications.at(-1)?.message).not.toContain("object-secret-value");
+    expect(notifications.at(-1)?.message).not.toContain("sk-abcdefghijklmnop");
+    expect(notifications.at(-1)?.message).toContain("[REDACTED");
+  });
+
+  it("re-publishes stale source handles instead of restoring raw prompt payloads", async () => {
+    const { pi, handlers, commands } = createPiMock();
+    registerContextBrokerBeta(pi, { maxRecords: 1, rewriteThresholdBytes: 20 });
+    const { ctx } = createCtx();
+    const raw = "STALE_RAW_PAYLOAD_" + "x".repeat(100);
+
+    await runHandlers(handlers, "session_start", { type: "session_start" }, ctx);
+    await runHandlers(handlers, "tool_result", {
+      type: "tool_result",
+      toolCallId: "stale-call",
+      toolName: "bash",
+      input: { command: "echo stale" },
+      content: [{ type: "text", text: raw }],
+      isError: false,
+      timestamp: 1,
+    }, ctx);
+    await runHandlers(handlers, "tool_result", {
+      type: "tool_result",
+      toolCallId: "newer-call",
+      toolName: "bash",
+      input: { command: "echo newer" },
+      content: [{ type: "text", text: "newer" }],
+      isError: false,
+      timestamp: 2,
+    }, ctx);
+    await commands.get("context").handler("prune", ctx);
+
+    const result = await handlers.get("context")?.[0]({
+      type: "context",
+      messages: [{ role: "toolResult", toolCallId: "stale-call", toolName: "bash", content: [{ type: "text", text: raw }], isError: false, timestamp: 1 }],
+    }, ctx);
+
+    expect(result.messages[0].content[0].text).toContain("Context broker artifact: ctx://");
+    expect(result.messages[0].content[0].text).not.toContain(raw);
+  });
+
+  it("can reload artifacts and pin state from durable blob storage", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "ctx-broker-test-"));
+    try {
+      const first = createPiMock();
+      registerContextBrokerBeta(first.pi, { durable: true, storeDir: dir });
+      const { ctx } = createCtx();
+      await runHandlers(first.handlers, "session_start", { type: "session_start" }, ctx);
+      await runHandlers(first.handlers, "tool_result", {
+        type: "tool_result",
+        toolCallId: "durable-call",
+        toolName: "bash",
+        input: { command: "echo durable" },
+        content: [{ type: "text", text: "durable payload" }],
+        isError: false,
+        timestamp: 100,
+      }, ctx);
+      const handle = first.commands.get("context").getArgumentCompletions("lookup ")?.[0].value.replace(/^lookup /, "");
+      await first.commands.get("context").handler(`pin ${handle}`, ctx);
+
+      const second = createPiMock();
+      const secondRun = createCtx();
+      registerContextBrokerBeta(second.pi, { durable: true, storeDir: dir });
+      await runHandlers(second.handlers, "session_start", { type: "session_start" }, secondRun.ctx);
+      const secondHandle = second.commands.get("context").getArgumentCompletions("lookup ")?.[0].value.replace(/^lookup /, "");
+      await second.commands.get("context").handler(`lookup ${handle}`, secondRun.ctx);
+      await second.commands.get("context").handler("brief", secondRun.ctx);
+
+      const third = createPiMock();
+      const thirdRun = createCtx();
+      registerContextBrokerBeta(third.pi, { durable: true, storeDir: dir });
+      await runHandlers(third.handlers, "session_start", { type: "session_start" }, thirdRun.ctx);
+      await third.commands.get("context").handler(`lookup ${secondHandle}`, thirdRun.ctx);
+      await third.commands.get("context").handler("brief", thirdRun.ctx);
+
+      expect(secondRun.notifications.at(-2)?.message).toContain("durable payload");
+      expect(secondRun.notifications.at(-1)?.message).toContain("tier=hot");
+      expect(secondRun.notifications.at(-1)?.message).toContain("pinned");
+      expect(thirdRun.notifications.at(-2)?.message).toContain("durable payload");
+      expect(thirdRun.notifications.at(-1)?.message).toContain("tier=hot");
+      expect(thirdRun.notifications.at(-1)?.message).toContain("pinned");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it("injects a bounded broker brief without raw payload text", async () => {

@@ -6,6 +6,8 @@ export type ContextArtifactKind =
   | "advisor_brief"
   | "memory_note";
 
+export type ContextArtifactTier = "hot" | "warm" | "cold";
+
 export interface ContextArtifactInput {
   sessionId: string;
   kind: ContextArtifactKind;
@@ -15,6 +17,7 @@ export interface ContextArtifactInput {
   paths?: string[];
   command?: string;
   branch?: string;
+  tier?: ContextArtifactTier;
   ttlMs?: number;
   pinned?: boolean;
   parentIds?: string[];
@@ -36,6 +39,7 @@ export interface ContextArtifact {
   paths: string[];
   command?: string;
   branch?: string;
+  tier: ContextArtifactTier;
   expiresAt?: number;
   pinned: boolean;
   parentIds: string[];
@@ -50,6 +54,7 @@ export interface ContextLookupQuery {
   path?: string;
   commandPrefix?: string;
   branch?: string;
+  tier?: ContextArtifactTier;
   text?: string;
   limit?: number;
 }
@@ -59,6 +64,12 @@ export interface ContextBrokerStatus {
   bytes: number;
   pinnedRecords: number;
   pinnedBytes: number;
+  hotRecords: number;
+  hotBytes: number;
+  warmRecords: number;
+  warmBytes: number;
+  coldRecords: number;
+  coldBytes: number;
   maxRecords: number;
   maxBytes: number;
 }
@@ -67,6 +78,15 @@ export interface ContextBrokerOptions {
   maxRecords?: number;
   maxBytes?: number;
   defaultTtlMs?: number;
+  hotTtlMs?: number;
+  warmTtlMs?: number;
+  coldTtlMs?: number;
+  hotMaxRecords?: number;
+  warmMaxRecords?: number;
+  coldMaxRecords?: number;
+  hotMaxBytes?: number;
+  warmMaxBytes?: number;
+  coldMaxBytes?: number;
   summaryBytes?: number;
   briefBytes?: number;
 }

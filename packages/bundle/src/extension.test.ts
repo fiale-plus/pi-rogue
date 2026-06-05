@@ -60,4 +60,9 @@ describe("bundle context-broker export", () => {
     expect(artifact.handle).toContain("ctx://session/bundle-test/memory_note/");
     expect(broker.lookup({ handle: artifact.handle })).toEqual([artifact]);
   });
+
+  it("exposes the durable sqlite backend through a bundle subpath", async () => {
+    const sqlite = await import("./context-broker-sqlite.js");
+    expect(sqlite.createSqliteContextBroker).toBeTypeOf("function");
+  });
 });

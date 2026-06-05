@@ -24,6 +24,15 @@ function commitDescription(state: BrainState): string {
   return brainStatus(state);
 }
 
+function contextBrokerBrief(pi: ExtensionAPI): string {
+  try {
+    const text = (pi as any).__piRogueContextBroker?.renderBrief?.();
+    return typeof text === "string" && text.includes("ctx://") ? text.slice(0, 2400) : "";
+  } catch {
+    return "";
+  }
+}
+
 export function registerBrain(pi: ExtensionAPI): void {
   let state = loadBrainState();
 
@@ -46,8 +55,9 @@ export function registerBrain(pi: ExtensionAPI): void {
     saveBrainState(state);
     syncStatus(ctx);
 
+    const brokerBrief = contextBrokerBrief(pi);
     return {
-      systemPrompt: `${event.systemPrompt}\n\n${brainPrompt(state)}`,
+      systemPrompt: `${event.systemPrompt}\n\n${brainPrompt(state)}${brokerBrief ? `\n\nContext broker brief (lookup-first):\n${brokerBrief}` : ""}`,
     };
   });
 
