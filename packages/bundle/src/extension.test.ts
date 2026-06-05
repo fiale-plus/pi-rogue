@@ -1,14 +1,54 @@
-import { readFileSync } from "node:fs";
-import { resolve } from "node:path";
 import { createInMemoryContextBroker } from "./context-broker.js";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
+import { registerBundle } from "./extension.js";
+
+function createPiMock() {
+  const handlers = new Map<string, any[]>();
+  const commands = new Map<string, any>();
+  const pi: any = new Proxy({
+    on(name: string, handler: any) {
+      handlers.set(name, [...(handlers.get(name) ?? []), handler]);
+    },
+    registerCommand(name: string, options: any) {
+      commands.set(name, options);
+    },
+    getFlag() {
+      return undefined;
+    },
+  }, {
+    get(target, prop) {
+      if (prop in target) return (target as any)[prop];
+      if (typeof prop === "string" && prop.startsWith("__")) return undefined;
+      return () => undefined;
+    },
+  });
+  return { pi, handlers, commands };
+}
 
 describe("bundle extension defaults", () => {
-  it("does not register the beta context broker by default", () => {
-    const source = readFileSync(resolve("packages/bundle/src/extension.ts"), "utf8");
+  const oldEnv = process.env.PI_CONTEXT_BROKER_ENABLED;
 
-    expect(source).not.toContain("pi-rogue-context-broker");
-    expect(source).not.toContain("createInMemoryContextBroker");
+  afterEach(() => {
+    if (oldEnv === undefined) delete process.env.PI_CONTEXT_BROKER_ENABLED;
+    else process.env.PI_CONTEXT_BROKER_ENABLED = oldEnv;
+  });
+
+  it("does not register the beta context broker by default", async () => {
+    delete process.env.PI_CONTEXT_BROKER_ENABLED;
+    const { pi, commands } = createPiMock();
+
+    await registerBundle(pi);
+
+    expect(commands.has("context")).toBe(false);
+  });
+
+  it("registers the beta context broker only when explicitly enabled", async () => {
+    process.env.PI_CONTEXT_BROKER_ENABLED = "true";
+    const { pi, commands } = createPiMock();
+
+    await registerBundle(pi);
+
+    expect(commands.has("context")).toBe(true);
   });
 });
 

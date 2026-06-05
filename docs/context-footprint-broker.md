@@ -211,22 +211,25 @@ The current beta implementation is split across a shared contract package and a 
 - Omitted summaries render as metadata-only placeholders so raw payload text is not injected into prompt briefs by default.
 - This slice is intentionally non-persistent and disabled by default in the bundle. Durable SQLite/blob storage remains a later phase.
 - Bundle consumers can explicitly import the beta runtime from `@fiale-plus/pi-rogue-bundle/context-broker`; the private leaf package is not a separate public install target.
+- The product beta command surface is opt-in via `PI_CONTEXT_BROKER_ENABLED=true`. When enabled it registers `/context status`, `/context brief`, `/context lookup <handle|text>`, `/context pin <handle>`, and `/context prune` with autocomplete.
+- On reload/session start, the beta backfills the current session branch from `toolResult` and prompt-visible `bashExecution` entries, deduped by session entry id, tolerant of malformed entries, and honoring Pi's `excludeFromContext` bash entries.
+- Prompt integration currently injects a bounded broker brief and lookup guidance only; raw transcript rewriting remains a follow-up until Pi context-hook replacement semantics are hardened for this feature.
 
 ## Priority roadmap
 
-### 1. Integration surface and command UX
+### 1. Prompt-load replacement hardening
 
-- Provide `/context status`, `/context lookup`, `/context pin`, and `/context prune`.
-- Keep lookup explicit and inspectable before automatic prompt injection.
-- Handle missing or expired handles with clear diagnostics.
+- Keep the beta default-off until context-hook/tool-result rewriting is proven safe in real sessions.
+- Replace or suppress large raw tool-result messages in LLM context with broker handles and summaries while preserving exact lookup.
+- Add end-to-end smoke coverage for reload, context assembly, lookup fidelity, and rollback.
 
 ### 2. Runtime artifact capture
 
 - Capture large tool outputs, test logs, diffs, file snapshots, advisor briefs, brain notes, and subagent results.
 - Store raw payloads behind handles; inject only summaries, metadata, and handles into live prompts.
 - Preserve deterministic routing defaults before adding model advice.
-- Integrate with Pi session files deliberately: `tool_result` capture alone is observability, but it does not reduce prompt load because raw tool-result messages are still present in the session path.
-- To actually reduce context, wire broker capture into the `context` hook or tool-result rewriting so the LLM sees broker summaries/handles while the raw payload remains retrievable from broker storage.
+- Integrate with Pi session files deliberately: `tool_result` capture plus bounded brief injection improves observability and lookup, but it does not fully reduce prompt load while raw tool-result messages remain present in the session path.
+- To fully reduce context, wire broker capture into the `context` hook or tool-result rewriting so the LLM sees broker summaries/handles while the raw payload remains retrievable from broker storage.
 
 ### 3. Advisor and brain integration
 
