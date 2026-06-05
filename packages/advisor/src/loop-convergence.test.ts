@@ -93,6 +93,7 @@ describe("advisor two-agent convergence", () => {
   let messageRenderers: MessageRendererMap;
   let sendMessageMock: ReturnType<typeof vi.fn>;
   let completeSimpleMock: ReturnType<typeof vi.fn>;
+  let piMock: any;
   let priorState: string | null = null;
   let priorConfig: string | null = null;
   let priorCache: string | null = null;
@@ -107,6 +108,7 @@ describe("advisor two-agent convergence", () => {
     commands = setup.commands;
     messageRenderers = setup.messageRenderers;
     sendMessageMock = setup.sendMessage;
+    piMock = setup.pi;
 
     mkdirSync(dirname(ADVISOR_STATE_PATH), { recursive: true });
     writeFileSync(ADVISOR_CONFIG_PATH, JSON.stringify({ mode: "auto", review: "light", checkins: "off", checkinIntervalMinutes: 30 }, null, 2), "utf8");
@@ -375,6 +377,21 @@ describe("advisor two-agent convergence", () => {
         }),
       }),
     );
+  });
+
+  it("includes broker briefs in manual advisor context when available", async () => {
+    expect(commands.advisor).toBeTruthy();
+    piMock.__piRogueContextBroker = {
+      renderBrief: () => "## Context Broker\nHot:\n- ctx://session/s/tool_output/abc/ctx-1 summary=\"npm test passed\"",
+    };
+    completeSimpleMock.mockResolvedValue({ content: [{ type: "text", text: "Use the broker handle as evidence." }] });
+
+    await commands.advisor.handler("should we use broker context", ctx);
+
+    const messages = completeSimpleMock.mock.calls.at(-1)?.[1]?.messages;
+    const promptText = JSON.stringify(messages ?? completeSimpleMock.mock.calls.at(-1));
+    expect(promptText).toContain("Context broker brief");
+    expect(promptText).toContain("ctx://session/s/tool_output/abc/ctx-1");
   });
 
   it("does not re-run advisory review on repeated agent-end material snapshots", async () => {

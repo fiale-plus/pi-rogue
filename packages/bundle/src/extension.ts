@@ -13,13 +13,13 @@ export async function registerBundle(pi: ExtensionAPI): Promise<void> {
   if (p.__piRogueBundleRegistered) return;
   p.__piRogueBundleRegistered = true;
 
-  registerAdvisor(pi);
-  registerOrchestration(pi);
-
   if (contextBrokerBetaEnabled()) {
     const { registerContextBrokerBeta } = await import("@fiale-plus/pi-rogue-context-broker/extension");
     registerContextBrokerBeta(pi);
   }
+
+  registerAdvisor(pi);
+  registerOrchestration(pi);
 }
 
 export default function bundleExtension(pi: ExtensionAPI): Promise<void> {

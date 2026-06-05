@@ -179,6 +179,66 @@ describe("createInMemoryContextBroker", () => {
     expect(broker.lookup({ id: artifact.id })).toEqual([]);
   });
 
+  it("classifies artifacts into hot, warm, and cold tiers on publish", () => {
+    const broker = createInMemoryContextBroker({ defaultTtlMs: 0 });
+    const failure = broker.publish({ sessionId: "s", kind: "tool_output", payload: "failed", tags: ["error"], createdAt: 1 });
+    const command = broker.publish({ sessionId: "s", kind: "tool_output", payload: "passed", tags: ["ok"], createdAt: 2 });
+    const archive = broker.publish({ sessionId: "s", kind: "subagent_result", payload: "old", tags: ["completed"], createdAt: 3 });
+    const explicit = broker.publish({ sessionId: "s", kind: "diff", payload: "manual", tier: "cold", createdAt: 4 });
+
+    expect(failure.tier).toBe("hot");
+    expect(command.tier).toBe("warm");
+    expect(archive.tier).toBe("cold");
+    expect(explicit.tier).toBe("cold");
+    expect(broker.lookup({ sessionId: "s", tier: "cold" }).map((artifact) => artifact.id)).toEqual([explicit.id, archive.id]);
+  });
+
+  it("renders prompt briefs hot-first, warm-second, and excludes cold unless explicit", () => {
+    const broker = createInMemoryContextBroker({ briefBytes: 900, defaultTtlMs: 0 });
+    const cold = broker.publish({ sessionId: "s", kind: "tool_output", payload: "cold", summary: "cold archive", tier: "cold", createdAt: 1 });
+    const warm = broker.publish({ sessionId: "s", kind: "tool_output", payload: "warm", summary: "warm command", tier: "warm", createdAt: 2 });
+    const hot = broker.publish({ sessionId: "s", kind: "tool_output", payload: "hot", summary: "hot failure", tier: "hot", createdAt: 3 });
+
+    const brief = broker.renderBrief({ sessionId: "s" });
+    expect(brief).toContain("Hot:");
+    expect(brief).toContain(hot.handle);
+    expect(brief).toContain("Warm:");
+    expect(brief).toContain(warm.handle);
+    expect(brief).not.toContain(cold.handle);
+    expect(brief.indexOf(hot.handle)).toBeLessThan(brief.indexOf(warm.handle));
+
+    const coldBrief = broker.renderBrief({ sessionId: "s", tier: "cold", budgetBytes: 500 });
+    expect(coldBrief).toContain("Cold:");
+    expect(coldBrief).toContain(cold.handle);
+
+    expect(broker.pin(cold.handle, true)?.tier).toBe("hot");
+    expect(broker.renderBrief({ sessionId: "s" })).toContain(cold.handle);
+    expect(broker.pin(cold.handle, false)?.tier).toBe("cold");
+    expect(broker.renderBrief({ sessionId: "s" })).not.toContain(cold.handle);
+  });
+
+  it("applies tier-specific record, byte, and ttl retention", () => {
+    const broker = createInMemoryContextBroker({
+      defaultTtlMs: 0,
+      hotMaxRecords: 1,
+      warmMaxBytes: 6,
+      coldTtlMs: 10,
+    });
+    const oldHot = broker.publish({ sessionId: "s", kind: "tool_output", payload: "old-hot", tier: "hot", createdAt: 1 });
+    const newHot = broker.publish({ sessionId: "s", kind: "tool_output", payload: "new-hot", tier: "hot", createdAt: 2 });
+    const oldWarm = broker.publish({ sessionId: "s", kind: "tool_output", payload: "12345", tier: "warm", createdAt: 3 });
+    const newWarm = broker.publish({ sessionId: "s", kind: "tool_output", payload: "abcde", tier: "warm", createdAt: 4 });
+    const cold = broker.publish({ sessionId: "s", kind: "tool_output", payload: "cold", tier: "cold", createdAt: 5 });
+
+    expect(broker.lookup({ id: oldHot.id })).toEqual([]);
+    expect(broker.lookup({ id: newHot.id })).toEqual([newHot]);
+    expect(broker.lookup({ id: oldWarm.id })).toEqual([]);
+    expect(broker.lookup({ id: newWarm.id })).toEqual([newWarm]);
+
+    broker.prune(16);
+    expect(broker.lookup({ id: cold.id })).toEqual([]);
+  });
+
   it("renders a bounded prompt brief with lookup instructions", () => {
     const broker = createInMemoryContextBroker({ briefBytes: 180 });
     broker.publish({

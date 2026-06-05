@@ -283,6 +283,15 @@ function brief(s: SessionState): string {
   return lines.join("\n").slice(0, 1200);
 }
 
+function contextBrokerBrief(pi: ExtensionAPI): string {
+  try {
+    const text = (pi as any).__piRogueContextBroker?.renderBrief?.();
+    return typeof text === "string" && text.includes("ctx://") ? sanitizeAdvisorText(text).slice(0, 2400) : "";
+  } catch {
+    return "";
+  }
+}
+
 const CLIPBOARD_IMAGE_PATH_RE = /(?:\/(?:private\/)?var\/folders\/[^\s"'`<>]+\/T|\/(?:tmp|var\/tmp))\/clipboard-\d{4}-\d{2}-\d{2}-[A-Za-z0-9-]+\.(?:png|jpe?g|gif|webp)\b/g;
 
 export function sanitizeAdvisorText(text: unknown): string {
@@ -881,12 +890,18 @@ async function askAdvisor(pi: ExtensionAPI, ctx: any, question: string, scope: s
   const state = loadState();
   if (!question.trim()) return { text: "Ask a question.", error: "empty" };
 
-  const ck = hash("adv", config.model ?? "auto", squish(question, 300), includeWork ? brief(state) : "");
+  const brokerBrief = includeWork ? contextBrokerBrief(pi) : "";
+  const ck = hash("adv", config.model ?? "auto", squish(question, 300), includeWork ? brief(state) : "", brokerBrief);
   const cache = loadCache();
   if (cache[ck]) { state.cacheHits++; saveState(state); return { text: cache[ck], cached: true }; }
 
   const msgs = [
-    { role: "user", content: [ `Question: ${question}`, scope ? `Scope: ${scope}` : "", includeWork && brief(state) ? `Session:\n${brief(state)}` : "" ].filter(Boolean).join("\n"), timestamp: new Date().toISOString() },
+    { role: "user", content: [
+      `Question: ${question}`,
+      scope ? `Scope: ${scope}` : "",
+      includeWork && brief(state) ? `Session:\n${brief(state)}` : "",
+      brokerBrief ? `Context broker brief:\n${brokerBrief}` : "",
+    ].filter(Boolean).join("\n"), timestamp: new Date().toISOString() },
   ] as any[];
 
   const completed = await completeWithModelFallback(ctx, config, ADVISOR_SYSTEM, msgs, { maxTokens: 600, reasoning: "medium" as ThinkingLevel });
@@ -984,7 +999,8 @@ async function doReview(pi: ExtensionAPI, ctx: any, trigger: string, delta: stri
     }
 
     const b = brief(state);
-    if (!b) {
+    const brokerBrief = contextBrokerBrief(pi);
+    if (!b && !brokerBrief) {
       finalDecision = "defer";
       finalReason = "missing brief context";
       markReviewApplied(state, signature, trigger, finalDecision, finalReason, true);
@@ -993,7 +1009,7 @@ async function doReview(pi: ExtensionAPI, ctx: any, trigger: string, delta: stri
       return;
     }
 
-    const rk = hash("rev", trigger, b, delta, String(meta.fileChanged), String(meta.failed), String(meta.isAgentEnd), String(reviewRoute.label), signature);
+    const rk = hash("rev", trigger, b, brokerBrief, delta, String(meta.fileChanged), String(meta.failed), String(meta.isAgentEnd), String(reviewRoute.label), signature);
     const cache = loadCache();
     if (cache[rk]) {
       finalDecision = "defer";
@@ -1011,7 +1027,8 @@ async function doReview(pi: ExtensionAPI, ctx: any, trigger: string, delta: stri
         `Delta: ${delta || "(none)"}`,
         `Files: ${meta.fileChanged} Errors: ${meta.failed}`,
         `Route: ${summarizeRoute(reviewRoute)}`,
-        `Brief:\n${b}`,
+        b ? `Brief:\n${b}` : "",
+        brokerBrief ? `Context broker brief:\n${brokerBrief}` : "",
       ].join("\n"), timestamp: new Date().toISOString() },
     ] as any[];
     const completed = await completeWithModelFallback(ctx, config, REVIEW_SYSTEM, msgs, { maxTokens: 400, reasoning: "low" as ThinkingLevel });
@@ -1140,13 +1157,14 @@ export function registerAdvisor(pi: ExtensionAPI): void {
     const prompt = typeof event.prompt === "string" && event.prompt.trim() ? squish(event.prompt, 1000) : "";
     if (prompt) state.lastTask = prompt;
     const briefText = brief(state);
+    const brokerBrief = contextBrokerBrief(pi);
     const intent = prompt ? classifyIntent(prompt) : "";
     const mode = prompt ? classifyMode(prompt) : "";
     const intentTag = intent ? `Intent: ${intent}` : "";
     const modeTag = mode ? `Mode: ${mode}` : "";
     // Enrich preflight text with session context so the binary gate has more signal
-    const enrichedText = [prompt, event.systemPrompt || "", briefText ? `Brief: ${briefText}` : "", intentTag, modeTag].filter(Boolean).join(" ");
-    const routeInput: AdvisorRouteInput = { phase: "preflight", text: enrichedText || prompt || event.systemPrompt || briefText || intentTag || modeTag || "", brief: briefText };
+    const enrichedText = [prompt, event.systemPrompt || "", briefText ? `Brief: ${briefText}` : "", brokerBrief ? `Context broker: ${brokerBrief}` : "", intentTag, modeTag].filter(Boolean).join(" ");
+    const routeInput: AdvisorRouteInput = { phase: "preflight", text: enrichedText || prompt || event.systemPrompt || briefText || brokerBrief || intentTag || modeTag || "", brief: [briefText, brokerBrief].filter(Boolean).join("\n\n") };
 
     // Binary gate model — fast local classifier for continue/escalate decisions
     const gatePrediction = binaryGatePredict(routeInput.text);
@@ -1191,6 +1209,7 @@ export function registerAdvisor(pi: ExtensionAPI): void {
         note,
         controlTag,
         briefText ? `Brief (cache-aware):\n${briefText}` : "",
+        brokerBrief ? `Context broker brief (lookup-first):\n${brokerBrief}` : "",
       ].filter(Boolean).join("\n\n"),
     };
   });

@@ -1,6 +1,12 @@
+import { createHash } from "node:crypto";
+import type { AgentToolResult } from "@earendil-works/pi-coding-agent";
 import type { AutocompleteItem } from "@earendil-works/pi-tui";
+import { Type } from "typebox";
 import type { ExtensionAPI, ExtensionContext, ToolResultEvent } from "@earendil-works/pi-coding-agent";
+import type { ContextArtifact } from "@fiale-plus/pi-core";
+import { createFileContextBroker } from "./file.js";
 import { createInMemoryContextBroker } from "./index.js";
+import { createSqliteContextBroker } from "./sqlite.js";
 
 export interface ContextBrokerBetaOptions {
   enabled?: boolean;
@@ -9,6 +15,9 @@ export interface ContextBrokerBetaOptions {
   briefBytes?: number;
   lookupBytes?: number;
   searchBytes?: number;
+  rewriteThresholdBytes?: number;
+  durable?: boolean;
+  storeDir?: string;
 }
 
 type UiLike = { notify(message: string, type?: "info" | "warning" | "error"): void; setStatus?(key: string, text: string | undefined): void };
@@ -17,19 +26,46 @@ type SessionContextLike = Pick<ExtensionContext, "cwd" | "sessionManager"> & { u
 const DEFAULT_BRIEF_BYTES = 1_800;
 const DEFAULT_LOOKUP_BYTES = 12_000;
 const DEFAULT_SEARCH_BYTES = 2_000;
+const DEFAULT_REWRITE_THRESHOLD_BYTES = 2_000;
 const DEFAULT_TTL_MS = 24 * 60 * 60 * 1000;
 const ENABLED_VALUES = new Set(["1", "true", "yes", "on"]);
 
+function envFlag(name: string): boolean {
+  return ENABLED_VALUES.has(String(process.env[name] ?? "").trim().toLowerCase());
+}
+
 function isEnvEnabled(): boolean {
-  return ENABLED_VALUES.has(String(process.env.PI_CONTEXT_BROKER_ENABLED ?? "").trim().toLowerCase());
+  return envFlag("PI_CONTEXT_BROKER_ENABLED");
+}
+
+function isSensitiveKey(key: string): boolean {
+  return /(?:api[_-]?key|token|secret|password|credential)/i.test(key);
+}
+
+function redactSecrets(text: string): string {
+  return text
+    .replace(/\b(sk-[A-Za-z0-9_-]{12,})\b/g, "[REDACTED_API_KEY]")
+    .replace(/\b(gh[pousr]_[A-Za-z0-9_]{12,})\b/g, "[REDACTED_GITHUB_TOKEN]")
+    .replace(/([\"']?(?:api[_-]?key|token|secret|password|credential)[\w.-]*[\"']?\s*[:=]\s*[\"']?)([^\s'\",;}]+)/gi, "$1[REDACTED]");
+}
+
+function sanitizeValue(value: unknown, depth = 0): unknown {
+  if (typeof value === "string") return redactSecrets(value);
+  if (value == null || typeof value !== "object") return value;
+  if (depth > 6) return "[MAX_DEPTH]";
+  if (Array.isArray(value)) return value.map((item) => sanitizeValue(item, depth + 1));
+  return Object.fromEntries(Object.entries(value as Record<string, unknown>).map(([key, item]) => [
+    key,
+    isSensitiveKey(key) ? "[REDACTED]" : sanitizeValue(item, depth + 1),
+  ]));
 }
 
 function toText(value: unknown): string {
-  if (typeof value === "string") return value;
+  if (typeof value === "string") return redactSecrets(value);
   try {
-    return JSON.stringify(value, null, 2);
+    return redactSecrets(JSON.stringify(value, null, 2));
   } catch {
-    return String(value ?? "");
+    return redactSecrets(String(value ?? ""));
   }
 }
 
@@ -70,6 +106,10 @@ function compact(value: string, max = 120): string {
   return truncateUtf8(value.replace(/\s+/g, " ").trim(), max);
 }
 
+function stableHash(value: string): string {
+  return createHash("sha256").update(value).digest("hex").slice(0, 16);
+}
+
 function sessionIdFor(ctx: Partial<SessionContextLike>): string {
   const file = ctx.sessionManager?.getSessionFile?.();
   return file || ctx.cwd || process.cwd();
@@ -80,6 +120,13 @@ function messageTimestamp(entry: any): number | undefined {
   if (typeof value === "number" && Number.isFinite(value)) return value;
   const parsed = Date.parse(String(value ?? ""));
   return Number.isFinite(parsed) ? parsed : undefined;
+}
+
+function contentText(content: unknown): string {
+  if (Array.isArray(content)) {
+    return content.map((block) => block?.type === "text" ? block.text : toText(block)).join("\n");
+  }
+  return toText(content);
 }
 
 function toolPayload(event: { toolName: string; input?: unknown; content?: unknown; details?: unknown; isError?: boolean }): string {
@@ -95,11 +142,29 @@ function toolPayload(event: { toolName: string; input?: unknown; content?: unkno
   ].join("\n");
 }
 
+function textResult(text: string): AgentToolResult<unknown> {
+  return { content: [{ type: "text", text }], details: {} };
+}
+
+function brokerPlaceholder(artifact: ContextArtifact): string {
+  return [
+    `Context broker artifact: ${artifact.handle}`,
+    `Summary: ${artifact.summary}`,
+    `Payload bytes: ${artifact.bytes}`,
+    "Raw payload omitted from prompt. Use /context lookup <handle> if exact evidence is needed.",
+  ].join("\n");
+}
+
 function summarizeTool(event: { toolName: string; input?: any; isError?: boolean }, bytes: number): string {
   const command = event.toolName === "bash" ? event.input?.command : undefined;
   const path = event.input?.path;
   const target = command ? ` command=${compact(String(command), 120)}` : path ? ` path=${path}` : "";
   return `${event.isError ? "failed" : "completed"} ${event.toolName}${target}; payload=${bytes} bytes`;
+}
+
+function ttlFromNowFor(createdAt: number | undefined): number | undefined {
+  if (typeof createdAt !== "number" || !Number.isFinite(createdAt)) return undefined;
+  return Math.max(DEFAULT_TTL_MS, Date.now() - createdAt + DEFAULT_TTL_MS);
 }
 
 export function registerContextBrokerBeta(pi: ExtensionAPI, options: ContextBrokerBetaOptions = {}): void {
@@ -110,17 +175,32 @@ export function registerContextBrokerBeta(pi: ExtensionAPI, options: ContextBrok
   const briefBytes = options.briefBytes ?? DEFAULT_BRIEF_BYTES;
   const lookupBytes = options.lookupBytes ?? DEFAULT_LOOKUP_BYTES;
   const searchBytes = options.searchBytes ?? DEFAULT_SEARCH_BYTES;
-  const broker = createInMemoryContextBroker({
+  const rewriteThresholdBytes = options.rewriteThresholdBytes ?? DEFAULT_REWRITE_THRESHOLD_BYTES;
+  const brokerOptions = {
     maxRecords: options.maxRecords ?? 64,
     maxBytes: options.maxBytes ?? 8 * 1024 * 1024,
     briefBytes,
-  });
+  };
+  const durable = options.durable ?? (envFlag("PI_CONTEXT_BROKER_DURABLE") || Boolean(options.storeDir ?? process.env.PI_CONTEXT_BROKER_STORE_DIR));
+  const durableBackend = String(process.env.PI_CONTEXT_BROKER_BACKEND ?? "sqlite").trim().toLowerCase();
+  const broker = durable
+    ? durableBackend === "jsonl"
+      ? createFileContextBroker({ ...brokerOptions, dir: options.storeDir ?? process.env.PI_CONTEXT_BROKER_STORE_DIR })
+      : createSqliteContextBroker({ ...brokerOptions, dir: options.storeDir ?? process.env.PI_CONTEXT_BROKER_STORE_DIR })
+    : createInMemoryContextBroker(brokerOptions);
   const seenSourceIds = new Set<string>();
+  const sourceHandles = new Map<string, string>();
   let activeSessionId = process.cwd();
 
   function currentBrief(): string {
     return broker.renderBrief({ sessionId: activeSessionId, budgetBytes: briefBytes });
   }
+
+  p.__piRogueContextBroker = {
+    renderBrief: currentBrief,
+    lookup: broker.lookup,
+    status: broker.status,
+  };
 
   function publishToolArtifact(event: {
     toolName: string;
@@ -130,27 +210,56 @@ export function registerContextBrokerBeta(pi: ExtensionAPI, options: ContextBrok
     isError?: boolean;
     sourceId?: string;
     createdAt?: number;
-  }): boolean {
+    ttlMs?: number;
+  }): ContextArtifact | null {
     if (event.sourceId) {
-      if (seenSourceIds.has(event.sourceId)) return false;
+      const existingHandle = sourceHandles.get(event.sourceId);
+      if (existingHandle) {
+        const existing = broker.lookup({ handle: existingHandle })[0];
+        if (existing) return existing;
+        sourceHandles.delete(event.sourceId);
+        seenSourceIds.delete(event.sourceId);
+      }
+      if (seenSourceIds.has(event.sourceId)) seenSourceIds.delete(event.sourceId);
       seenSourceIds.add(event.sourceId);
     }
 
-    const payload = toolPayload(event);
+    const sanitizedEvent = {
+      ...event,
+      input: sanitizeValue(event.input) as any,
+      content: sanitizeValue(event.content),
+      details: sanitizeValue(event.details),
+    };
+    const payload = toolPayload(sanitizedEvent);
     const bytes = Buffer.byteLength(payload, "utf8");
-    broker.publish({
+    const artifact = broker.publish({
       sessionId: activeSessionId,
       kind: "tool_output",
       payload,
-      summary: summarizeTool(event, bytes),
+      summary: summarizeTool(sanitizedEvent, bytes),
       tags: [event.toolName, event.isError ? "error" : "ok", event.sourceId ? "session-backfill" : "live"],
-      command: event.toolName === "bash" && typeof event.input?.command === "string" ? event.input.command : undefined,
-      paths: typeof event.input?.path === "string" ? [event.input.path] : [],
-      ttlMs: DEFAULT_TTL_MS,
+      command: event.toolName === "bash" && typeof sanitizedEvent.input?.command === "string" ? sanitizedEvent.input.command : undefined,
+      paths: typeof sanitizedEvent.input?.path === "string" ? [sanitizedEvent.input.path] : [],
+      ttlMs: event.ttlMs ?? DEFAULT_TTL_MS,
       parentIds: event.sourceId ? [event.sourceId] : [],
       createdAt: event.createdAt,
     });
-    return true;
+    if (event.sourceId) sourceHandles.set(event.sourceId, artifact.handle);
+    return artifact;
+  }
+
+  function collectToolInputs(entries: any[]): Map<string, { toolName?: string; input?: unknown }> {
+    const toolInputs = new Map<string, { toolName?: string; input?: unknown }>();
+    for (const entry of entries) {
+      const message = entry?.type === "message" ? entry.message : entry;
+      if (message?.role !== "assistant" || !Array.isArray(message.content)) continue;
+      for (const block of message.content) {
+        if (block?.type === "toolCall" && typeof block.id === "string") {
+          toolInputs.set(block.id, { toolName: typeof block.name === "string" ? block.name : undefined, input: block.arguments });
+        }
+      }
+    }
+    return toolInputs;
   }
 
   function backfillSessionArtifacts(ctx: Partial<SessionContextLike>): { added: number; scanned: number; errors: number } {
@@ -162,16 +271,7 @@ export function registerContextBrokerBeta(pi: ExtensionAPI, options: ContextBrok
       return { added: 0, scanned: 0, errors: 1 };
     }
 
-    const toolInputs = new Map<string, { toolName?: string; input?: unknown }>();
-    for (const entry of entries) {
-      const message = entry?.type === "message" ? entry.message : undefined;
-      if (message?.role !== "assistant" || !Array.isArray(message.content)) continue;
-      for (const block of message.content) {
-        if (block?.type === "toolCall" && typeof block.id === "string") {
-          toolInputs.set(block.id, { toolName: typeof block.name === "string" ? block.name : undefined, input: block.arguments });
-        }
-      }
-    }
+    const toolInputs = collectToolInputs(entries);
 
     let added = 0;
     let scanned = 0;
@@ -186,6 +286,7 @@ export function registerContextBrokerBeta(pi: ExtensionAPI, options: ContextBrok
           scanned += 1;
           const sourceId = typeof entry.message.toolCallId === "string" ? entry.message.toolCallId : entryId;
           const toolInput = sourceId ? toolInputs.get(sourceId) : undefined;
+          const alreadySeen = sourceId ? seenSourceIds.has(sourceId) || sourceHandles.has(sourceId) : false;
           if (publishToolArtifact({
             toolName: String(entry.message.toolName ?? toolInput?.toolName ?? "tool"),
             input: entry.message.input ?? toolInput?.input,
@@ -194,13 +295,14 @@ export function registerContextBrokerBeta(pi: ExtensionAPI, options: ContextBrok
             isError: Boolean(entry.message.isError),
             sourceId,
             createdAt,
-          })) added += 1;
+          }) && !alreadySeen) added += 1;
         }
 
         if (entry?.type === "message" && entry.message?.role === "bashExecution") {
           if (entry.message.excludeFromContext === true) continue;
           scanned += 1;
           const sourceId = entryId;
+          const alreadySeen = sourceId ? seenSourceIds.has(sourceId) || sourceHandles.has(sourceId) : false;
           if (publishToolArtifact({
             toolName: "bash",
             input: { command: entry.message.command },
@@ -214,7 +316,7 @@ export function registerContextBrokerBeta(pi: ExtensionAPI, options: ContextBrok
             isError: typeof entry.message.exitCode === "number" ? entry.message.exitCode !== 0 : Boolean(entry.message.cancelled),
             sourceId,
             createdAt,
-          })) added += 1;
+          }) && !alreadySeen) added += 1;
         }
       } catch {
         errors += 1;
@@ -282,6 +384,71 @@ export function registerContextBrokerBeta(pi: ExtensionAPI, options: ContextBrok
     publishToolArtifact({ ...event, sourceId: event.toolCallId });
   });
 
+  pi.on("context", async (event, ctx) => {
+    activeSessionId = sessionIdFor(ctx);
+    const toolInputs = collectToolInputs(event.messages);
+    const drafts = event.messages.map((message: any): { original: any; artifact?: ContextArtifact; rewrite?: (artifact: ContextArtifact) => any } => {
+      if (message?.role === "toolResult") {
+        const raw = contentText(message.content);
+        if (Buffer.byteLength(raw, "utf8") <= rewriteThresholdBytes) return { original: message };
+        const toolInput = typeof message.toolCallId === "string" ? toolInputs.get(message.toolCallId) : undefined;
+        const artifact = publishToolArtifact({
+          toolName: String(message.toolName ?? toolInput?.toolName ?? "tool"),
+          input: message.input ?? toolInput?.input,
+          content: message.content,
+          details: message.details,
+          isError: Boolean(message.isError),
+          sourceId: typeof message.toolCallId === "string" ? message.toolCallId : undefined,
+          createdAt: typeof message.timestamp === "number" ? message.timestamp : undefined,
+          ttlMs: ttlFromNowFor(typeof message.timestamp === "number" ? message.timestamp : undefined),
+        });
+        if (!artifact) return { original: message };
+        return { original: message, artifact, rewrite: (live) => ({ ...message, content: [{ type: "text", text: brokerPlaceholder(live) }] }) };
+      }
+
+      if (message?.role === "bashExecution" && message.excludeFromContext !== true) {
+        const raw = String(message.output ?? "");
+        if (Buffer.byteLength(raw, "utf8") <= rewriteThresholdBytes) return { original: message };
+        const sourceId = typeof message.timestamp === "number"
+          ? `bash:${message.timestamp}:${stableHash([message.command ?? "", raw, message.exitCode ?? "", message.cancelled ?? ""].join("\n"))}`
+          : `bash:${stableHash([message.command ?? "", raw, message.exitCode ?? "", message.cancelled ?? ""].join("\n"))}`;
+        const artifact = publishToolArtifact({
+          toolName: "bash",
+          input: { command: message.command },
+          content: message.output,
+          details: {
+            exitCode: message.exitCode,
+            cancelled: message.cancelled,
+            truncated: message.truncated,
+            fullOutputPath: message.fullOutputPath,
+          },
+          isError: typeof message.exitCode === "number" ? message.exitCode !== 0 : Boolean(message.cancelled),
+          sourceId,
+          createdAt: typeof message.timestamp === "number" ? message.timestamp : undefined,
+          ttlMs: ttlFromNowFor(typeof message.timestamp === "number" ? message.timestamp : undefined),
+        });
+        if (!artifact) return { original: message };
+        return { original: message, artifact, rewrite: (live) => ({ ...message, output: brokerPlaceholder(live), truncated: true }) };
+      }
+
+      return { original: message };
+    });
+
+    let changed = false;
+    const messages = drafts.map((draft) => {
+      if (!draft.artifact || !draft.rewrite) return draft.original;
+      const live = broker.lookup({ handle: draft.artifact.handle })[0];
+      if (!live) {
+        for (const parentId of draft.artifact.parentIds) sourceHandles.delete(parentId);
+        return draft.original;
+      }
+      changed = true;
+      return draft.rewrite(live);
+    });
+
+    return changed ? { messages } : undefined;
+  });
+
   pi.on("before_agent_start", async (event) => {
     const brief = currentBrief();
     if (!brief.includes("ctx://")) return;
@@ -292,6 +459,53 @@ export function registerContextBrokerBeta(pi: ExtensionAPI, options: ContextBrok
         "Context broker beta rule: use /context lookup <handle> for exact evidence when a broker handle is relevant. Broker briefs are bounded summaries and never raw payload dumps.",
       ].join("\n\n"),
     };
+  });
+
+  pi.registerTool({
+    name: "context_lookup",
+    label: "Context Lookup",
+    description: "Lookup exact or searchable context broker artifacts by handle, current-session text, path, tag, kind, or tier.",
+    promptSnippet: "context_lookup: retrieve context broker artifacts by ctx:// handle or focused filters before asking the user to repeat prior tool output.",
+    promptGuidelines: [
+      "Use context_lookup when a ctx:// handle is relevant and exact evidence is needed.",
+      "Do not paste large raw broker payloads unless the user explicitly asks; summarize and cite handles instead.",
+    ],
+    parameters: Type.Object({
+      handle: Type.Optional(Type.String({ description: "Exact ctx:// handle to retrieve" })),
+      text: Type.Optional(Type.String({ description: "Current-session text search over broker summaries and indexed payload text" })),
+      path: Type.Optional(Type.String({ description: "File or directory path filter" })),
+      tag: Type.Optional(Type.String({ description: "Artifact tag filter" })),
+      kind: Type.Optional(Type.String({ enum: ["tool_output", "diff", "file_snapshot", "subagent_result", "advisor_brief", "memory_note"] })),
+      tier: Type.Optional(Type.String({ enum: ["hot", "warm", "cold"] })),
+      limit: Type.Optional(Type.Number({ minimum: 1, maximum: 10, description: "Maximum artifacts to return" })),
+    }),
+    async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+      activeSessionId = sessionIdFor(ctx);
+      const p = params as { handle?: string; text?: string; path?: string; tag?: string; kind?: any; tier?: any; limit?: number };
+      const exact = typeof p.handle === "string" && p.handle.startsWith("ctx://");
+      const focused = exact || Boolean(p.text?.trim() || p.path?.trim() || p.tag?.trim() || p.kind || p.tier);
+      if (!focused) {
+        return textResult("context_lookup requires a focused filter: handle, text, path, tag, kind, or tier. Empty lookups are refused to avoid dumping brokered payloads into the prompt.");
+      }
+      const results = broker.lookup({
+        handle: exact ? p.handle : undefined,
+        sessionId: exact ? undefined : activeSessionId,
+        text: exact ? undefined : p.text,
+        path: p.path,
+        tag: p.tag,
+        kind: p.kind,
+        tier: p.tier,
+        limit: Math.min(10, Math.max(1, Math.floor(p.limit ?? (exact ? 1 : 5)))),
+      });
+      if (!results.length) return textResult("No context artifacts matched. Missing or expired handles should be reported explicitly.");
+      return textResult(results.map((item) => [
+        item.handle,
+        `tier=${item.tier} kind=${item.kind} bytes=${item.bytes}`,
+        `summary=${item.summary}`,
+        "payload:",
+        truncateUtf8(item.payload, exact ? lookupBytes : searchBytes),
+      ].join("\n")).join("\n\n---\n\n"));
+    },
   });
 
   pi.registerCommand("context", {
@@ -305,7 +519,7 @@ export function registerContextBrokerBeta(pi: ExtensionAPI, options: ContextBrok
       if (action === "status") {
         const status = broker.status();
         ctx.ui.notify(
-          `Context broker beta: enabled, session=${activeSessionId}, records=${status.records}, bytes=${status.bytes}/${status.maxBytes}, pinned=${status.pinnedRecords}/${status.pinnedBytes} bytes`,
+          `Context broker beta: enabled, session=${activeSessionId}, records=${status.records}, bytes=${status.bytes}/${status.maxBytes}, tiers=hot:${status.hotRecords}/${status.hotBytes} warm:${status.warmRecords}/${status.warmBytes} cold:${status.coldRecords}/${status.coldBytes}, pinned=${status.pinnedRecords}/${status.pinnedBytes} bytes`,
           "info",
         );
         return;

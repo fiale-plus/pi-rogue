@@ -17,7 +17,9 @@
   "main": "./src/index.ts",
   "exports": {
     ".": "./src/index.ts",
-    "./context-broker": "./src/context-broker.ts"
+    "./context-broker": "./src/context-broker.ts",
+    "./context-broker/file": "./src/context-broker-file.ts",
+    "./context-broker/sqlite": "./src/context-broker-sqlite.ts"
   },
   "pi": {
     "extensions": [
