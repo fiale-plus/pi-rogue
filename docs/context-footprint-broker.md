@@ -140,6 +140,21 @@ Rule: never paste raw broker payloads unless the user asks or the payload is bel
 
 Inline thresholds should be small and explicit. For example, inline summaries under 2 KB, but keep raw payloads as handles unless requested.
 
+### Advisor and brain consumption
+
+Advisor and brain should consume the broker brief as their default context substrate instead of rebuilding large ad hoc transcript excerpts:
+
+```text
+## Context Broker
+- ctx://session/<session>/<kind>/<sha>/<id> kind=tool_output bytes=84231 summary="npm test passed; 2 suites; no failures"
+Lookup: use broker lookup by handle/path/tag/kind/session before asking the user to repeat data.
+Rule: do not paste raw broker payloads into advisor or brain prompts unless explicitly requested or below the inline threshold.
+```
+
+This is efficient for advisor usage because the advisor usually needs to triage task state, risk, failures, and decisions, not reread every raw log line. The brief should include enough metadata for routing and review: handle, kind, session/origin, byte count, hash prefix, paths/tags, and a concise summary or metadata-only placeholder.
+
+The quality contract is lookup-first rather than summary-only. If advisor or brain needs exact evidence, diffs, error text, or payload-specific wording, it should dereference the handle and work from the retrieved artifact. Missing or expired handles must be reported explicitly instead of asking the user to repeat context by default.
+
 ## Retention and caps
 
 Suggested defaults:
@@ -196,32 +211,45 @@ This PR now includes a first narrow implementation slice in `@fiale-plus/pi-core
 - Omitted summaries render as metadata-only placeholders so raw payload text is not injected into prompt briefs by default.
 - This slice is intentionally non-persistent. Durable SQLite/blob storage remains a later phase.
 
-## Integration plan
+## Priority roadmap
 
-### Phase 1: proposal and audit
+### 1. Integration surface and command UX
 
-- Document current extension stack and gaps.
-- Define broker storage, lookup, and retention mechanics.
-- Keep guardrails out of scope.
-
-### Phase 2: brain retention discipline
-
-- Add caps to `packages/brain` for tracked sessions and roadmap entries.
-- Record context handles in brain commits instead of raw evidence text.
-- Add status output that reports memory size, session count, and last prune.
-
-### Phase 3: broker storage and lookup
-
-- Add a `packages/context-broker` package or a narrow extension module.
-- Capture large tool outputs, diffs, and subagent results into artifacts.
 - Provide `/context status`, `/context lookup`, `/context pin`, and `/context prune`.
-- Feed a compact broker brief into advisor and brain prompts.
+- Keep lookup explicit and inspectable before automatic prompt injection.
+- Handle missing or expired handles with clear diagnostics.
 
-### Phase 4: cheap routing advisor
+### 2. Runtime artifact capture
 
-- Add optional local-model routing advice.
-- Cache routing decisions by payload hash.
-- Log model advice and deterministic fallback decisions for debugging.
+- Capture large tool outputs, test logs, diffs, file snapshots, advisor briefs, brain notes, and subagent results.
+- Store raw payloads behind handles; inject only summaries, metadata, and handles into live prompts.
+- Preserve deterministic routing defaults before adding model advice.
+
+### 3. Advisor and brain integration
+
+- Feed `renderBrief()` output into advisor and brain prompts.
+- Replace large hand-assembled transcript excerpts with broker handles and summaries.
+- Require advisor/brain flows to dereference handles before asking the user to repeat data or before making evidence-sensitive claims.
+- Track lookup frequency, missing-handle frequency, and answer quality during rollout.
+
+### 4. Durable storage and resume
+
+- Add SQLite metadata, blob storage by SHA-256, session event JSONL, and summary files.
+- Add per-session locking or atomic append for concurrent tool calls.
+- Make session resume reconstruct briefs from durable handles instead of transcript replay.
+
+### 5. Retrieval quality and safety
+
+- Add FTS over summaries and selected safe excerpts.
+- Add secret redaction before indexing and before display.
+- Keep binary/unknown payloads metadata-only by default.
+- Add prompt-injection tests for hostile raw payloads stored behind handles.
+
+### 6. Payload routing model
+
+- Collect broker routing logs first: size, kind, command, tags, summary source, prompt inclusion, TTL, and outcome.
+- Train a separate payload-routing classifier only after enough labeled examples exist.
+- Keep deterministic caps, secret checks, and user pins authoritative over model advice.
 
 ## Hidden issues
 
