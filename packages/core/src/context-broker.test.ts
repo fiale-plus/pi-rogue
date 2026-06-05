@@ -51,6 +51,23 @@ describe("createInMemoryContextBroker", () => {
     expect(broker.lookup({ sessionId: "s2", kind: "tool_output" })).toEqual([]);
   });
 
+  it("uses a metadata-only summary when callers omit summaries", () => {
+    const broker = createInMemoryContextBroker({ briefBytes: 500 });
+    const artifact = broker.publish({
+      sessionId: "s",
+      kind: "tool_output",
+      payload: "SECRET_TOKEN=abc123\n".repeat(20),
+      paths: ["logs/secret-output.txt"],
+    });
+
+    const brief = broker.renderBrief({ sessionId: "s" });
+
+    expect(artifact.summary).toContain("payload stored externally");
+    expect(artifact.summary).not.toContain("SECRET_TOKEN");
+    expect(brief).not.toContain("SECRET_TOKEN");
+    expect(brief).toContain(artifact.handle);
+  });
+
   it("enforces record caps by pruning oldest unpinned artifacts", () => {
     const broker = createInMemoryContextBroker({ maxRecords: 2, defaultTtlMs: 0 });
     const first = broker.publish({ sessionId: "s", kind: "memory_note", payload: "one", createdAt: 1 });
@@ -60,6 +77,16 @@ describe("createInMemoryContextBroker", () => {
     expect(broker.lookup({ id: first.id })).toEqual([]);
     expect(broker.lookup({ id: second.id })).toEqual([second]);
     expect(broker.lookup({ id: third.id })).toEqual([third]);
+    expect(broker.status().records).toBe(2);
+  });
+
+  it("applies caps independently per session", () => {
+    const broker = createInMemoryContextBroker({ maxRecords: 1, defaultTtlMs: 0 });
+    const sessionOne = broker.publish({ sessionId: "s1", kind: "tool_output", payload: "one", createdAt: 1 });
+    const sessionTwo = broker.publish({ sessionId: "s2", kind: "tool_output", payload: "two", createdAt: 2 });
+
+    expect(broker.lookup({ sessionId: "s1" })).toEqual([sessionOne]);
+    expect(broker.lookup({ sessionId: "s2" })).toEqual([sessionTwo]);
     expect(broker.status().records).toBe(2);
   });
 
@@ -122,6 +149,33 @@ describe("createInMemoryContextBroker", () => {
 
     broker.prune(111);
 
+    expect(broker.lookup({ id: artifact.id })).toEqual([]);
+  });
+
+  it("prunes expired artifacts before lookup without an explicit prune call", () => {
+    const broker = createInMemoryContextBroker({ defaultTtlMs: 1 });
+    const artifact = broker.publish({ sessionId: "s", kind: "tool_output", payload: "expired", createdAt: 1 });
+
+    expect(broker.lookup({ id: artifact.id })).toEqual([]);
+    expect(broker.status().records).toBe(0);
+  });
+
+  it("omits expired artifacts from rendered prompt briefs", () => {
+    const broker = createInMemoryContextBroker({ defaultTtlMs: 1, briefBytes: 500 });
+    const artifact = broker.publish({ sessionId: "s", kind: "tool_output", payload: "expired secret", summary: "expired summary", createdAt: 1 });
+
+    const brief = broker.renderBrief({ sessionId: "s" });
+
+    expect(brief).not.toContain(artifact.handle);
+    expect(brief).not.toContain("expired summary");
+  });
+
+  it("keeps pinned expired artifacts visible until unpinned", () => {
+    const broker = createInMemoryContextBroker({ defaultTtlMs: 1 });
+    const artifact = broker.publish({ sessionId: "s", kind: "tool_output", payload: "pinned", pinned: true, createdAt: 1 });
+
+    expect(broker.lookup({ id: artifact.id })).toEqual([artifact]);
+    expect(broker.pin(artifact.id, false)).toBeNull();
     expect(broker.lookup({ id: artifact.id })).toEqual([]);
   });
 

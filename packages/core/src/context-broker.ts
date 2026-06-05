@@ -131,6 +131,12 @@ function truncateUtf8(text: string, maxBytes: number): string {
   return result;
 }
 
+function summarizeArtifact(summary: string | undefined, kind: ContextArtifactKind, bytes: number, sha256: string, maxBytes: number): string {
+  const cleaned = String(summary ?? "").replace(/\s+/g, " ").trim();
+  if (cleaned) return truncateUtf8(cleaned, maxBytes);
+  return truncateUtf8(`[${kind} payload stored externally; ${bytes} bytes; sha256=${sha256.slice(0, 16)}]`, maxBytes);
+}
+
 function artifactMatches(artifact: ContextArtifact, query: ContextLookupQuery): boolean {
   if (query.id && artifact.id !== query.id) return false;
   if (query.handle && artifact.handle !== query.handle) return false;
@@ -164,7 +170,7 @@ export function createInMemoryContextBroker(options: ContextBrokerOptions = {}):
   let artifacts: Array<ContextArtifact & { sequence: number }> = [];
   let sequence = 0;
 
-  function status(): ContextBrokerStatus {
+  function currentStatus(): ContextBrokerStatus {
     const bytes = artifacts.reduce((sum, artifact) => sum + artifact.bytes, 0);
     const pinned = artifacts.filter((artifact) => artifact.pinned);
     return {
@@ -177,36 +183,51 @@ export function createInMemoryContextBroker(options: ContextBrokerOptions = {}):
     };
   }
 
-  function prune(now = Date.now(), protectedIds = new Set<string>()): ContextBrokerStatus {
+  function dropExpired(now = Date.now(), protectedIds = new Set<string>()): void {
     artifacts = artifacts.filter(
       (artifact) => artifact.pinned || protectedIds.has(artifact.id) || !artifact.expiresAt || artifact.expiresAt > now,
     );
+  }
 
-    const withinCaps = (): boolean => {
-      const current = status();
-      return current.records <= maxRecords && current.bytes <= maxBytes;
-    };
+  function oldestRemovable(sessionId: string, protectedIds: Set<string>): { artifact: ContextArtifact & { sequence: number }; index: number } | undefined {
+    return artifacts
+      .map((artifact, index) => ({ artifact, index }))
+      .filter(({ artifact }) => artifact.sessionId === sessionId && !artifact.pinned && !protectedIds.has(artifact.id))
+      .sort((a, b) => {
+        if (a.artifact.createdAt !== b.artifact.createdAt) return a.artifact.createdAt - b.artifact.createdAt;
+        return a.artifact.sequence - b.artifact.sequence;
+      })[0];
+  }
 
-    while (!withinCaps()) {
-      const candidate = artifacts
-        .map((artifact, index) => ({ artifact, index }))
-        .filter(({ artifact }) => !artifact.pinned && !protectedIds.has(artifact.id))
-        .sort((a, b) => {
-          if (a.artifact.createdAt !== b.artifact.createdAt) return a.artifact.createdAt - b.artifact.createdAt;
-          return a.artifact.sequence - b.artifact.sequence;
-        })[0];
+  function sessionWithinCaps(sessionId: string): boolean {
+    const sessionArtifacts = artifacts.filter((artifact) => artifact.sessionId === sessionId);
+    return sessionArtifacts.length <= maxRecords && sessionArtifacts.reduce((sum, artifact) => sum + artifact.bytes, 0) <= maxBytes;
+  }
 
-      if (!candidate) break;
-      artifacts.splice(candidate.index, 1);
+  function prune(now = Date.now(), protectedIds = new Set<string>()): ContextBrokerStatus {
+    dropExpired(now, protectedIds);
+
+    for (const sessionId of new Set(artifacts.map((artifact) => artifact.sessionId))) {
+      while (!sessionWithinCaps(sessionId)) {
+        const candidate = oldestRemovable(sessionId, protectedIds);
+        if (!candidate) break;
+        artifacts.splice(candidate.index, 1);
+      }
     }
 
-    return status();
+    return currentStatus();
+  }
+
+  function status(): ContextBrokerStatus {
+    dropExpired();
+    return currentStatus();
   }
 
   function publish(input: ContextArtifactInput): ContextArtifact {
     const now = input.createdAt ?? Date.now();
     const payload = payloadText(input.payload);
     const sha256 = hashPayload(input.payload);
+    const bytes = payloadBytes(input.payload);
     const artifactSequence = ++sequence;
     const id = `ctx-${now.toString(36)}-${String(artifactSequence).padStart(4, "0")}-${sha256.slice(0, 12)}`;
     const session = safeName(input.sessionId || "session");
@@ -221,10 +242,10 @@ export function createInMemoryContextBroker(options: ContextBrokerOptions = {}):
       kind,
       createdAt: now,
       updatedAt: now,
-      bytes: payloadBytes(input.payload),
+      bytes,
       sha256,
       payload,
-      summary: truncateUtf8(String(input.summary || payload).replace(/\s+/g, " ").trim(), summaryBytes),
+      summary: summarizeArtifact(input.summary, kind, bytes, sha256, summaryBytes),
       tags: normalizeList(input.tags),
       paths: normalizeList(input.paths),
       command: input.command?.trim() || undefined,
@@ -241,20 +262,22 @@ export function createInMemoryContextBroker(options: ContextBrokerOptions = {}):
   }
 
   function lookup(query: ContextLookupQuery = {}): ContextArtifact[] {
+    dropExpired();
     const limit = Math.max(1, Math.floor(query.limit ?? (artifacts.length || 1)));
     return artifacts
       .filter((artifact) => artifactMatches(artifact, query))
-      .sort((a, b) => Number(b.pinned) - Number(a.pinned) || b.createdAt - a.createdAt)
+      .sort((a, b) => Number(b.pinned) - Number(a.pinned) || b.createdAt - a.createdAt || b.sequence - a.sequence)
       .slice(0, limit);
   }
 
   function pin(idOrHandle: string, pinned = true): ContextArtifact | null {
+    dropExpired();
     const artifact = artifacts.find((candidate) => candidate.id === idOrHandle || candidate.handle === idOrHandle) ?? null;
     if (!artifact) return null;
     artifact.pinned = pinned;
     artifact.updatedAt = Date.now();
     prune();
-    return artifact;
+    return artifacts.find((candidate) => candidate.id === artifact.id) ?? null;
   }
 
   function renderBrief(query: ContextLookupQuery & { budgetBytes?: number } = {}): string {

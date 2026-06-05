@@ -192,7 +192,8 @@ This PR now includes a first narrow implementation slice in `@fiale-plus/pi-core
 
 - `BoundedContextBroker` defines the publish, lookup, pin, prune, status, and prompt-brief contract.
 - `createInMemoryContextBroker` provides an in-process bounded broker for tests, prototypes, and future extension wiring.
-- The in-memory broker supports stable `ctx://...` handles, byte and record caps, TTL pruning, pinned artifacts, and lookup by handle, session, kind, tag, path, command prefix, branch, and text.
+- The in-memory broker supports stable `ctx://...` handles, per-session byte and record caps, TTL pruning on reads, pinned artifacts, and lookup by handle, session, kind, tag, path, command prefix, branch, and text.
+- Omitted summaries render as metadata-only placeholders so raw payload text is not injected into prompt briefs by default.
 - This slice is intentionally non-persistent. Durable SQLite/blob storage remains a later phase.
 
 ## Integration plan
