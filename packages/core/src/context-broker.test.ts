@@ -1,20 +1,31 @@
+import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import { createInMemoryContextBroker } from "./context-broker.js";
 
 describe("createInMemoryContextBroker", () => {
-  it("publishes stable handles and looks up artifacts by handle", () => {
+  it("publishes stable, unique handles and looks up artifacts by handle", () => {
     const broker = createInMemoryContextBroker();
-    const artifact = broker.publish({
+    const first = broker.publish({
       sessionId: "session-a",
       kind: "tool_output",
-      payload: "npm test passed",
+      payload: "same payload",
       summary: "tests passed",
       tags: ["test"],
       paths: ["packages/core"],
     });
+    const second = broker.publish({
+      sessionId: "session-a",
+      kind: "tool_output",
+      payload: "same payload",
+      summary: "same payload repeat",
+      tags: ["test"],
+      paths: ["packages/core"],
+    });
 
-    expect(artifact.handle).toMatch(/^ctx:\/\/session\/session-a\/tool_output\//);
-    expect(broker.lookup({ handle: artifact.handle })).toEqual([artifact]);
+    expect(first.handle).not.toEqual(second.handle);
+    expect(first.handle).toMatch(/^ctx:\/\/session\/session-a\/tool_output\//);
+    expect(broker.lookup({ handle: first.handle })).toEqual([first]);
+    expect(broker.lookup({ handle: second.handle })).toEqual([second]);
   });
 
   it("filters by session, kind, tag, path, and text", () => {
@@ -52,6 +63,17 @@ describe("createInMemoryContextBroker", () => {
     expect(broker.status().records).toBe(2);
   });
 
+  it("uses sequence tie-breakers when createdAt timestamps tie", () => {
+    const broker = createInMemoryContextBroker({ maxRecords: 2, defaultTtlMs: 0 });
+    const first = broker.publish({ sessionId: "s", kind: "tool_output", payload: "alpha", createdAt: 1000 });
+    const second = broker.publish({ sessionId: "s", kind: "tool_output", payload: "bravo", createdAt: 1000 });
+    const third = broker.publish({ sessionId: "s", kind: "tool_output", payload: "charlie", createdAt: 1000 });
+
+    expect(broker.lookup({ id: first.id })).toEqual([]);
+    expect(broker.lookup({ id: second.id })).toEqual([second]);
+    expect(broker.lookup({ id: third.id })).toEqual([third]);
+  });
+
   it("enforces byte caps by pruning oldest unpinned artifacts", () => {
     const broker = createInMemoryContextBroker({ maxBytes: 6, defaultTtlMs: 0 });
     const first = broker.publish({ sessionId: "s", kind: "tool_output", payload: "12345", createdAt: 1 });
@@ -69,6 +91,17 @@ describe("createInMemoryContextBroker", () => {
     expect(broker.lookup({ id: artifact.id })).toEqual([artifact]);
     expect(broker.lookup({ handle: artifact.handle })).toEqual([artifact]);
     expect(broker.status().bytes).toBe(Buffer.byteLength("oversized", "utf8"));
+  });
+
+  it("computes bytes and SHA-256 on raw Buffer payload bytes", () => {
+    const broker = createInMemoryContextBroker({ maxBytes: 1024, defaultTtlMs: 0 });
+    const payload = Buffer.from([0x66, 0xff, 0x61, 0x62, 0x80, 0x00]);
+    const artifact = broker.publish({ sessionId: "s", kind: "tool_output", payload, createdAt: 1 });
+    const expectedSha = createHash("sha256").update(payload).digest("hex");
+
+    expect(artifact.bytes).toBe(payload.length);
+    expect(artifact.sha256).toBe(expectedSha);
+    expect(Buffer.byteLength(artifact.payload, "utf8")).toBeGreaterThan(artifact.bytes);
   });
 
   it("keeps pinned artifacts visible while pruning unpinned records", () => {

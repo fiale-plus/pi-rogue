@@ -97,8 +97,12 @@ function payloadText(payload: string | Buffer): string {
   return Buffer.isBuffer(payload) ? payload.toString("utf8") : String(payload ?? "");
 }
 
-function hashPayload(payload: string): string {
-  return createHash("sha256").update(payload).digest("hex");
+function payloadBytes(payload: string | Buffer): number {
+  return Buffer.isBuffer(payload) ? payload.length : Buffer.byteLength(String(payload ?? ""), "utf8");
+}
+
+function hashPayload(payload: string | Buffer): string {
+  return createHash("sha256").update(Buffer.isBuffer(payload) ? payload : String(payload)).digest("hex");
 }
 
 function normalizeNeedle(value: string | undefined): string {
@@ -157,7 +161,7 @@ export function createInMemoryContextBroker(options: ContextBrokerOptions = {}):
   const defaultTtlMs = Math.max(0, Math.floor(options.defaultTtlMs ?? DEFAULT_TTL_MS));
   const summaryBytes = Math.max(16, Math.floor(options.summaryBytes ?? DEFAULT_SUMMARY_BYTES));
   const defaultBriefBytes = Math.max(64, Math.floor(options.briefBytes ?? DEFAULT_BRIEF_BYTES));
-  let artifacts: ContextArtifact[] = [];
+  let artifacts: Array<ContextArtifact & { sequence: number }> = [];
   let sequence = 0;
 
   function status(): ContextBrokerStatus {
@@ -174,7 +178,9 @@ export function createInMemoryContextBroker(options: ContextBrokerOptions = {}):
   }
 
   function prune(now = Date.now(), protectedIds = new Set<string>()): ContextBrokerStatus {
-    artifacts = artifacts.filter((artifact) => artifact.pinned || protectedIds.has(artifact.id) || !artifact.expiresAt || artifact.expiresAt > now);
+    artifacts = artifacts.filter(
+      (artifact) => artifact.pinned || protectedIds.has(artifact.id) || !artifact.expiresAt || artifact.expiresAt > now,
+    );
 
     const withinCaps = (): boolean => {
       const current = status();
@@ -185,7 +191,10 @@ export function createInMemoryContextBroker(options: ContextBrokerOptions = {}):
       const candidate = artifacts
         .map((artifact, index) => ({ artifact, index }))
         .filter(({ artifact }) => !artifact.pinned && !protectedIds.has(artifact.id))
-        .sort((a, b) => a.artifact.createdAt - b.artifact.createdAt)[0];
+        .sort((a, b) => {
+          if (a.artifact.createdAt !== b.artifact.createdAt) return a.artifact.createdAt - b.artifact.createdAt;
+          return a.artifact.sequence - b.artifact.sequence;
+        })[0];
 
       if (!candidate) break;
       artifacts.splice(candidate.index, 1);
@@ -197,21 +206,22 @@ export function createInMemoryContextBroker(options: ContextBrokerOptions = {}):
   function publish(input: ContextArtifactInput): ContextArtifact {
     const now = input.createdAt ?? Date.now();
     const payload = payloadText(input.payload);
-    const sha256 = hashPayload(payload);
-    const id = `ctx-${now.toString(36)}-${String(++sequence).padStart(4, "0")}-${sha256.slice(0, 12)}`;
+    const sha256 = hashPayload(input.payload);
+    const artifactSequence = ++sequence;
+    const id = `ctx-${now.toString(36)}-${String(artifactSequence).padStart(4, "0")}-${sha256.slice(0, 12)}`;
     const session = safeName(input.sessionId || "session");
     const kind = input.kind;
-    const handle = `ctx://session/${session}/${kind}/${sha256.slice(0, 16)}`;
+    const handle = `ctx://session/${session}/${kind}/${sha256.slice(0, 16)}/${id}`;
     const ttlMs = input.ttlMs ?? defaultTtlMs;
 
-    const artifact: ContextArtifact = {
+    const artifact: ContextArtifact & { sequence: number } = {
       id,
       handle,
       sessionId: input.sessionId,
       kind,
       createdAt: now,
       updatedAt: now,
-      bytes: Buffer.byteLength(payload, "utf8"),
+      bytes: payloadBytes(input.payload),
       sha256,
       payload,
       summary: truncateUtf8(String(input.summary || payload).replace(/\s+/g, " ").trim(), summaryBytes),
@@ -222,6 +232,7 @@ export function createInMemoryContextBroker(options: ContextBrokerOptions = {}):
       expiresAt: ttlMs > 0 ? now + ttlMs : undefined,
       pinned: Boolean(input.pinned),
       parentIds: normalizeList(input.parentIds),
+      sequence: artifactSequence,
     };
 
     artifacts = [artifact, ...artifacts];
