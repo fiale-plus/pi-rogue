@@ -1,4 +1,7 @@
 import { createHash } from "node:crypto";
+import { mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type { AgentToolResult } from "@earendil-works/pi-coding-agent";
 import type { AutocompleteItem } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
@@ -67,6 +70,20 @@ function toText(value: unknown): string {
   } catch {
     return redactSecrets(String(value ?? ""));
   }
+}
+
+function sanitizeForPrompt(text: string): string {
+  return String(text).replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F-\u009F]/g, (char) => `\\x${char.charCodeAt(0).toString(16).padStart(2, "0")}`);
+}
+
+function renderLookupOutput(item: ContextArtifact, payloadLimit: number): string {
+  return [
+    sanitizeForPrompt(item.handle),
+    `tier=${item.tier} kind=${item.kind} bytes=${item.bytes}`,
+    `summary=${sanitizeForPrompt(item.summary)}`,
+    "payload:",
+    truncateUtf8(sanitizeForPrompt(item.payload), payloadLimit),
+  ].join("\n");
 }
 
 function truncateUtf8(text: string, maxBytes: number): string {
@@ -349,10 +366,11 @@ export function registerContextBrokerBeta(pi: ExtensionAPI, options: ContextBrok
     { value: "brief", label: "brief", description: "Show the bounded broker brief" },
     { value: "lookup ", label: "lookup", description: "Lookup by ctx:// handle or current-session text" },
     { value: "pin ", label: "pin", description: "Pin an artifact by ctx:// handle or id" },
+    { value: "export ", label: "export", description: "Export full payload for a ctx:// handle or id" },
     { value: "prune", label: "prune", description: "Run TTL/cap pruning now" },
   ];
 
-  function artifactCompletions(action: "lookup" | "pin", query: string): AutocompleteItem[] {
+  function artifactCompletions(action: "lookup" | "pin" | "export", query: string): AutocompleteItem[] {
     const needle = query.trim().toLowerCase();
     return broker.lookup({ sessionId: activeSessionId, limit: 10 })
       .filter((artifact) => {
@@ -380,7 +398,7 @@ export function registerContextBrokerBeta(pi: ExtensionAPI, options: ContextBrok
       return items.length ? items : contextActions;
     }
 
-    if (action === "lookup" || action === "pin") {
+    if (action === "lookup" || action === "pin" || action === "export") {
       const items = artifactCompletions(action, restParts.join(" "));
       return items.length ? items : null;
     }
@@ -534,18 +552,12 @@ export function registerContextBrokerBeta(pi: ExtensionAPI, options: ContextBrok
         limit: Math.min(10, Math.max(1, Math.floor(p.limit ?? (exact ? 1 : 5)))),
       });
       if (!results.length) return textResult("No context artifacts matched. Missing or expired handles should be reported explicitly.");
-      return textResult(results.map((item) => [
-        item.handle,
-        `tier=${item.tier} kind=${item.kind} bytes=${item.bytes}`,
-        `summary=${item.summary}`,
-        "payload:",
-        truncateUtf8(item.payload, exact ? lookupBytes : searchBytes),
-      ].join("\n")).join("\n\n---\n\n"));
+      return textResult(results.map((item) => renderLookupOutput(item, exact ? lookupBytes : searchBytes)).join("\n\n---\n\n"));
     },
   });
 
   pi.registerCommand("context", {
-    description: "Inspect the beta context broker: status | brief | lookup <handle-or-text> | pin <handle> | prune",
+    description: "Inspect the beta context broker: status | brief | lookup <handle-or-text> | pin <handle-or-id> | export <handle-or-id> | prune",
     getArgumentCompletions: contextArgumentCompletions,
     handler: async (args, ctx) => {
       activeSessionId = sessionIdFor(ctx);
@@ -573,13 +585,7 @@ export function registerContextBrokerBeta(pi: ExtensionAPI, options: ContextBrok
         }
         const exact = query.startsWith("ctx://");
         const results = broker.lookup(exact ? { handle: query } : { sessionId: activeSessionId, text: query, limit: 5 });
-        ctx.ui.notify(results.length ? results.map((item) => [
-          item.handle,
-          `kind=${item.kind} bytes=${item.bytes}`,
-          `summary=${item.summary}`,
-          "payload:",
-          truncateUtf8(item.payload, exact ? lookupBytes : searchBytes),
-        ].join("\n")).join("\n\n---\n\n") : "No context artifacts matched.", "info");
+        ctx.ui.notify(results.length ? results.map((item) => renderLookupOutput(item, exact ? lookupBytes : searchBytes)).join("\n\n---\n\n") : "No context artifacts matched.", "info");
         return;
       }
 
@@ -593,13 +599,33 @@ export function registerContextBrokerBeta(pi: ExtensionAPI, options: ContextBrok
         return;
       }
 
+      if (action === "export") {
+        if (!query) {
+          ctx.ui.notify("Usage: /context export <ctx://handle-or-id>", "warning");
+          return;
+        }
+
+        const exact = query.startsWith("ctx://");
+        const artifact = exact ? broker.lookup({ handle: query })[0] : broker.lookup({ id: query })[0];
+        if (!artifact) {
+          ctx.ui.notify("No artifact matched that handle/id.", "warning");
+          return;
+        }
+
+        const exportDir = mkdtempSync(join(tmpdir(), "pi-context-broker-export-"));
+        const exportPath = join(exportDir, `${artifact.id}.txt`);
+        writeFileSync(exportPath, artifact.payload, "utf8");
+        ctx.ui.notify(`Exported full payload for ${sanitizeForPrompt(artifact.handle)} (${artifact.bytes} bytes) to ${exportPath}`, "info");
+        return;
+      }
+
       if (action === "prune") {
         const status = broker.prune();
         ctx.ui.notify(`Pruned. ${status.records} records, ${status.bytes} bytes remain.`, "info");
         return;
       }
 
-      ctx.ui.notify("Usage: /context status | brief | lookup <handle-or-text> | pin <handle> | prune", "warning");
+      ctx.ui.notify("Usage: /context status | brief | lookup <handle-or-text> | pin <handle-or-id> | export <handle-or-id> | prune", "warning");
     },
   });
 }
