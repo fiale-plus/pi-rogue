@@ -1,7 +1,7 @@
 {
   "name": "@fiale-plus/pi-rogue-context-broker",
   "version": "0.1.0",
-  "description": "Beta context broker runtime for Pi-Rogue. In-memory bounded broker implementation behind explicit opt-in.",
+  "description": "Context broker runtime for Pi-Rogue with bounded handle-first prompt payload storage.",
   "private": true,
   "type": "module",
   "license": "MIT",

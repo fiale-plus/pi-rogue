@@ -287,4 +287,16 @@ describe("createInMemoryContextBroker", () => {
     expect(broker.lookup({ handle: pinned.handle })[0]?.payload).toBe("keep");
     expect(broker.lookup({ handle: other.handle })[0]?.payload).toBe("other");
   });
+
+  it("enforces optional global caps across sessions", () => {
+    const broker = createInMemoryContextBroker({ maxRecords: 8, globalMaxRecords: 2 });
+    const first = broker.publish({ sessionId: "s1", kind: "tool_output", payload: "alpha", summary: "alpha" });
+    const second = broker.publish({ sessionId: "s2", kind: "tool_output", payload: "bravo", summary: "bravo" });
+    const pinned = broker.publish({ sessionId: "s3", kind: "tool_output", payload: "charlie", summary: "charlie", pinned: true });
+    broker.publish({ sessionId: "s1", kind: "tool_output", payload: "delta", summary: "delta" });
+
+    expect(broker.lookup({ handle: first.handle })).toEqual([]);
+    expect(broker.lookup({ handle: second.handle })).toEqual([]);
+    expect(broker.lookup({ handle: pinned.handle })[0]?.payload).toBe("charlie");
+  });
 });

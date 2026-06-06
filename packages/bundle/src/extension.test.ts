@@ -33,27 +33,27 @@ describe("bundle extension defaults", () => {
     else process.env.PI_CONTEXT_BROKER_ENABLED = oldEnv;
   });
 
-  it("does not register the beta context broker by default", async () => {
+  it("registers the context broker by default", async () => {
     delete process.env.PI_CONTEXT_BROKER_ENABLED;
-    const { pi, commands } = createPiMock();
-
-    await registerBundle(pi);
-
-    expect(commands.has("context")).toBe(false);
-  });
-
-  it("registers the beta context broker only when explicitly enabled", async () => {
-    process.env.PI_CONTEXT_BROKER_ENABLED = "true";
     const { pi, commands } = createPiMock();
 
     await registerBundle(pi);
 
     expect(commands.has("context")).toBe(true);
   });
+
+  it("keeps an explicit env kill switch for context broker rollout", async () => {
+    process.env.PI_CONTEXT_BROKER_ENABLED = "false";
+    const { pi, commands } = createPiMock();
+
+    await registerBundle(pi);
+
+    expect(commands.has("context")).toBe(false);
+  });
 });
 
 describe("bundle context-broker export", () => {
-  it("exposes the beta context broker runtime for explicit opt-in", () => {
+  it("exposes the context broker runtime through a bundle subpath", () => {
     const broker = createInMemoryContextBroker({ defaultTtlMs: 0 });
     const artifact = broker.publish({ sessionId: "bundle-test", kind: "memory_note", payload: "hello" });
 

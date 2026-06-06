@@ -95,4 +95,28 @@ describe("createSqliteContextBroker", () => {
       rmSync(dir, { recursive: true, force: true });
     }
   });
+
+  it("enforces optional global caps across sessions", () => {
+    const dir = mkdtempSync(join(tmpdir(), "ctx-sqlite-test-"));
+    try {
+      const path = join(dir, "artifacts.sqlite");
+      const broker = createSqliteContextBroker({
+        path,
+        defaultTtlMs: 0,
+        globalMaxBytes: 10,
+        globalMaxRecords: Number.POSITIVE_INFINITY,
+      });
+      const one = broker.publish({ sessionId: "s1", kind: "tool_output", payload: "aaa", summary: "first" });
+      const two = broker.publish({ sessionId: "s2", kind: "tool_output", payload: "bbb", summary: "second" });
+      const pinned = broker.publish({ sessionId: "s3", kind: "tool_output", payload: "ccc", summary: "third", pinned: true });
+      const four = broker.publish({ sessionId: "s1", kind: "tool_output", payload: "ddd", summary: "fourth" });
+
+      expect(broker.lookup({ handle: one.handle })).toEqual([]);
+      expect(broker.lookup({ handle: two.handle })[0]?.payload).toBe("bbb");
+      expect(broker.lookup({ handle: pinned.handle })[0]?.payload).toBe("ccc");
+      expect(broker.lookup({ handle: four.handle })[0]?.payload).toBe("ddd");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
 });

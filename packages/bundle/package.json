@@ -1,7 +1,7 @@
 {
   "name": "@fiale-plus/pi-rogue-bundle",
   "version": "0.1.2",
-  "description": "Public Pi-Rogue bundle for advisor, orchestration, and beta context broker. Single consolidated artefact (leaf releases paused; private packages are bundled here).",
+  "description": "Public Pi-Rogue bundle for advisor, orchestration, and context broker. Single consolidated artefact (leaf releases paused; private packages are bundled here).",
   "type": "module",
   "license": "MIT",
   "repository": {

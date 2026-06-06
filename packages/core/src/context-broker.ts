@@ -77,6 +77,8 @@ export interface ContextBrokerStatus {
 export interface ContextBrokerOptions {
   maxRecords?: number;
   maxBytes?: number;
+  globalMaxRecords?: number;
+  globalMaxBytes?: number;
   defaultTtlMs?: number;
   hotTtlMs?: number;
   warmTtlMs?: number;
