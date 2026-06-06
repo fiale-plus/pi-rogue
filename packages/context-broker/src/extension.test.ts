@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -80,6 +80,7 @@ describe("context broker beta enablement", () => {
       "brief",
       "lookup",
       "pin",
+      "export",
       "prune",
     ]);
   });
@@ -218,6 +219,38 @@ describe("context broker beta enablement", () => {
     expect(Buffer.byteLength(payload, "utf8")).toBeLessThanOrEqual(80);
   });
 
+  it("full payload export path writes the full artifact payload", async () => {
+    const { pi, handlers, commands } = createPiMock();
+    registerContextBrokerBeta(pi, { lookupBytes: 80, searchBytes: 50 });
+    const { ctx, notifications } = createCtx();
+    const payload = "payload_" + "x".repeat(120) + "::END";
+
+    await runHandlers(handlers, "session_start", { type: "session_start" }, ctx);
+    await runHandlers(handlers, "tool_result", {
+      type: "tool_result",
+      toolCallId: "call-export",
+      toolName: "bash",
+      input: { command: "printf payload" },
+      content: [{ type: "text", text: payload }],
+      isError: false,
+    }, ctx);
+
+    const exportCompletion = commands.get("context").getArgumentCompletions("export ")?.[0];
+    expect(exportCompletion.value.startsWith("export ctx://")).toBe(true);
+    const exportHandle = exportCompletion.value.replace(/^export /, "");
+
+    await commands.get("context").handler(`export ${exportHandle}`, ctx);
+
+    const message = notifications.at(-1)?.message ?? "";
+    const exportPath = message.split(" to ").at(-1) ?? "";
+    expect(exportPath).toContain("pi-context-broker-export-");
+    expect(exportPath).toMatch(/\.txt$/);
+    const exportedPayload = readFileSync(exportPath, "utf8");
+    expect(exportedPayload).toContain("tool=bash");
+    expect(exportedPayload).toContain(payload);
+    rmSync(exportPath);
+  });
+
   it("text search lookup returns a smaller byte-clipped excerpt", async () => {
     const { pi, handlers, commands } = createPiMock();
     registerContextBrokerBeta(pi, { lookupBytes: 80, searchBytes: 50 });
@@ -238,6 +271,31 @@ describe("context broker beta enablement", () => {
     expect(notifications.at(-1)?.message).toContain("payload:");
     expect(payload).toContain("[truncated: omitted");
     expect(Buffer.byteLength(payload, "utf8")).toBeLessThanOrEqual(50);
+  });
+
+  it("sanitizes control characters in context command lookup output", async () => {
+    const { pi, handlers, commands } = createPiMock();
+    registerContextBrokerBeta(pi);
+    const { ctx, notifications } = createCtx();
+    const rawPayload = `${"SAFE"}\u0000${"\x1B"}[31mBLOCK\u0000`;
+
+    await runHandlers(handlers, "session_start", { type: "session_start" }, ctx);
+    await runHandlers(handlers, "tool_result", {
+      type: "tool_result",
+      toolCallId: "call-control",
+      toolName: "bash",
+      input: { command: "echo control" },
+      content: [{ type: "text", text: rawPayload }],
+      isError: false,
+    }, ctx);
+
+    const completion = commands.get("context").getArgumentCompletions("lookup ")?.[0];
+    await commands.get("context").handler(completion?.value ?? "", ctx);
+
+    const message = notifications.at(-1)?.message ?? "";
+    expect(message).toContain("\\u0000");
+    expect(message).toContain("\\u001b");
+    expect(message).not.toContain(String.fromCharCode(0));
   });
 
   it("context_lookup tool dereferences handles for exact evidence", async () => {
