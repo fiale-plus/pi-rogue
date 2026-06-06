@@ -1,8 +1,8 @@
-import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { safeName } from "@fiale-plus/pi-core";
-import type { BoundedContextBroker, ContextArtifact, ContextArtifactInput, ContextArtifactTier, ContextBrokerOptions, ContextBrokerStatus, ContextLookupQuery } from "@fiale-plus/pi-core";
+import type { BoundedContextBroker, ContextArtifact, ContextArtifactInput, ContextArtifactTier, ContextBrokerOptions, ContextBrokerStatus, ContextLookupQuery, ContextPurgeOptions } from "@fiale-plus/pi-core";
 import { createInMemoryContextBroker } from "./index.js";
 
 export interface FileContextBrokerOptions extends ContextBrokerOptions {
@@ -113,6 +113,16 @@ function persistArtifactSnapshot(dir: string, artifact: ContextArtifact): void {
   });
 }
 
+function removeUnreferencedBlobs(dir: string, keptSha256: Set<string>): void {
+  const blobsDir = join(dir, "blobs");
+  if (!existsSync(blobsDir)) return;
+  for (const entry of readdirSync(blobsDir)) {
+    if (!entry.endsWith(".txt")) continue;
+    const sha256 = entry.slice(0, -4);
+    if (!keptSha256.has(sha256)) unlinkSync(join(blobsDir, entry));
+  }
+}
+
 export function createFileContextBroker(options: FileContextBrokerOptions = {}): BoundedContextBroker {
   const dir = options.dir ?? process.env.PI_CONTEXT_BROKER_STORE_DIR ?? defaultStoreDir();
   ensureDir(join(dir, "blobs"));
@@ -155,6 +165,22 @@ export function createFileContextBroker(options: FileContextBrokerOptions = {}):
       return artifact;
     },
     prune(now?: number): ContextBrokerStatus { return broker.prune(now); },
+    purge(options?: ContextPurgeOptions): ContextBrokerStatus {
+      const status = broker.purge(options);
+      const remaining = broker.lookup({ limit: Number.MAX_SAFE_INTEGER });
+      persistedSources.clear();
+      handleAliases.clear();
+      writeFileSync(metadataFile(dir), "", "utf8");
+      const keptSha256 = new Set<string>();
+      for (const artifact of remaining) {
+        keptSha256.add(artifact.sha256);
+        for (const parentId of artifact.parentIds) persistedSources.set(parentId, artifact.handle);
+        handleAliases.set(artifact.handle, artifact.handle);
+        persistArtifactSnapshot(dir, artifact);
+      }
+      removeUnreferencedBlobs(dir, keptSha256);
+      return status;
+    },
     status(): ContextBrokerStatus { return broker.status(); },
     renderBrief(query?: ContextLookupQuery & { budgetBytes?: number }): string { return broker.renderBrief(query); },
   };

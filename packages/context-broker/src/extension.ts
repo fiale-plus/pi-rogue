@@ -155,11 +155,25 @@ function brokerPlaceholder(artifact: ContextArtifact): string {
   ].join("\n");
 }
 
+function contextLookupHistoryPlaceholder(): string {
+  return [
+    "Context lookup result omitted from prompt.",
+    "Prior context_lookup evidence is terminal and is not re-brokered.",
+    "Run context_lookup again with a focused handle/filter only if exact evidence is still needed.",
+  ].join("\n");
+}
+
 function summarizeTool(event: { toolName: string; input?: any; isError?: boolean }, bytes: number): string {
   const command = event.toolName === "bash" ? event.input?.command : undefined;
   const path = event.input?.path;
   const target = command ? ` command=${compact(String(command), 120)}` : path ? ` path=${path}` : "";
   return `${event.isError ? "failed" : "completed"} ${event.toolName}${target}; payload=${bytes} bytes`;
+}
+
+const NON_BROKERED_TOOL_NAMES = new Set(["context_lookup"]);
+
+function shouldBrokerToolName(toolName: string): boolean {
+  return !NON_BROKERED_TOOL_NAMES.has(toolName);
 }
 
 function ttlFromNowFor(createdAt: number | undefined): number | undefined {
@@ -212,6 +226,8 @@ export function registerContextBrokerBeta(pi: ExtensionAPI, options: ContextBrok
     createdAt?: number;
     ttlMs?: number;
   }): ContextArtifact | null {
+    if (!shouldBrokerToolName(event.toolName)) return null;
+
     if (event.sourceId) {
       const existingHandle = sourceHandles.get(event.sourceId);
       if (existingHandle) {
@@ -295,6 +311,7 @@ export function registerContextBrokerBeta(pi: ExtensionAPI, options: ContextBrok
             isError: Boolean(entry.message.isError),
             sourceId,
             createdAt,
+            ttlMs: ttlFromNowFor(createdAt),
           }) && !alreadySeen) added += 1;
         }
 
@@ -316,6 +333,7 @@ export function registerContextBrokerBeta(pi: ExtensionAPI, options: ContextBrok
             isError: typeof entry.message.exitCode === "number" ? entry.message.exitCode !== 0 : Boolean(entry.message.cancelled),
             sourceId,
             createdAt,
+            ttlMs: ttlFromNowFor(createdAt),
           }) && !alreadySeen) added += 1;
         }
       } catch {
@@ -379,6 +397,16 @@ export function registerContextBrokerBeta(pi: ExtensionAPI, options: ContextBrok
     );
   });
 
+  pi.on("session_compact", async (_event, ctx) => {
+    activeSessionId = sessionIdFor(ctx);
+    const before = broker.status();
+    const after = broker.purge({ sessionId: activeSessionId, keepPinned: true });
+    seenSourceIds.clear();
+    sourceHandles.clear();
+    const removed = before.records - after.records;
+    if (removed > 0) ctx.ui.notify(`Context broker compact cleanup purged ${removed} unpinned artifact${removed === 1 ? "" : "s"}; pinned artifacts retained.`, "info");
+  });
+
   pi.on("tool_result", async (event: ToolResultEvent, ctx) => {
     activeSessionId = sessionIdFor(ctx);
     publishToolArtifact({ ...event, sourceId: event.toolCallId });
@@ -387,13 +415,17 @@ export function registerContextBrokerBeta(pi: ExtensionAPI, options: ContextBrok
   pi.on("context", async (event, ctx) => {
     activeSessionId = sessionIdFor(ctx);
     const toolInputs = collectToolInputs(event.messages);
-    const drafts = event.messages.map((message: any): { original: any; artifact?: ContextArtifact; rewrite?: (artifact: ContextArtifact) => any } => {
+    const drafts = event.messages.map((message: any): { original: any; replacement?: any; artifact?: ContextArtifact; rewrite?: (artifact: ContextArtifact) => any } => {
       if (message?.role === "toolResult") {
         const raw = contentText(message.content);
         if (Buffer.byteLength(raw, "utf8") <= rewriteThresholdBytes) return { original: message };
         const toolInput = typeof message.toolCallId === "string" ? toolInputs.get(message.toolCallId) : undefined;
+        const toolName = String(message.toolName ?? toolInput?.toolName ?? "tool");
+        if (!shouldBrokerToolName(toolName)) {
+          return { original: message, replacement: { ...message, content: [{ type: "text", text: contextLookupHistoryPlaceholder() }] } };
+        }
         const artifact = publishToolArtifact({
-          toolName: String(message.toolName ?? toolInput?.toolName ?? "tool"),
+          toolName,
           input: message.input ?? toolInput?.input,
           content: message.content,
           details: message.details,
@@ -436,6 +468,10 @@ export function registerContextBrokerBeta(pi: ExtensionAPI, options: ContextBrok
 
     let changed = false;
     const messages = drafts.map((draft) => {
+      if (draft.replacement) {
+        changed = true;
+        return draft.replacement;
+      }
       if (!draft.artifact || !draft.rewrite) return draft.original;
       const live = broker.lookup({ handle: draft.artifact.handle })[0];
       if (!live) {
