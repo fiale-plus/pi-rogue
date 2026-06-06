@@ -204,6 +204,12 @@ export function createSqliteContextBroker(options: SqliteContextBrokerOptions = 
 
   const maxRecords = Math.max(1, Math.floor(options.maxRecords ?? DEFAULT_MAX_RECORDS));
   const maxBytes = Math.max(1, Math.floor(options.maxBytes ?? DEFAULT_MAX_BYTES));
+  const globalMaxRecords = typeof options.globalMaxRecords === "number" && Number.isFinite(options.globalMaxRecords)
+    ? Math.max(1, Math.floor(options.globalMaxRecords))
+    : Number.POSITIVE_INFINITY;
+  const globalMaxBytes = typeof options.globalMaxBytes === "number" && Number.isFinite(options.globalMaxBytes)
+    ? Math.max(1, Math.floor(options.globalMaxBytes))
+    : Number.POSITIVE_INFINITY;
   const defaultTtlMs = Math.max(0, Math.floor(options.defaultTtlMs ?? DEFAULT_TTL_MS));
   const tierTtlMs: Record<ContextArtifactTier, number> = {
     hot: Math.max(0, Math.floor(options.hotTtlMs ?? defaultTtlMs)),
@@ -286,6 +292,17 @@ export function createSqliteContextBroker(options: SqliteContextBrokerOptions = 
     return stats.records <= (tier ? tierMaxRecords[tier] : maxRecords) && stats.bytes <= (tier ? tierMaxBytes[tier] : maxBytes);
   }
 
+  function globalStats(): { records: number; bytes: number } {
+    const row = db.prepare("SELECT COUNT(*) AS records, COALESCE(SUM(bytes), 0) AS bytes FROM artifacts").get();
+    return { records: Number(row?.records ?? 0), bytes: Number(row?.bytes ?? 0) };
+  }
+
+  function withinGlobalCaps(): boolean {
+    if (globalMaxRecords === Number.POSITIVE_INFINITY && globalMaxBytes === Number.POSITIVE_INFINITY) return true;
+    const { records, bytes } = globalStats();
+    return records <= globalMaxRecords && bytes <= globalMaxBytes;
+  }
+
   function removalCandidate(sessionId: string, protectedIds: Set<string>, tier?: ContextArtifactTier): string | undefined {
     const protectedList = [...protectedIds];
     const protectedClause = protectedList.length ? `AND id NOT IN (${protectedList.map(() => "?").join(",")})` : "";
@@ -293,6 +310,20 @@ export function createSqliteContextBroker(options: SqliteContextBrokerOptions = 
     const order = tier ? "createdAt ASC, rowid ASC" : "CASE tier WHEN 'cold' THEN 0 WHEN 'warm' THEN 1 ELSE 2 END ASC, createdAt ASC, rowid ASC";
     const params = tier ? [sessionId, tier, ...protectedList] : [sessionId, ...protectedList];
     const row = db.prepare(`SELECT id FROM artifacts WHERE sessionId = ? AND pinned = 0 ${tierClause} ${protectedClause} ORDER BY ${order} LIMIT 1`).get(...params);
+    return row?.id == null ? undefined : String(row.id);
+  }
+
+  function removalCandidateGlobal(protectedIds: Set<string>, tier?: ContextArtifactTier): string | undefined {
+    const protectedList = [...protectedIds];
+    const protectedClause = protectedList.length ? `AND id NOT IN (${protectedList.map(() => "?").join(",")})` : "";
+    const tierClause = tier ? "AND tier = ?" : "";
+    const order = tier
+      ? "createdAt ASC, rowid ASC"
+      : "CASE tier WHEN 'cold' THEN 0 WHEN 'warm' THEN 1 ELSE 2 END ASC, createdAt ASC, rowid ASC";
+    const params = tier ? [tier, ...protectedList] : [...protectedList];
+    const row = db.prepare(
+      `SELECT id FROM artifacts WHERE pinned = 0 ${tierClause} ${protectedClause} ORDER BY ${order} LIMIT 1`,
+    ).get(...params);
     return row?.id == null ? undefined : String(row.id);
   }
 
@@ -313,6 +344,12 @@ export function createSqliteContextBroker(options: SqliteContextBrokerOptions = 
         if (!id) break;
         deleteArtifact(id);
       }
+    }
+
+    while (!withinGlobalCaps()) {
+      const id = removalCandidateGlobal(protectedIds);
+      if (!id) break;
+      deleteArtifact(id);
     }
     return currentStatus();
   }

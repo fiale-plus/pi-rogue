@@ -6,7 +6,7 @@ It stitches together (and bundles for a true single-package install):
 
 - `@fiale-plus/pi-core` (shared contracts/helpers)
 - `@fiale-plus/pi-rogue-advisor` (logic; direct releases paused)
-- `@fiale-plus/pi-rogue-context-broker` (beta context-broker runtime; disabled by default)
+- `@fiale-plus/pi-rogue-context-broker` (context-broker runtime; registered by default with an env kill switch)
 - `@fiale-plus/pi-rogue-orchestration` (logic; direct releases paused)
 
 Direct installs of the advisor/orchestration packages are paused (marked private). All users and future releases go through the bundle. See `docs/release.md` and root `AGENTS.md` / `README.md` for the release policy.
@@ -28,9 +28,9 @@ npm install
 ## Scope boundaries
 
 - **Lab / internal helpers are excluded from this bundle.**
-- The beta context-broker runtime is bundled for opt-in experiments but is not registered/enabled by default.
-- Opt-in consumers can import the runtime through the bundle subpath: `@fiale-plus/pi-rogue-bundle/context-broker`.
-- Set `PI_CONTEXT_BROKER_ENABLED=true` before starting Pi to register the beta `/context` command surface and prompt-load rewriting.
+- The context-broker runtime is bundled and registered by default in the bundle.
+- Consumers can import the runtime through the bundle subpath: `@fiale-plus/pi-rogue-bundle/context-broker`.
+- Set `PI_CONTEXT_BROKER_ENABLED=false` before starting Pi to disable the `/context` command surface and prompt-load rewriting.
 - Optional durable broker storage can be enabled with `PI_CONTEXT_BROKER_DURABLE=true` or `PI_CONTEXT_BROKER_STORE_DIR=/path/to/store`; it defaults to SQLite/FTS and supports `PI_CONTEXT_BROKER_BACKEND=jsonl` for the legacy JSONL/blob backend.
 - `@fiale-plus/pi-rogue-bundle` is the only published surface for the logic.
 - Internal helper packages (`@fiale-plus/pi-rogue-guardrails`, `@fiale-plus/pi-rogue-brain`, `@fiale-plus/pi-rogue-repo-arch`) are maintained separately in the lab section and not published.
@@ -38,7 +38,7 @@ npm install
 ## Command surface
 
 - Default: `/advisor`, `/goal`, `/loop`, `/autoresearch`, `/autoresearch-lab` plus status/config/command paths (all provided via the bundle).
-- Opt-in beta: `PI_CONTEXT_BROKER_ENABLED=true` adds `/context status`, `/context brief`, `/context lookup <handle|text>`, `/context pin <handle>`, and `/context prune` with autocomplete.
+- Context broker: enabled by default; `PI_CONTEXT_BROKER_ENABLED=false` disables `/context status`, `/context brief`, `/context lookup <handle|text>`, `/context pin <handle>`, `/context export <handle>`, and `/context prune` with autocomplete.
 
 ## Status
 

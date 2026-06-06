@@ -98,7 +98,7 @@ Suggested files under `~/.pi/agent/fiale-plus/context-broker/`:
 - `sessions/<session-id>/events.jsonl`: append-only event log for recovery and audit.
 - `summaries/<artifact-id>.md`: human-readable compact summaries for quick reads.
 
-The shipped durable beta uses `artifacts.sqlite` with FTS for fast text lookup. JSONL remains available as a legacy/debug backend via `PI_CONTEXT_BROKER_BACKEND=jsonl`.
+The shipped durable backend uses `artifacts.sqlite` with FTS for fast text lookup. JSONL remains available as a legacy/debug backend via `PI_CONTEXT_BROKER_BACKEND=jsonl`.
 
 ## Lookup mechanics
 
@@ -205,27 +205,27 @@ This keeps routing lightning fast and prevents a weak model from losing importan
 
 ## Implementation status
 
-The current beta implementation is split across a shared contract package and a runtime package:
+The current implementation is split across a shared contract package and a runtime package:
 
 - `@fiale-plus/pi-core` owns the `BoundedContextBroker` contract and shared artifact/query/status types.
-- `@fiale-plus/pi-rogue-context-broker` owns `createInMemoryContextBroker`, the executable in-process bounded broker for tests, prototypes, and future extension wiring.
-- The in-memory broker supports stable `ctx://...` handles, per-session byte and record caps, TTL pruning on reads, pinned artifacts, and lookup by handle, session, kind, tag, path, command prefix, branch, and text.
+- `@fiale-plus/pi-rogue-context-broker` owns `createInMemoryContextBroker`, the executable in-process bounded broker for tests and extension wiring.
+- The in-memory and durable brokers support stable `ctx://...` handles, per-session byte/record caps, optional global cross-session caps, TTL pruning on reads, pinned artifacts, and lookup by handle, session, kind, tag, path, command prefix, branch, and text.
 - Omitted summaries render as metadata-only placeholders so raw payload text is not injected into prompt briefs by default.
-- This slice is intentionally non-persistent and disabled by default in the bundle. Durable SQLite/blob storage remains a later phase.
-- Bundle consumers can explicitly import the beta runtime from `@fiale-plus/pi-rogue-bundle/context-broker`; the private leaf package is not a separate public install target.
-- The product beta command surface is opt-in via `PI_CONTEXT_BROKER_ENABLED=true`. When enabled it registers `/context status`, `/context brief`, `/context lookup <handle|text>`, `/context pin <handle>`, and `/context prune` with autocomplete, plus an LLM-callable `context_lookup` tool for exact handle dereferencing.
-- On reload/session start, the beta backfills the current session branch from `toolResult` and prompt-visible `bashExecution` entries, deduped by session entry id, tolerant of malformed entries, and honoring Pi's `excludeFromContext` bash entries.
-- Prompt integration injects a bounded broker brief and uses the `context` hook to rewrite large LLM-bound `toolResult` and prompt-visible `bashExecution` payloads to broker handles/summaries while preserving exact lookup.
-- Optional durability via `PI_CONTEXT_BROKER_DURABLE=true` or `PI_CONTEXT_BROKER_STORE_DIR` stores SQLite metadata/payloads with FTS so lookup handles, tier, and pin state survive restarts without replay reconstruction. The legacy JSONL/blob backend remains selectable with `PI_CONTEXT_BROKER_BACKEND=jsonl`.
-- Common token/password/API-key patterns are redacted before broker storage and display; `excludeFromContext` bash entries are not brokered into prompts.
+- The bundle registers the context broker by default in mainline. Rollback is `PI_CONTEXT_BROKER_ENABLED=false` followed by `/reload` or restart.
+- Bundle consumers can explicitly import the runtime from `@fiale-plus/pi-rogue-bundle/context-broker`; the private leaf package is not a separate public install target.
+- The command surface registers `/context status`, `/context brief`, `/context lookup <handle|text>`, `/context pin <handle>`, `/context export <handle>`, and `/context prune` with autocomplete, plus an LLM-callable `context_lookup` tool for exact handle dereferencing.
+- On reload/session start, the runtime backfills the current session branch from `toolResult` and prompt-visible `bashExecution` entries, deduped by session entry id, tolerant of malformed entries, and honoring Pi's `excludeFromContext` bash entries.
+- Prompt integration injects a bounded broker brief and uses the `context` hook to rewrite prompt-visible `toolResult` and `bashExecution` payloads to broker handles/summaries by default while preserving exact lookup.
+- Optional durability via `PI_CONTEXT_BROKER_DURABLE=true` or `PI_CONTEXT_BROKER_STORE_DIR` stores SQLite metadata/payloads with FTS so lookup handles, tier, and pin state survive restarts without replay reconstruction. SQLite is loaded lazily only when durable SQLite is selected; the legacy JSONL/blob backend remains selectable with `PI_CONTEXT_BROKER_BACKEND=jsonl`.
+- Common token/password/API-key patterns are redacted before broker storage and display; hostile/binary payloads remain export-only for prompt-facing lookup output; `excludeFromContext` bash entries are not brokered into prompts.
 
 ## Priority roadmap
 
 ### 1. Prompt-load replacement hardening
 
-- Keep the beta default-off while context-hook/tool-result rewriting gets real-session bake time.
-- Add end-to-end smoke coverage for reload, context assembly, lookup fidelity, durable restart, and rollback.
-- Expand replacement policies beyond size-only thresholds as real routing logs accumulate.
+- Keep default-on rollout guarded by `PI_CONTEXT_BROKER_ENABLED=false` rollback.
+- Keep end-to-end smoke coverage for reload, context assembly, lookup fidelity, durable restart, and rollback.
+- Continue expanding replacement policies beyond size-only thresholds as routing telemetry accumulates.
 
 ### 2. Runtime artifact capture
 
@@ -233,18 +233,18 @@ The current beta implementation is split across a shared contract package and a 
 - Store raw payloads behind handles; inject only summaries, metadata, and handles into live prompts.
 - Preserve deterministic routing defaults before adding model advice.
 - Integrate with Pi session files deliberately: raw session files remain intact, but LLM-bound message copies can be rewritten by the `context` hook so the model sees broker summaries/handles while raw payload remains retrievable from broker storage.
-- Continue measuring prompt-size savings from rewritten large tool payloads before enabling by default.
+- Continue measuring prompt-size savings from rewritten tool payloads during mainline rollout.
 
 ### 3. Advisor and brain integration
 
-- Feed `renderBrief()` output into advisor and brain prompts. The bundle already registers the context broker before advisor/orchestration when enabled, and the main agent has a `context_lookup` tool.
+- Feed `renderBrief()` output into advisor and brain prompts. The bundle registers the context broker before advisor/orchestration, and the main agent has a `context_lookup` tool.
 - Replace large hand-assembled transcript excerpts inside advisor/brain internals with broker handles and summaries.
 - Require advisor/brain flows to dereference handles before asking the user to repeat data or before making evidence-sensitive claims.
 - Track lookup frequency, missing-handle frequency, and answer quality during rollout.
 
 ### 4. Durable storage and resume
 
-- SQLite metadata/payload storage with FTS is implemented for the beta durable backend.
+- SQLite metadata/payload storage with FTS is implemented for the durable backend.
 - Still missing: separate blob files by SHA-256, summary sidecar files, and session event JSONL audit logs.
 - Add per-session locking or atomic append for concurrent tool calls.
 - Make session resume reconstruct briefs from durable handles instead of transcript replay across branch boundaries.

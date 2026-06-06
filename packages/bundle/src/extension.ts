@@ -2,10 +2,10 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { registerAdvisor } from "@fiale-plus/pi-rogue-advisor";
 import { registerOrchestration } from "@fiale-plus/pi-rogue-orchestration";
 
-const ENABLED_VALUES = new Set(["1", "true", "yes", "on"]);
+const DISABLED_VALUES = new Set(["0", "false", "no", "off"]);
 
-function contextBrokerBetaEnabled(): boolean {
-  return ENABLED_VALUES.has(String(process.env.PI_CONTEXT_BROKER_ENABLED ?? "").trim().toLowerCase());
+function contextBrokerEnabled(): boolean {
+  return !DISABLED_VALUES.has(String(process.env.PI_CONTEXT_BROKER_ENABLED ?? "").trim().toLowerCase());
 }
 
 export async function registerBundle(pi: ExtensionAPI): Promise<void> {
@@ -13,9 +13,9 @@ export async function registerBundle(pi: ExtensionAPI): Promise<void> {
   if (p.__piRogueBundleRegistered) return;
   p.__piRogueBundleRegistered = true;
 
-  if (contextBrokerBetaEnabled()) {
+  if (contextBrokerEnabled()) {
     const { registerContextBrokerBeta } = await import("@fiale-plus/pi-rogue-context-broker/extension");
-    registerContextBrokerBeta(pi);
+    await registerContextBrokerBeta(pi);
   }
 
   registerAdvisor(pi);

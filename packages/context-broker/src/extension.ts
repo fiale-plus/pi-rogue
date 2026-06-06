@@ -9,12 +9,13 @@ import type { ExtensionAPI, ExtensionContext, ToolResultEvent } from "@earendil-
 import type { ContextArtifact } from "@fiale-plus/pi-core";
 import { createFileContextBroker } from "./file.js";
 import { createInMemoryContextBroker } from "./index.js";
-import { createSqliteContextBroker } from "./sqlite.js";
 
 export interface ContextBrokerBetaOptions {
   enabled?: boolean;
   maxRecords?: number;
   maxBytes?: number;
+  globalMaxRecords?: number;
+  globalMaxBytes?: number;
   briefBytes?: number;
   lookupBytes?: number;
   searchBytes?: number;
@@ -29,12 +30,20 @@ type SessionContextLike = Pick<ExtensionContext, "cwd" | "sessionManager"> & { u
 const DEFAULT_BRIEF_BYTES = 1_800;
 const DEFAULT_LOOKUP_BYTES = 12_000;
 const DEFAULT_SEARCH_BYTES = 2_000;
-const DEFAULT_REWRITE_THRESHOLD_BYTES = 2_000;
+const DEFAULT_REWRITE_THRESHOLD_BYTES = 0;
 const DEFAULT_TTL_MS = 24 * 60 * 60 * 1000;
 const ENABLED_VALUES = new Set(["1", "true", "yes", "on"]);
 
 function envFlag(name: string): boolean {
   return ENABLED_VALUES.has(String(process.env[name] ?? "").trim().toLowerCase());
+}
+
+function envNonNegativeInt(name: string): number | undefined {
+  const raw = process.env[name];
+  if (!raw) return undefined;
+  const value = Number.parseInt(raw, 10);
+  if (!Number.isFinite(value) || value < 0) return undefined;
+  return value;
 }
 
 function isEnvEnabled(): boolean {
@@ -76,13 +85,57 @@ function sanitizeForPrompt(text: string): string {
   return String(text).replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F-\u009F]/g, (char) => `\\x${char.charCodeAt(0).toString(16).padStart(2, "0")}`);
 }
 
+function isHostilePayload(payload: string): boolean {
+  return hasHostileText(payload);
+}
+
+function hasHostileText(text: string): boolean {
+  let suspicious = 0;
+  let scanned = 0;
+  for (const char of text.slice(0, 4096)) {
+    const code = char.codePointAt(0) ?? 0;
+    scanned += 1;
+    if (
+      code === 0x00
+      || (code >= 0x01 && code <= 0x08)
+      || (code >= 0x0E && code <= 0x1F)
+      || (code >= 0x7F && code <= 0x9F)
+    ) {
+      suspicious += 1;
+    }
+  }
+  if (scanned < 12) return suspicious > 0;
+  return suspicious / scanned >= 0.05;
+}
+
+function hasHostileValue(value: unknown): boolean {
+  if (typeof value === "string") return hasHostileText(value);
+  if (Array.isArray(value)) return value.some(hasHostileValue);
+  if (value && typeof value === "object") {
+    return Object.values(value as Record<string, unknown>).some((entry) => hasHostileValue(entry));
+  }
+  return false;
+}
+
 function renderLookupOutput(item: ContextArtifact, payloadLimit: number): string {
+  const isBinary = item.tags.includes("hostile") || item.tags.includes("binary");
+  const payloadLines = isBinary
+    ? [
+      "payload:",
+      "[payload intentionally omitted from prompt for safety; use /context export",
+      sanitizeForPrompt(item.handle),
+      "for full content]",
+    ]
+    : [
+      "payload:",
+      truncateUtf8(sanitizeForPrompt(item.payload), payloadLimit),
+    ];
+
   return [
     sanitizeForPrompt(item.handle),
     `tier=${item.tier} kind=${item.kind} bytes=${item.bytes}`,
     `summary=${sanitizeForPrompt(item.summary)}`,
-    "payload:",
-    truncateUtf8(sanitizeForPrompt(item.payload), payloadLimit),
+    ...payloadLines,
   ].join("\n");
 }
 
@@ -180,11 +233,20 @@ function contextLookupHistoryPlaceholder(): string {
   ].join("\n");
 }
 
-function summarizeTool(event: { toolName: string; input?: any; isError?: boolean }, bytes: number): string {
+function prunedPayloadPlaceholder(hostile = false): string {
+  return [
+    "Context broker artifact pruned before prompt assembly.",
+    hostile ? "Raw hostile/binary payload omitted from prompt for safety." : "Raw payload omitted from prompt to avoid restoring pruned broker evidence.",
+    "Re-run the originating command or use a retained ctx:// handle if exact evidence is still needed.",
+  ].join("\n");
+}
+
+function summarizeTool(event: { toolName: string; input?: any; isError?: boolean }, bytes: number, hostile = false): string {
   const command = event.toolName === "bash" ? event.input?.command : undefined;
   const path = event.input?.path;
   const target = command ? ` command=${compact(String(command), 120)}` : path ? ` path=${path}` : "";
-  return `${event.isError ? "failed" : "completed"} ${event.toolName}${target}; payload=${bytes} bytes`;
+  const marker = hostile ? "; payload marked hostile; use /context export for full content" : "";
+  return `${event.isError ? "failed" : "completed"} ${event.toolName}${target}; payload=${bytes} bytes${marker}`;
 }
 
 const NON_BROKERED_TOOL_NAMES = new Set(["context_lookup"]);
@@ -198,7 +260,7 @@ function ttlFromNowFor(createdAt: number | undefined): number | undefined {
   return Math.max(DEFAULT_TTL_MS, Date.now() - createdAt + DEFAULT_TTL_MS);
 }
 
-export function registerContextBrokerBeta(pi: ExtensionAPI, options: ContextBrokerBetaOptions = {}): void {
+export async function registerContextBrokerBeta(pi: ExtensionAPI, options: ContextBrokerBetaOptions = {}): Promise<void> {
   const p = pi as any;
   if (p.__piRogueContextBrokerBetaRegistered) return;
   p.__piRogueContextBrokerBetaRegistered = true;
@@ -206,10 +268,15 @@ export function registerContextBrokerBeta(pi: ExtensionAPI, options: ContextBrok
   const briefBytes = options.briefBytes ?? DEFAULT_BRIEF_BYTES;
   const lookupBytes = options.lookupBytes ?? DEFAULT_LOOKUP_BYTES;
   const searchBytes = options.searchBytes ?? DEFAULT_SEARCH_BYTES;
-  const rewriteThresholdBytes = options.rewriteThresholdBytes ?? DEFAULT_REWRITE_THRESHOLD_BYTES;
+  const rewriteThresholdBytes =
+    options.rewriteThresholdBytes
+    ?? envNonNegativeInt("PI_CONTEXT_BROKER_REWRITE_THRESHOLD_BYTES")
+    ?? DEFAULT_REWRITE_THRESHOLD_BYTES;
   const brokerOptions = {
     maxRecords: options.maxRecords ?? 64,
     maxBytes: options.maxBytes ?? 8 * 1024 * 1024,
+    globalMaxRecords: options.globalMaxRecords ?? envNonNegativeInt("PI_CONTEXT_BROKER_GLOBAL_MAX_RECORDS"),
+    globalMaxBytes: options.globalMaxBytes ?? envNonNegativeInt("PI_CONTEXT_BROKER_GLOBAL_MAX_BYTES"),
     briefBytes,
   };
   const durable = options.durable ?? (envFlag("PI_CONTEXT_BROKER_DURABLE") || Boolean(options.storeDir ?? process.env.PI_CONTEXT_BROKER_STORE_DIR));
@@ -217,21 +284,54 @@ export function registerContextBrokerBeta(pi: ExtensionAPI, options: ContextBrok
   const broker = durable
     ? durableBackend === "jsonl"
       ? createFileContextBroker({ ...brokerOptions, dir: options.storeDir ?? process.env.PI_CONTEXT_BROKER_STORE_DIR })
-      : createSqliteContextBroker({ ...brokerOptions, dir: options.storeDir ?? process.env.PI_CONTEXT_BROKER_STORE_DIR })
+      : (await import("./sqlite.js")).createSqliteContextBroker({ ...brokerOptions, dir: options.storeDir ?? process.env.PI_CONTEXT_BROKER_STORE_DIR })
     : createInMemoryContextBroker(brokerOptions);
   const seenSourceIds = new Set<string>();
   const sourceHandles = new Map<string, string>();
   let activeSessionId = process.cwd();
-
-  function currentBrief(): string {
-    return broker.renderBrief({ sessionId: activeSessionId, budgetBytes: briefBytes });
-  }
-
-  p.__piRogueContextBroker = {
-    renderBrief: currentBrief,
-    lookup: broker.lookup,
-    status: broker.status,
+  const routingTelemetry = {
+    contextHookCalls: 0,
+    contextHookToolResults: 0,
+    contextHookToolResultRewrites: 0,
+    contextHookToolResultHostile: 0,
+    contextHookBash: 0,
+    contextHookBashRewrites: 0,
+    contextHookBashHostile: 0,
+    toolResultEvents: 0,
+    toolResultArtifacts: 0,
+    backfillScans: 0,
+    backfillAdded: 0,
+    backfillErrors: 0,
+    toolLookupCalls: 0,
+    toolLookupExactCalls: 0,
+    toolLookupTextCalls: 0,
+    toolLookupHits: 0,
+    toolLookupMisses: 0,
+    commandLookupCalls: 0,
+    commandLookupExactCalls: 0,
+    commandLookupTextCalls: 0,
+    commandLookupHits: 0,
+    commandLookupMisses: 0,
+    exportCalls: 0,
+    pinCalls: 0,
+    statusCalls: 0,
+    pruneCalls: 0,
   };
+
+  function formatRoutingTelemetry(): string {
+    const line = [
+      `contextHook calls=${routingTelemetry.contextHookCalls}`,
+      `toolResults seen=${routingTelemetry.contextHookToolResults} rewritten=${routingTelemetry.contextHookToolResultRewrites} hostile=${routingTelemetry.contextHookToolResultHostile}`,
+      `bash seen=${routingTelemetry.contextHookBash} rewritten=${routingTelemetry.contextHookBashRewrites} hostile=${routingTelemetry.contextHookBashHostile}`,
+      `lookups tool(calls=${routingTelemetry.toolLookupCalls}, hits=${routingTelemetry.toolLookupHits}, misses=${routingTelemetry.toolLookupMisses})`,
+      `lookups slash(calls=${routingTelemetry.commandLookupCalls}, hits=${routingTelemetry.commandLookupHits}, misses=${routingTelemetry.commandLookupMisses})`,
+      `exports=${routingTelemetry.exportCalls}`,
+      `pins=${routingTelemetry.pinCalls}`,
+      `pruneCalls=${routingTelemetry.pruneCalls}`,
+      `backfill scans=${routingTelemetry.backfillScans} added=${routingTelemetry.backfillAdded} errors=${routingTelemetry.backfillErrors}`,
+    ];
+    return `Context broker routing telemetry: ${line.join(", ")}`;
+  }
 
   function publishToolArtifact(event: {
     toolName: string;
@@ -265,18 +365,25 @@ export function registerContextBrokerBeta(pi: ExtensionAPI, options: ContextBrok
     };
     const payload = toolPayload(sanitizedEvent);
     const bytes = Buffer.byteLength(payload, "utf8");
+    const hostilePayload = isHostilePayload(payload) || hasHostileValue(sanitizedEvent);
     const artifact = broker.publish({
       sessionId: activeSessionId,
       kind: "tool_output",
       payload,
-      summary: summarizeTool(sanitizedEvent, bytes),
-      tags: [event.toolName, event.isError ? "error" : "ok", event.sourceId ? "session-backfill" : "live"],
+      summary: summarizeTool(sanitizedEvent, bytes, hostilePayload),
+      tags: [
+        event.toolName,
+        event.isError ? "error" : "ok",
+        event.sourceId ? "session-backfill" : "live",
+        ...(hostilePayload ? ["hostile", "binary"] : []),
+      ],
       command: event.toolName === "bash" && typeof sanitizedEvent.input?.command === "string" ? sanitizedEvent.input.command : undefined,
       paths: typeof sanitizedEvent.input?.path === "string" ? [sanitizedEvent.input.path] : [],
       ttlMs: event.ttlMs ?? DEFAULT_TTL_MS,
       parentIds: event.sourceId ? [event.sourceId] : [],
       createdAt: event.createdAt,
     });
+    if (artifact) routingTelemetry.toolResultArtifacts += 1;
     if (event.sourceId) sourceHandles.set(event.sourceId, artifact.handle);
     return artifact;
   }
@@ -317,6 +424,7 @@ export function registerContextBrokerBeta(pi: ExtensionAPI, options: ContextBrok
 
         if (entry?.type === "message" && entry.message?.role === "toolResult") {
           scanned += 1;
+          routingTelemetry.backfillScans += 1;
           const sourceId = typeof entry.message.toolCallId === "string" ? entry.message.toolCallId : entryId;
           const toolInput = sourceId ? toolInputs.get(sourceId) : undefined;
           const alreadySeen = sourceId ? seenSourceIds.has(sourceId) || sourceHandles.has(sourceId) : false;
@@ -329,12 +437,16 @@ export function registerContextBrokerBeta(pi: ExtensionAPI, options: ContextBrok
             sourceId,
             createdAt,
             ttlMs: ttlFromNowFor(createdAt),
-          }) && !alreadySeen) added += 1;
+          }) && !alreadySeen) {
+            added += 1;
+            routingTelemetry.backfillAdded += 1;
+          }
         }
 
         if (entry?.type === "message" && entry.message?.role === "bashExecution") {
           if (entry.message.excludeFromContext === true) continue;
           scanned += 1;
+          routingTelemetry.backfillScans += 1;
           const sourceId = entryId;
           const alreadySeen = sourceId ? seenSourceIds.has(sourceId) || sourceHandles.has(sourceId) : false;
           if (publishToolArtifact({
@@ -351,15 +463,29 @@ export function registerContextBrokerBeta(pi: ExtensionAPI, options: ContextBrok
             sourceId,
             createdAt,
             ttlMs: ttlFromNowFor(createdAt),
-          }) && !alreadySeen) added += 1;
+          }) && !alreadySeen) {
+            added += 1;
+            routingTelemetry.backfillAdded += 1;
+          }
         }
       } catch {
         errors += 1;
+        routingTelemetry.backfillErrors += 1;
       }
     }
 
     return { added, scanned, errors };
   }
+
+  function currentBrief(): string {
+    return broker.renderBrief({ sessionId: activeSessionId, budgetBytes: briefBytes });
+  }
+
+  p.__piRogueContextBroker = {
+    renderBrief: currentBrief,
+    lookup: broker.lookup,
+    status: broker.status,
+  };
 
   const contextActions: AutocompleteItem[] = [
     { value: "status", label: "status", description: "Show broker record, byte, and pinned counts" },
@@ -408,9 +534,9 @@ export function registerContextBrokerBeta(pi: ExtensionAPI, options: ContextBrok
 
   pi.on("session_start", async (_event, ctx) => {
     const { added, scanned, errors } = backfillSessionArtifacts(ctx);
-    ctx.ui.setStatus?.("context-broker", "ctx:on beta");
+    ctx.ui.setStatus?.("context-broker", "ctx:on");
     ctx.ui.notify(
-      `Context broker beta enabled. Backfilled ${added}/${scanned} current-branch tool artifacts${errors ? ` (${errors} malformed skipped)` : ""}. Use /context status or /context brief.`,
+      `Context broker enabled. Backfilled ${added}/${scanned} current-branch tool artifacts${errors ? ` (${errors} malformed skipped)` : ""}. Use /context status or /context brief.`,
       errors ? "warning" : "info",
     );
   });
@@ -427,18 +553,24 @@ export function registerContextBrokerBeta(pi: ExtensionAPI, options: ContextBrok
 
   pi.on("tool_result", async (event: ToolResultEvent, ctx) => {
     activeSessionId = sessionIdFor(ctx);
+    routingTelemetry.toolResultEvents += 1;
     publishToolArtifact({ ...event, sourceId: event.toolCallId });
   });
 
   pi.on("context", async (event, ctx) => {
     activeSessionId = sessionIdFor(ctx);
+    routingTelemetry.contextHookCalls += 1;
     const toolInputs = collectToolInputs(event.messages);
-    const drafts = event.messages.map((message: any): { original: any; replacement?: any; artifact?: ContextArtifact; rewrite?: (artifact: ContextArtifact) => any } => {
+    const drafts = event.messages.map((message: any): { original: any; replacement?: any; artifact?: ContextArtifact; rewrite?: (artifact: ContextArtifact) => any; safeFallback?: any } => {
       if (message?.role === "toolResult") {
+        routingTelemetry.contextHookToolResults += 1;
         const raw = contentText(message.content);
-        if (Buffer.byteLength(raw, "utf8") <= rewriteThresholdBytes) return { original: message };
         const toolInput = typeof message.toolCallId === "string" ? toolInputs.get(message.toolCallId) : undefined;
         const toolName = String(message.toolName ?? toolInput?.toolName ?? "tool");
+        const hostile = hasHostileText(raw) || hasHostileValue(message.content);
+        if (hostile) routingTelemetry.contextHookToolResultHostile += 1;
+        const shouldRewrite = Buffer.byteLength(raw, "utf8") > rewriteThresholdBytes || hostile;
+        if (!shouldRewrite) return { original: message };
         if (!shouldBrokerToolName(toolName)) {
           return { original: message, replacement: { ...message, content: [{ type: "text", text: contextLookupHistoryPlaceholder() }] } };
         }
@@ -453,12 +585,22 @@ export function registerContextBrokerBeta(pi: ExtensionAPI, options: ContextBrok
           ttlMs: ttlFromNowFor(typeof message.timestamp === "number" ? message.timestamp : undefined),
         });
         if (!artifact) return { original: message };
-        return { original: message, artifact, rewrite: (live) => ({ ...message, content: [{ type: "text", text: brokerPlaceholder(live) }] }) };
+        routingTelemetry.contextHookToolResultRewrites += 1;
+        return {
+          original: message,
+          artifact,
+          rewrite: (live) => ({ ...message, content: [{ type: "text", text: brokerPlaceholder(live) }] }),
+          safeFallback: { ...message, content: [{ type: "text", text: prunedPayloadPlaceholder(hostile) }] },
+        };
       }
 
       if (message?.role === "bashExecution" && message.excludeFromContext !== true) {
+        routingTelemetry.contextHookBash += 1;
         const raw = String(message.output ?? "");
-        if (Buffer.byteLength(raw, "utf8") <= rewriteThresholdBytes) return { original: message };
+        const hostile = hasHostileText(raw) || hasHostileValue(message.output);
+        if (hostile) routingTelemetry.contextHookBashHostile += 1;
+        const shouldRewrite = Buffer.byteLength(raw, "utf8") > rewriteThresholdBytes || hostile;
+        if (!shouldRewrite) return { original: message };
         const sourceId = typeof message.timestamp === "number"
           ? `bash:${message.timestamp}:${stableHash([message.command ?? "", raw, message.exitCode ?? "", message.cancelled ?? ""].join("\n"))}`
           : `bash:${stableHash([message.command ?? "", raw, message.exitCode ?? "", message.cancelled ?? ""].join("\n"))}`;
@@ -478,7 +620,13 @@ export function registerContextBrokerBeta(pi: ExtensionAPI, options: ContextBrok
           ttlMs: ttlFromNowFor(typeof message.timestamp === "number" ? message.timestamp : undefined),
         });
         if (!artifact) return { original: message };
-        return { original: message, artifact, rewrite: (live) => ({ ...message, output: brokerPlaceholder(live), truncated: true }) };
+        routingTelemetry.contextHookBashRewrites += 1;
+        return {
+          original: message,
+          artifact,
+          rewrite: (live) => ({ ...message, output: brokerPlaceholder(live), truncated: true }),
+          safeFallback: { ...message, output: prunedPayloadPlaceholder(hostile), truncated: true },
+        };
       }
 
       return { original: message };
@@ -494,6 +642,10 @@ export function registerContextBrokerBeta(pi: ExtensionAPI, options: ContextBrok
       const live = broker.lookup({ handle: draft.artifact.handle })[0];
       if (!live) {
         for (const parentId of draft.artifact.parentIds) sourceHandles.delete(parentId);
+        if (draft.safeFallback) {
+          changed = true;
+          return draft.safeFallback;
+        }
         return draft.original;
       }
       changed = true;
@@ -510,7 +662,7 @@ export function registerContextBrokerBeta(pi: ExtensionAPI, options: ContextBrok
       systemPrompt: [
         event.systemPrompt,
         brief,
-        "Context broker beta rule: use /context lookup <handle> for exact evidence when a broker handle is relevant. Broker briefs are bounded summaries and never raw payload dumps.",
+        "Context broker rule: use /context lookup <handle> for exact evidence when a broker handle is relevant. Broker briefs are bounded summaries and never raw payload dumps.",
       ].join("\n\n"),
     };
   });
@@ -535,8 +687,11 @@ export function registerContextBrokerBeta(pi: ExtensionAPI, options: ContextBrok
     }),
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
       activeSessionId = sessionIdFor(ctx);
+      routingTelemetry.toolLookupCalls += 1;
       const p = params as { handle?: string; text?: string; path?: string; tag?: string; kind?: any; tier?: any; limit?: number };
       const exact = typeof p.handle === "string" && p.handle.startsWith("ctx://");
+      routingTelemetry.toolLookupExactCalls += exact ? 1 : 0;
+      routingTelemetry.toolLookupTextCalls += exact ? 0 : 1;
       const focused = exact || Boolean(p.text?.trim() || p.path?.trim() || p.tag?.trim() || p.kind || p.tier);
       if (!focused) {
         return textResult("context_lookup requires a focused filter: handle, text, path, tag, kind, or tier. Empty lookups are refused to avoid dumping brokered payloads into the prompt.");
@@ -551,13 +706,17 @@ export function registerContextBrokerBeta(pi: ExtensionAPI, options: ContextBrok
         tier: p.tier,
         limit: Math.min(10, Math.max(1, Math.floor(p.limit ?? (exact ? 1 : 5)))),
       });
-      if (!results.length) return textResult("No context artifacts matched. Missing or expired handles should be reported explicitly.");
+      if (!results.length) {
+        routingTelemetry.toolLookupMisses += 1;
+        return textResult("No context artifacts matched. Missing or expired handles should be reported explicitly.");
+      }
+      routingTelemetry.toolLookupHits += 1;
       return textResult(results.map((item) => renderLookupOutput(item, exact ? lookupBytes : searchBytes)).join("\n\n---\n\n"));
     },
   });
 
   pi.registerCommand("context", {
-    description: "Inspect the beta context broker: status | brief | lookup <handle-or-text> | pin <handle-or-id> | export <handle-or-id> | prune",
+    description: "Inspect the context broker: status | brief | lookup <handle-or-text> | pin <handle-or-id> | export <handle-or-id> | prune",
     getArgumentCompletions: contextArgumentCompletions,
     handler: async (args, ctx) => {
       activeSessionId = sessionIdFor(ctx);
@@ -565,11 +724,13 @@ export function registerContextBrokerBeta(pi: ExtensionAPI, options: ContextBrok
       const query = rest.join(" ");
 
       if (action === "status") {
+        routingTelemetry.statusCalls += 1;
         const status = broker.status();
         ctx.ui.notify(
-          `Context broker beta: enabled, session=${activeSessionId}, records=${status.records}, bytes=${status.bytes}/${status.maxBytes}, tiers=hot:${status.hotRecords}/${status.hotBytes} warm:${status.warmRecords}/${status.warmBytes} cold:${status.coldRecords}/${status.coldBytes}, pinned=${status.pinnedRecords}/${status.pinnedBytes} bytes`,
+          `Context broker: enabled, session=${activeSessionId}, records=${status.records}, bytes=${status.bytes}/${status.maxBytes}, tiers=hot:${status.hotRecords}/${status.hotBytes} warm:${status.warmRecords}/${status.warmBytes} cold:${status.coldRecords}/${status.coldBytes}, pinned=${status.pinnedRecords}/${status.pinnedBytes} bytes`,
           "info",
         );
+        ctx.ui.notify(formatRoutingTelemetry(), "info");
         return;
       }
 
@@ -583,8 +744,16 @@ export function registerContextBrokerBeta(pi: ExtensionAPI, options: ContextBrok
           ctx.ui.notify("Usage: /context lookup <ctx://handle-or-text>", "warning");
           return;
         }
+        routingTelemetry.commandLookupCalls += 1;
         const exact = query.startsWith("ctx://");
+        routingTelemetry.commandLookupExactCalls += exact ? 1 : 0;
+        routingTelemetry.commandLookupTextCalls += exact ? 0 : 1;
         const results = broker.lookup(exact ? { handle: query } : { sessionId: activeSessionId, text: query, limit: 5 });
+        if (results.length) {
+          routingTelemetry.commandLookupHits += 1;
+        } else {
+          routingTelemetry.commandLookupMisses += 1;
+        }
         ctx.ui.notify(results.length ? results.map((item) => renderLookupOutput(item, exact ? lookupBytes : searchBytes)).join("\n\n---\n\n") : "No context artifacts matched.", "info");
         return;
       }
@@ -595,6 +764,7 @@ export function registerContextBrokerBeta(pi: ExtensionAPI, options: ContextBrok
           return;
         }
         const pinned = broker.pin(query, true);
+        routingTelemetry.pinCalls += 1;
         ctx.ui.notify(pinned ? `Pinned ${pinned.handle}` : "No artifact matched that handle/id.", pinned ? "info" : "warning");
         return;
       }
@@ -608,18 +778,20 @@ export function registerContextBrokerBeta(pi: ExtensionAPI, options: ContextBrok
         const exact = query.startsWith("ctx://");
         const artifact = exact ? broker.lookup({ handle: query })[0] : broker.lookup({ id: query })[0];
         if (!artifact) {
-          ctx.ui.notify("No artifact matched that handle/id.", "warning");
+          ctx.ui.notify("No artifact matched that handle-or-id.", "warning");
           return;
         }
 
         const exportDir = mkdtempSync(join(tmpdir(), "pi-context-broker-export-"));
         const exportPath = join(exportDir, `${artifact.id}.txt`);
         writeFileSync(exportPath, artifact.payload, "utf8");
+        routingTelemetry.exportCalls += 1;
         ctx.ui.notify(`Exported full payload for ${sanitizeForPrompt(artifact.handle)} (${artifact.bytes} bytes) to ${exportPath}`, "info");
         return;
       }
 
       if (action === "prune") {
+        routingTelemetry.pruneCalls += 1;
         const status = broker.prune();
         ctx.ui.notify(`Pruned. ${status.records} records, ${status.bytes} bytes remain.`, "info");
         return;

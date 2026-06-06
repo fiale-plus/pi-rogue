@@ -127,6 +127,12 @@ function tierLine(artifact: ContextArtifact): string {
 export function createInMemoryContextBroker(options: ContextBrokerOptions = {}): BoundedContextBroker {
   const maxRecords = Math.max(1, Math.floor(options.maxRecords ?? DEFAULT_MAX_RECORDS));
   const maxBytes = Math.max(1, Math.floor(options.maxBytes ?? DEFAULT_MAX_BYTES));
+  const globalMaxRecords = typeof options.globalMaxRecords === "number" && Number.isFinite(options.globalMaxRecords)
+    ? Math.max(1, Math.floor(options.globalMaxRecords))
+    : Number.POSITIVE_INFINITY;
+  const globalMaxBytes = typeof options.globalMaxBytes === "number" && Number.isFinite(options.globalMaxBytes)
+    ? Math.max(1, Math.floor(options.globalMaxBytes))
+    : Number.POSITIVE_INFINITY;
   const defaultTtlMs = Math.max(0, Math.floor(options.defaultTtlMs ?? DEFAULT_TTL_MS));
   const tierTtlMs: Record<ContextArtifactTier, number> = {
     hot: Math.max(0, Math.floor(options.hotTtlMs ?? defaultTtlMs)),
@@ -190,11 +196,31 @@ export function createInMemoryContextBroker(options: ContextBrokerOptions = {}):
       });
   }
 
+  function removalCandidatesGlobal(protectedIds: Set<string>, tier?: ContextArtifactTier): Array<{ artifact: ContextArtifact & { sequence: number; baseTier: ContextArtifactTier }; index: number }> {
+    return artifacts
+      .map((artifact, index) => ({ artifact, index }))
+      .filter(({ artifact }) => !artifact.pinned && !protectedIds.has(artifact.id) && (!tier || artifact.tier === tier))
+      .sort((a, b) => {
+        if (!tier && TIER_REMOVAL_ORDER[a.artifact.tier] !== TIER_REMOVAL_ORDER[b.artifact.tier]) {
+          return TIER_REMOVAL_ORDER[a.artifact.tier] - TIER_REMOVAL_ORDER[b.artifact.tier];
+        }
+        if (a.artifact.createdAt !== b.artifact.createdAt) return a.artifact.createdAt - b.artifact.createdAt;
+        return a.artifact.sequence - b.artifact.sequence;
+      });
+  }
+
   function withinCaps(sessionId: string, tier?: ContextArtifactTier): boolean {
     const sessionArtifacts = artifacts.filter((artifact) => artifact.sessionId === sessionId && (!tier || artifact.tier === tier));
     const recordsCap = tier ? tierMaxRecords[tier] : maxRecords;
     const bytesCap = tier ? tierMaxBytes[tier] : maxBytes;
     return sessionArtifacts.length <= recordsCap && sessionArtifacts.reduce((sum, artifact) => sum + artifact.bytes, 0) <= bytesCap;
+  }
+
+  function withinGlobalCaps(): boolean {
+    if (globalMaxRecords === Number.POSITIVE_INFINITY && globalMaxBytes === Number.POSITIVE_INFINITY) return true;
+    const records = artifacts.length;
+    const bytes = artifacts.reduce((sum, artifact) => sum + artifact.bytes, 0);
+    return records <= globalMaxRecords && bytes <= globalMaxBytes;
   }
 
   function prune(now = Date.now(), protectedIds = new Set<string>()): ContextBrokerStatus {
@@ -214,6 +240,12 @@ export function createInMemoryContextBroker(options: ContextBrokerOptions = {}):
         if (!candidate) break;
         artifacts.splice(candidate.index, 1);
       }
+    }
+
+    while (!withinGlobalCaps()) {
+      const candidate = removalCandidatesGlobal(protectedIds)[0];
+      if (!candidate) break;
+      artifacts.splice(candidate.index, 1);
     }
 
     return currentStatus();
