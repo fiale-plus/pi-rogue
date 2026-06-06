@@ -9,6 +9,7 @@ import type {
   ContextBrokerOptions,
   ContextBrokerStatus,
   ContextLookupQuery,
+  ContextPurgeOptions,
 } from "@fiale-plus/pi-core";
 
 export type {
@@ -20,6 +21,7 @@ export type {
   ContextBrokerOptions,
   ContextBrokerStatus,
   ContextLookupQuery,
+  ContextPurgeOptions,
 } from "@fiale-plus/pi-core";
 
 const DEFAULT_MAX_RECORDS = 256;
@@ -222,6 +224,16 @@ export function createInMemoryContextBroker(options: ContextBrokerOptions = {}):
     return currentStatus();
   }
 
+  function purge(options: ContextPurgeOptions = {}): ContextBrokerStatus {
+    dropExpired();
+    const keepPinned = options.keepPinned ?? true;
+    artifacts = artifacts.filter((artifact) => {
+      if (options.sessionId && artifact.sessionId !== options.sessionId) return true;
+      return keepPinned && artifact.pinned;
+    });
+    return currentStatus();
+  }
+
   function publish(input: ContextArtifactInput): ContextArtifact {
     const now = input.createdAt ?? Date.now();
     const payload = payloadText(input.payload);
@@ -318,6 +330,7 @@ export function createInMemoryContextBroker(options: ContextBrokerOptions = {}):
     lookup,
     pin,
     prune,
+    purge,
     status,
     renderBrief,
   };

@@ -273,4 +273,18 @@ describe("createInMemoryContextBroker", () => {
     expect(Buffer.byteLength(brief, "utf8")).toBeLessThanOrEqual(170);
     expect(brief).toContain("Context Broker");
   });
+
+  it("purges unpinned session artifacts while retaining pinned evidence", () => {
+    const broker = createInMemoryContextBroker();
+    const unpinned = broker.publish({ sessionId: "s", kind: "tool_output", payload: "scratch", summary: "scratch" });
+    const pinned = broker.publish({ sessionId: "s", kind: "tool_output", payload: "keep", summary: "keep", pinned: true });
+    const other = broker.publish({ sessionId: "other", kind: "tool_output", payload: "other", summary: "other" });
+
+    const status = broker.purge({ sessionId: "s", keepPinned: true });
+
+    expect(status.records).toBe(2);
+    expect(broker.lookup({ handle: unpinned.handle })).toEqual([]);
+    expect(broker.lookup({ handle: pinned.handle })[0]?.payload).toBe("keep");
+    expect(broker.lookup({ handle: other.handle })[0]?.payload).toBe("other");
+  });
 });

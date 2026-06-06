@@ -91,11 +91,17 @@ export interface ContextBrokerOptions {
   briefBytes?: number;
 }
 
+export interface ContextPurgeOptions {
+  sessionId?: string;
+  keepPinned?: boolean;
+}
+
 export interface BoundedContextBroker {
   publish(input: ContextArtifactInput): ContextArtifact;
   lookup(query?: ContextLookupQuery): ContextArtifact[];
   pin(idOrHandle: string, pinned?: boolean): ContextArtifact | null;
   prune(now?: number): ContextBrokerStatus;
+  purge(options?: ContextPurgeOptions): ContextBrokerStatus;
   status(): ContextBrokerStatus;
   renderBrief(query?: ContextLookupQuery & { budgetBytes?: number }): string;
 }

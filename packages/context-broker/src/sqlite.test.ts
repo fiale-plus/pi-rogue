@@ -75,4 +75,24 @@ describe("createSqliteContextBroker", () => {
       rmSync(dir, { recursive: true, force: true });
     }
   });
+
+  it("purges unpinned durable artifacts for a session", () => {
+    const dir = mkdtempSync(join(tmpdir(), "ctx-sqlite-test-"));
+    try {
+      const path = join(dir, "artifacts.sqlite");
+      let broker = createSqliteContextBroker({ path, defaultTtlMs: 0 });
+      const scratch = broker.publish({ sessionId: "s", kind: "tool_output", payload: "scratch" });
+      const pinned = broker.publish({ sessionId: "s", kind: "tool_output", payload: "keep", pinned: true });
+      const other = broker.publish({ sessionId: "other", kind: "tool_output", payload: "other" });
+
+      broker.purge({ sessionId: "s", keepPinned: true });
+      broker = createSqliteContextBroker({ path, defaultTtlMs: 0 });
+
+      expect(broker.lookup({ handle: scratch.handle })).toEqual([]);
+      expect(broker.lookup({ handle: pinned.handle })[0]?.payload).toBe("keep");
+      expect(broker.lookup({ handle: other.handle })[0]?.payload).toBe("other");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
 });

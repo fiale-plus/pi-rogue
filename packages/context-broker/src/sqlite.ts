@@ -13,6 +13,7 @@ import type {
   ContextBrokerOptions,
   ContextBrokerStatus,
   ContextLookupQuery,
+  ContextPurgeOptions,
 } from "@fiale-plus/pi-core";
 
 export interface SqliteContextBrokerOptions extends ContextBrokerOptions {
@@ -321,6 +322,29 @@ export function createSqliteContextBroker(options: SqliteContextBrokerOptions = 
     return currentStatus();
   }
 
+  function purge(options: ContextPurgeOptions = {}): ContextBrokerStatus {
+    dropExpired();
+    const keepPinned = options.keepPinned ?? true;
+    const clauses: string[] = [];
+    const params: Array<string | number> = [];
+    if (options.sessionId) {
+      clauses.push("sessionId = ?");
+      params.push(options.sessionId);
+    }
+    if (keepPinned) clauses.push("pinned = 0");
+    const where = clauses.length ? `WHERE ${clauses.join(" AND ")}` : "";
+    const rows = db.prepare(`SELECT id FROM artifacts ${where}`).all(...params);
+    db.exec("BEGIN IMMEDIATE");
+    try {
+      for (const row of rows) deleteArtifact(String(row.id));
+      db.exec("COMMIT");
+    } catch (error) {
+      db.exec("ROLLBACK");
+      throw error;
+    }
+    return currentStatus();
+  }
+
   function publish(input: ContextArtifactInput): ContextArtifact {
     dropExpired();
     const source = stableSource(input);
@@ -492,7 +516,7 @@ export function createSqliteContextBroker(options: SqliteContextBrokerOptions = 
     return truncateUtf8(lines.join("\n"), budget);
   }
 
-  return { publish, lookup, pin, prune, status, renderBrief };
+  return { publish, lookup, pin, prune, purge, status, renderBrief };
 }
 
 export function contextBrokerSqlitePathForSession(baseDir: string, sessionId: string): string {
