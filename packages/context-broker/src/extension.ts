@@ -30,7 +30,7 @@ type SessionContextLike = Pick<ExtensionContext, "cwd" | "sessionManager"> & { u
 const DEFAULT_BRIEF_BYTES = 1_800;
 const DEFAULT_LOOKUP_BYTES = 12_000;
 const DEFAULT_SEARCH_BYTES = 2_000;
-const DEFAULT_REWRITE_THRESHOLD_BYTES = 0;
+const DEFAULT_REWRITE_THRESHOLD_BYTES = 8 * 1024;
 const DEFAULT_TTL_MS = 24 * 60 * 60 * 1000;
 const ENABLED_VALUES = new Set(["1", "true", "yes", "on"]);
 
@@ -258,6 +258,17 @@ function shouldBrokerToolName(toolName: string): boolean {
 function ttlFromNowFor(createdAt: number | undefined): number | undefined {
   if (typeof createdAt !== "number" || !Number.isFinite(createdAt)) return undefined;
   return Math.max(DEFAULT_TTL_MS, Date.now() - createdAt + DEFAULT_TTL_MS);
+}
+
+
+function isNeverBrokeredToolName(toolName: unknown): boolean {
+  return toolName === "advisor";
+}
+
+function isNeverBrokeredToolMessage(message: unknown): boolean {
+  if (message == null || typeof message !== "object") return false;
+  const maybe = message as { toolName?: unknown };
+  return isNeverBrokeredToolName(maybe.toolName);
 }
 
 export async function registerContextBrokerBeta(pi: ExtensionAPI, options: ContextBrokerBetaOptions = {}): Promise<void> {
