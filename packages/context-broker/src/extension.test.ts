@@ -70,7 +70,7 @@ describe("context broker extension enablement", () => {
 
   it("registers /context with command completions and the context_lookup tool", () => {
     const { pi, commands, tools } = createPiMock();
-    registerContextBrokerBeta(pi);
+    registerContextBrokerBeta(pi, { rewriteThresholdBytes: 1 });
 
     const command = commands.get("context");
     expect(command).toBeTruthy();
@@ -87,7 +87,7 @@ describe("context broker extension enablement", () => {
 
   it("backfills current branch toolResult and bashExecution entries idempotently", async () => {
     const { pi, handlers, commands } = createPiMock();
-    registerContextBrokerBeta(pi);
+    registerContextBrokerBeta(pi, { rewriteThresholdBytes: 1 });
     const entries = [
       {
         type: "message",
@@ -123,7 +123,10 @@ describe("context broker extension enablement", () => {
 
   it("purges unpinned broker artifacts after session compaction", async () => {
     const { pi, handlers, commands } = createPiMock();
-    registerContextBrokerBeta(pi, { briefBytes: 1200 });
+    registerContextBrokerBeta(pi, {
+briefBytes: 1200,
+    rewriteThresholdBytes: 1
+  });
     const { ctx, notifications } = createCtx();
 
     await runHandlers(handlers, "session_start", { type: "session_start" }, ctx);
@@ -159,7 +162,7 @@ describe("context broker extension enablement", () => {
 
   it("is safe on malformed session branches", async () => {
     const { pi, handlers } = createPiMock();
-    registerContextBrokerBeta(pi);
+    registerContextBrokerBeta(pi, { rewriteThresholdBytes: 1 });
     const { ctx, notifications } = createCtx([null, { type: "message", id: "broken", message: null }]);
 
     await runHandlers(handlers, "session_start", { type: "session_start" }, ctx);
@@ -169,7 +172,7 @@ describe("context broker extension enablement", () => {
 
   it("does not backfill bash entries explicitly excluded from context", async () => {
     const { pi, handlers, commands } = createPiMock();
-    registerContextBrokerBeta(pi);
+    registerContextBrokerBeta(pi, { rewriteThresholdBytes: 1 });
     const { ctx, notifications } = createCtx([
       {
         type: "message",
@@ -196,7 +199,10 @@ describe("context broker extension enablement", () => {
 
   it("exact lookup returns byte-clipped payloads and marks truncation explicitly", async () => {
     const { pi, handlers, commands } = createPiMock();
-    registerContextBrokerBeta(pi, { lookupBytes: 80, searchBytes: 50 });
+    registerContextBrokerBeta(pi, {
+lookupBytes: 80, searchBytes: 50,
+    rewriteThresholdBytes: 1
+  });
     const { ctx, notifications } = createCtx();
 
     await runHandlers(handlers, "session_start", { type: "session_start" }, ctx);
@@ -221,7 +227,10 @@ describe("context broker extension enablement", () => {
 
   it("full payload export path writes the full artifact payload", async () => {
     const { pi, handlers, commands } = createPiMock();
-    registerContextBrokerBeta(pi, { lookupBytes: 80, searchBytes: 50 });
+    registerContextBrokerBeta(pi, {
+lookupBytes: 80, searchBytes: 50,
+    rewriteThresholdBytes: 1
+  });
     const { ctx, notifications } = createCtx();
     const payload = "payload_" + "x".repeat(120) + "::END";
 
@@ -253,7 +262,7 @@ describe("context broker extension enablement", () => {
 
   it("omits hostile payloads from lookup output and suggests export", async () => {
     const { pi, handlers, commands } = createPiMock();
-    registerContextBrokerBeta(pi);
+    registerContextBrokerBeta(pi, { rewriteThresholdBytes: 1 });
     const { ctx, notifications } = createCtx();
     const payload = `safe\u0000binary${"\u0007".repeat(12)}tail`;
 
@@ -280,7 +289,10 @@ describe("context broker extension enablement", () => {
 
   it("text search lookup returns a smaller byte-clipped excerpt", async () => {
     const { pi, handlers, commands } = createPiMock();
-    registerContextBrokerBeta(pi, { lookupBytes: 80, searchBytes: 50 });
+    registerContextBrokerBeta(pi, {
+lookupBytes: 80, searchBytes: 50,
+    rewriteThresholdBytes: 1
+  });
     const { ctx, notifications } = createCtx();
 
     await runHandlers(handlers, "session_start", { type: "session_start" }, ctx);
@@ -302,7 +314,7 @@ describe("context broker extension enablement", () => {
 
   it("sanitizes control characters in context command lookup output", async () => {
     const { pi, handlers, commands } = createPiMock();
-    registerContextBrokerBeta(pi);
+    registerContextBrokerBeta(pi, { rewriteThresholdBytes: 1 });
     const { ctx, notifications } = createCtx();
     const rawPayload = `${"SAFE"}\u0000${"x".repeat(220)}`;
 
@@ -326,7 +338,10 @@ describe("context broker extension enablement", () => {
 
   it("context_lookup tool dereferences handles for exact evidence", async () => {
     const { pi, handlers, commands, tools } = createPiMock();
-    registerContextBrokerBeta(pi, { lookupBytes: 500 });
+    registerContextBrokerBeta(pi, {
+lookupBytes: 500,
+    rewriteThresholdBytes: 1
+  });
     const { ctx } = createCtx();
 
     await runHandlers(handlers, "session_start", { type: "session_start" }, ctx);
@@ -425,7 +440,7 @@ describe("context broker extension enablement", () => {
 
   it("still brokers normal tool output that exactly matches broker marker text", async () => {
     const { pi, handlers, commands } = createPiMock();
-    registerContextBrokerBeta(pi);
+    registerContextBrokerBeta(pi, { rewriteThresholdBytes: 1 });
     const { ctx, notifications } = createCtx();
 
     await runHandlers(handlers, "session_start", { type: "session_start" }, ctx);
@@ -449,7 +464,10 @@ describe("context broker extension enablement", () => {
 
   it("context_lookup refuses empty unfocused payload-dumping calls", async () => {
     const { pi, handlers, tools } = createPiMock();
-    registerContextBrokerBeta(pi, { lookupBytes: 500 });
+    registerContextBrokerBeta(pi, {
+lookupBytes: 500,
+    rewriteThresholdBytes: 1
+  });
     const { ctx } = createCtx();
 
     await runHandlers(handlers, "session_start", { type: "session_start" }, ctx);
@@ -495,7 +513,7 @@ describe("context broker extension enablement", () => {
 
   it("rewrites small tool results and leaves excluded bash outputs unchanged in context", async () => {
     const { pi, handlers } = createPiMock();
-    registerContextBrokerBeta(pi);
+    registerContextBrokerBeta(pi, { rewriteThresholdBytes: 1 });
     const { ctx } = createCtx();
     const secret = "SECRET_TOKEN=" + "z".repeat(80);
 
@@ -574,7 +592,10 @@ describe("context broker extension enablement", () => {
 
   it("does not restore pruned hostile payloads into prompt context", async () => {
     const { pi, handlers } = createPiMock();
-    registerContextBrokerBeta(pi, { maxRecords: 1 });
+    registerContextBrokerBeta(pi, {
+maxRecords: 1,
+    rewriteThresholdBytes: 1
+  });
     const { ctx } = createCtx();
     const hostile = `HOSTILE_RAW\u0000${"\u0007".repeat(20)}`;
 
@@ -595,7 +616,7 @@ describe("context broker extension enablement", () => {
 
   it("redacts secrets before storing and displaying payloads", async () => {
     const { pi, handlers, commands } = createPiMock();
-    registerContextBrokerBeta(pi);
+    registerContextBrokerBeta(pi, { rewriteThresholdBytes: 1 });
     const { ctx, notifications } = createCtx();
 
     await runHandlers(handlers, "session_start", { type: "session_start" }, ctx);
@@ -702,7 +723,10 @@ describe("context broker extension enablement", () => {
 
   it("injects a bounded broker brief without raw payload text", async () => {
     const { pi, handlers } = createPiMock();
-    registerContextBrokerBeta(pi, { briefBytes: 220 });
+    registerContextBrokerBeta(pi, {
+briefBytes: 220,
+    rewriteThresholdBytes: 1
+  });
     const { ctx } = createCtx();
 
     await runHandlers(handlers, "session_start", { type: "session_start" }, ctx);
