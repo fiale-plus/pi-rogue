@@ -126,7 +126,7 @@ const ROUTINE_CLEANUP_RE = /\b(routine docs?|docs? and formatting|formatting cle
 const COMPLEX_RE = /\b(architecture|architectural|refactor|design|trade[- ]?off|concurrency|security|auth|migration|performance|scale|scalability|framework|system design|schema|data model|protocol|advisor routing|advisor flow|router logic|call vs skip|skip vs call|compare|recommend|benchmark|evaluate|experiment|train|strategy|choose|make sense|worth(?: it)?|kpi|kpis|how it works|where it comes from|what would you choose|what do you think|next step|pick between|buy|usage|sustained speed|available models|running model kpis)\b/i;
 const DEBUG_RE = /\b(debug|bug|error|stack trace|traceback|fail(?:ed|ure)?|broken|investigate|why is|cannot|can't|crash|regression)\b/i;
 const CONTEXT_RE = /\b(need more context|missing context|clarify|not enough info|unspecified|unknown|ambiguous)\b/i;
-const SAFETY_RE = /\b(rm\s+-rf|sudo\b|shutdown\b|reboot\b|mkfs(?:\.[\w-]+)?\b|chmod\s+-R\b|chown\b|git\s+push\b[\s\S]*--force(?:-with-lease)?|curl\b[\s\S]*\|\s*(?:sh|bash)\b|wget\b[\s\S]*\|\s*(?:sh|bash)\b|drop\s+table\b|delete\s+database\b|secret\b|token\b|credential\b|password\b)\b/i;
+const SAFETY_RE = /\b(rm\s+-rf|sudo\b|shutdown\b|reboot\b|mkfs(?:\.[\w-]+)?\b|chmod\s+-R\b|chown\b|git\s+push\b[\s\S]*--force(?:-with-lease)?|curl\b[\s\S]*\|\s*(?:sh|bash)\b|wget\b[\s\S]*\|\s*(?:sh|bash)\b|drop\s+table\b|delete\s+database\b|credential\b|password\b|secret\b)\b/i;
 const COMPACTION_RE = /\b(compact(?:ed|ion)?|missing history|history might flip|prior constraint|resume(?:d)? after compaction)\b/i;
 const REASSURANCE_RE = /\b(reassurance|confidence|increase confidence|already know the likely answer|just for reassurance|main model already gives a solid answer|solid answer)\b/i;
 const CHECKPOINT_RE = /\b(checkpoint|multi-step implementation|clearer boundary|interrupt now|wait until there is a clearer boundary|mid implementation)\b/i;
@@ -180,8 +180,105 @@ function reviewPolicy(label: ReviewLabel): ReviewPolicy {
   }
 }
 
+const TOKEN_ACTION_RE = /^(?:revoke|revok|rotate|rotat|reset|invalidat|regenerat|regenerate|exfiltrate|exfiltrat|expos|expose|hardcod|hardcode|paste|share|send|commit|storing|store|stored|stor|delete|delet|remove|remov|print|dump|disclos|disclose|copi|copy|export|import|leak)(?:ed|ing|s|es|e|ion|ions)?$/;
+const TOKEN_DIRECT_ACTION_RE = /^(?:revoke|revok|rotate|rotat|reset|invalidat|regenerat|regenerate|exfiltrate|exfiltrat|expos|expose|hardcod|hardcode|paste|share|send|delet|delete|copi|copy|export|import|remove|stor|store|commit|print|dump|disclos|disclose|leak)(?:ed|ing|s|es|e)?$/;
+const TOKEN_DIRECT_ACTION_REQUIRES_CONTEXT_PREFIXES = ["copy", "export", "import", "remove", "store"];
+const TOKEN_CONTEXT_PREFIXES = ["api", "access", "hf", "hugging", "face", "github", "gitlab", "secret", "credential", "personal", "pat", "oauth", "bearer", "auth", "env", "environment", "dotenv", "openai", "anthropic", "azure", "aws", "gcp", "service", "compromis", "compromised", "stale", "leaked", "exposed", "exposure", "key"];
+const HISTORICAL_TOKEN_RE = /\b(previously|prior|history|historical|thread|earlier)\b/i;
+
 function isSafetySensitive(text: string): boolean {
-  return SAFETY_RE.test(text);
+  const lower = String(text ?? "").toLowerCase();
+  const hasTokenWord = /\btokens?\b/i.test(lower);
+  if (!SAFETY_RE.test(text) && !hasTokenWord) return false;
+
+  const hasNonTokenSafetySignal = /\b(rm\s+-rf|sudo|shutdown|reboot|mkfs|chown|chmod\s+-R|git\s+push\b[\s\S]*--force(?:-with-lease)?|curl\b[\s\S]*\|\s*(?:sh|bash)\b|wget\b[\s\S]*\|\s*(?:sh|bash)\b|drop\s+table|delete\s+database|credential|password|secret)\b/i.test(lower);
+  if (SAFETY_RE.test(text) && hasNonTokenSafetySignal) return true;
+
+  if (!hasTokenWord) return true;
+
+  const hasTokenAction = hasTokenCredentialAction(lower);
+  if (!hasTokenAction) return false;
+
+  const historicalTokenMention = isHistoricalTokenMention(lower);
+  if (!historicalTokenMention) return true;
+
+  return hasActiveHistoricalTokenAction(lower);
+}
+
+function hasTokenCredentialAction(lower: string): boolean {
+  return detectTokenCredentialAction(lower).hasAny;
+}
+
+function hasActiveHistoricalTokenAction(lower: string): boolean {
+  return detectTokenCredentialAction(lower).hasActiveDirect;
+}
+
+function detectTokenCredentialAction(lower: string): { hasAny: boolean; hasActiveDirect: boolean } {
+  if (!/\btokens?\b/i.test(lower)) return { hasAny: false, hasActiveDirect: false };
+
+  const words = lower.match(/[a-z0-9_]+/g) ?? [];
+  const tokenIndexes = words.reduce<number[]>((acc, word, index) => {
+    if (/^tokens?$/.test(word)) acc.push(index);
+    return acc;
+  }, []);
+  if (!tokenIndexes.length) return { hasAny: false, hasActiveDirect: false };
+
+  const wordWindow = 8;
+  const tokenOnlyWord = tokenIndexes.length === 1 && words.length === 1;
+  if (tokenOnlyWord) return { hasAny: false, hasActiveDirect: false };
+
+  let hasAny = false;
+  let hasActiveDirect = false;
+
+  for (const tokenIndex of tokenIndexes) {
+    const start = Math.max(0, tokenIndex - wordWindow);
+    const end = Math.min(words.length, tokenIndex + wordWindow + 1);
+    let hasContextualAction = false;
+    let hasContext = false;
+    let hasPotentialActiveContextualAction = false;
+
+    for (let i = start; i < end; i++) {
+      const word = words[i];
+      const isRotationNoun = word === "rotation";
+      if (TOKEN_DIRECT_ACTION_RE.test(word)) {
+        const requiresContext = TOKEN_DIRECT_ACTION_REQUIRES_CONTEXT_PREFIXES.some((prefix) => word.startsWith(prefix));
+        if (requiresContext) {
+          hasContextualAction = true;
+          if (!word.endsWith("ed")) hasPotentialActiveContextualAction = true;
+          if (hasContext && !word.endsWith("ed")) {
+            hasAny = true;
+            hasActiveDirect = true;
+          }
+          continue;
+        }
+
+        hasAny = true;
+        if (!word.endsWith("ed")) hasActiveDirect = true;
+        continue;
+      }
+      if (isRotationNoun) {
+        hasContextualAction = true;
+        if (hasContext) {
+          hasAny = true;
+        }
+        continue;
+      }
+      if (TOKEN_ACTION_RE.test(word)) hasContextualAction = true;
+      if (TOKEN_CONTEXT_PREFIXES.some((prefix) => word.startsWith(prefix))) hasContext = true;
+      if (hasContext && hasContextualAction) {
+        hasAny = true;
+        if (hasPotentialActiveContextualAction) hasActiveDirect = true;
+      }
+    }
+  }
+
+  return { hasAny, hasActiveDirect };
+}
+
+function isHistoricalTokenMention(lower: string): boolean {
+  if (!/\btokens?\b/i.test(lower)) return false;
+  if (!HISTORICAL_TOKEN_RE.test(lower)) return false;
+  return /\b(?:hf|hugging\s*face)\b/i.test(lower);
 }
 
 function hasQuickEditSignal(text: string): boolean {

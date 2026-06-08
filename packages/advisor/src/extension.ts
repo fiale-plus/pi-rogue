@@ -61,6 +61,9 @@ const MAX_CHECKIN_INTERVAL_MINUTES = 240;
 const STATE_VERSION = 1;
 const checkinLocks = new Set<string>();
 
+const REVIEW_TASK_ACTIONS_LIMIT = 2;
+const ADVISORY_SIGNALS_LIMIT = 4;
+
 // ── SOTA models (ordered by preference) ───────────────────────────────────
 const SOTA_CHAIN: Array<{ provider: string; model: string; label: string }> = [
   { provider: "openai-codex", model: "gpt-5.5", label: "GPT-5.5 (Codex)" },
@@ -81,6 +84,9 @@ interface SessionState {
   advisorCalls: number;
   cacheHits: number;
   followUp: string;
+  followUpTask?: string;
+  reviewSignals: string[];
+  reviewSignalsTask?: string;
   router: {
     preflight?: AdvisorRouteDecision;
     review?: AdvisorRouteDecision;
@@ -114,6 +120,9 @@ function defaultState(): SessionState {
     advisorCalls: 0,
     cacheHits: 0,
     followUp: "",
+    followUpTask: undefined,
+    reviewSignals: [],
+    reviewSignalsTask: undefined,
     router: {},
     checkin: { queued: false },
     reviewControl: defaultReviewControl(),
@@ -182,6 +191,9 @@ function loadState(): SessionState {
     advisorCalls: raw.advisorCalls ?? 0,
     cacheHits: raw.cacheHits ?? 0,
     followUp: raw.followUp ?? "",
+    followUpTask: raw.followUpTask,
+    reviewSignals: Array.isArray(raw.reviewSignals) ? raw.reviewSignals.map((line: unknown) => sanitizeAdvisorText(line).trim()).filter(Boolean).slice(-MAX_NOTES) : [],
+    reviewSignalsTask: raw.reviewSignalsTask,
     router: {
       preflight: raw.router?.preflight,
       review: raw.router?.review,
@@ -235,37 +247,31 @@ const ADVISOR_SYSTEM = `You are a senior engineering advisor. Use the session br
 - Flag security concerns, architecture risks, and test gaps.
 - Reference specific files or lines when possible.`;
 
-const REVIEW_SYSTEM = `You are a senior reviewer. An AI agent just completed work. Assess it and return ONLY valid JSON.
+const REVIEW_SYSTEM = `You are a senior reviewer. An AI agent just completed work. Return ONLY valid JSON.
 
-## Verdicts
-- **on_track**: Work is complete. Changes are correct, tests pass (if applicable), no outstanding issues. This is the default for clearly finished work.
-- **course_correct**: Work is mostly done but needs specific changes. Minor fixes, adjustments, or refinements required. Be specific about what needs to change.
-- **not_done**: Work is incomplete, failing, or has critical errors. The agent has not finished the task. Include what is missing or broken.
+## Required shape
+{
+  "task": "exact active task",
+  "verdict": "on_track|course_correct|not_done|skip",
+  "task_actions": ["task-critical action"],
+  "advisory_signals": ["non-blocking signal"],
+  "pivot": {
+    "recommended": false,
+    "blocking": false,
+    "rationale": "why this is a pivot"
+  },
+  "summary": "short review summary",
+  "reason": "same as summary if different",
+  "notify": false
+}
 
-## Confidence Calibration
-- 0.80+ = clear signal (e.g., explicit "done" with file changes, or explicit errors)
-- 0.60-0.79 = moderate signal (e.g., partial completion, some issues noted)
-- <0.60 = weak signal — defer rather than force a verdict
-
-## Guidelines
-- Focus on MATERIAL changes (logic, behavior, correctness). Ignore cosmetic changes (formatting, comments, whitespace).
-- If the agent explicitly states "done"/"fixed"/"implemented" AND file changes are small/simple → on_track.
-- If the agent states "done" BUT there are errors or incomplete logic → course_correct or not_done.
-- If the agent states "incomplete"/"wip"/"todo" → not_done.
-- Actions should be concrete next steps (2 max), not vague suggestions.
-- Checklist items are optional — include only when there are specific verification steps.
-- notify is always false for this system.
-
-## Examples
-
-Example 1 (on_track):
-{ "verdict": "on_track", "summary": "Added new endpoint and tests pass", "actions": [], "checklist": ["Verify endpoint returns 200"], "notify": false }
-
-Example 2 (course_correct):
-{ "verdict": "course_correct", "summary": "Refactored module but error handling was removed", "actions": ["Restore error handling in handleRequest"], "checklist": [], "notify": false }
-
-Example 3 (not_done):
-{ "verdict": "not_done", "summary": "Migration script has syntax errors and missing table reference", "actions": ["Fix syntax errors in migration.sql", "Add missing users table reference"], "checklist": ["Verify migration runs cleanly"], "notify": false }`;
+## Rules
+- Preserve and prioritize the active task before output decisions.
+- Only list truly required "task_actions" that move the original task forward.
+- Put useful but non-commanding findings in "advisory_signals".
+- Put pivots in "pivot"; only set blocking=true when there is an explicit security/data-loss risk, impossible prerequisite, or clear goal divergence.
+- Non-blocking pivot is not a command to switch tasks. If blocking pivots are recommended, include explicit rationale and require user confirmation before switching.
+`;
 
 // ── Helpers ───────────────────────────────────────────────────────────────
 
@@ -313,6 +319,102 @@ function noteText(note: unknown): string {
 
 function normalizeReviewSignals(materialSignals: string[] = []): string[] {
   return [...new Set(materialSignals.filter(Boolean).map((signal) => squish(signal)))].sort();
+}
+
+function normalizeReviewList(values: unknown, limit = 4): string[] {
+  if (typeof values === "string") {
+    const trimmed = sanitizeAdvisorText(values).trim();
+    return trimmed ? [trimmed] : [];
+  }
+  if (!Array.isArray(values)) return [];
+  const out = values
+    .map((value) => sanitizeAdvisorText(value).trim())
+    .filter((value): value is string => value.length > 0)
+    .slice(0, limit);
+  return [...new Set(out.map((value) => squish(value, 220)))];
+}
+
+function normalizeReviewVerdict(raw: unknown): ReviewVerdict {
+  const value = String(raw ?? "").trim().toLowerCase();
+  if (value === "on_track" || value === "course_correct" || value === "not_done" || value === "skip") {
+    return value as ReviewVerdict;
+  }
+  return "course_correct";
+}
+
+function toBoolean(value: unknown): boolean {
+  return value === true || value === "true" || String(value).trim().toLowerCase() === "true";
+}
+
+function isBlockingPivotCandidate(raw: { recommended?: unknown; blocking?: unknown; rationale?: unknown }): boolean {
+  if (!toBoolean(raw.recommended) || !toBoolean(raw.blocking)) return false;
+  const reason = sanitizeAdvisorText(raw.rationale).toLowerCase();
+  if (!reason) return false;
+  return /(security|data[-_ ]?loss|irreversible|prerequisite|impossible|cannot\s+complete|does not align|goal divergence|clear divergence|risk of data|critical)/.test(reason);
+}
+
+function parsedPivot(raw: unknown): ParsedReviewPivot {
+  const pivot = (raw && typeof raw === "object") ? raw as Record<string, unknown> : {};
+  const rationale = sanitizeAdvisorText(pivot.rationale || pivot.reason || "").trim();
+  const blocking = toBoolean(pivot.blocking);
+  const candidate = {
+    recommended: toBoolean(pivot.recommended) || blocking,
+    blocking: false,
+    rationale,
+    confidence: Number(pivot.confidence),
+    requiresConfirmation: true,
+  };
+  const isAllowedBlock = isBlockingPivotCandidate({
+    recommended: pivot.recommended,
+    blocking: candidate.recommended && blocking,
+    rationale,
+  });
+  return {
+    ...candidate,
+    blocking: isAllowedBlock,
+  };
+}
+
+export function parseReviewPayload(raw: string, activeTask: string): ParsedReviewPayload | null {
+  try {
+    const text = String(raw || "").trim();
+    if (!text) return null;
+    const cleaned = text.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/i, "");
+    const parsed = JSON.parse(cleaned) as Record<string, unknown>;
+    if (!parsed || typeof parsed !== "object") return null;
+
+    const task = sanitizeAdvisorText(parsed.task || parsed.currentTask || activeTask || "").trim() || sanitizeAdvisorText(activeTask).trim();
+    const summary = sanitizeAdvisorText(parsed.summary).trim() || sanitizeAdvisorText(parsed.result).trim();
+    const reason = sanitizeAdvisorText(parsed.reason).trim() || sanitizeAdvisorText(parsed.notes).trim() || summary;
+    const verdict = normalizeReviewVerdict(parsed.verdict ?? "");
+    const taskActions = normalizeReviewList(parsed.task_actions ?? parsed.actions, REVIEW_TASK_ACTIONS_LIMIT);
+    const advisorySignals = normalizeReviewList(parsed.advisory_signals ?? [], ADVISORY_SIGNALS_LIMIT);
+    const pivot = parsedPivot(parsed.pivot as Record<string, unknown> | undefined);
+
+    return {
+      activeTask: task,
+      verdict,
+      taskActions,
+      advisorySignals,
+      pivot,
+      summary,
+      reason,
+    };
+  } catch {
+    return null;
+  }
+}
+
+export function isTaskContinuation(previousTask: string, nextTask: string): boolean {
+  const prev = normalizeTask(previousTask);
+  const next = normalizeTask(nextTask);
+  if (!prev || !next) return true;
+  if (prev === next) return true;
+  return prev.includes(next) || next.includes(prev);
+}
+
+function normalizeTask(task: string): string {
+  return squish(task, 200).toLowerCase();
 }
 
 function reviewMaterialSignature(state: SessionState, delta: string, meta: ReviewMaterialMeta): string {
@@ -390,6 +492,9 @@ function persistReviewState(state: SessionState, includeReviewRoute: boolean): v
   const persisted = loadState();
   persisted.reviewControl = state.reviewControl;
   persisted.followUp = state.followUp;
+  persisted.followUpTask = state.followUpTask;
+  persisted.reviewSignals = state.reviewSignals;
+  persisted.reviewSignalsTask = state.reviewSignalsTask;
   persisted.advisorPauseUntilTurn = state.advisorPauseUntilTurn;
   if (includeReviewRoute && state.router.review) {
     persisted.router.review = state.router.review;
@@ -437,9 +542,73 @@ type ReviewMaterialMeta = {
   materialSignals?: string[];
 };
 
+export type ReviewVerdict = "on_track" | "course_correct" | "not_done" | "skip";
+
+export type ParsedReviewPivot = {
+  recommended: boolean;
+  blocking: boolean;
+  rationale: string;
+  confidence?: number;
+  requiresConfirmation: boolean;
+};
+
+export type ParsedReviewPayload = {
+  activeTask: string;
+  verdict: ReviewVerdict;
+  taskActions: string[];
+  advisorySignals: string[];
+  pivot: ParsedReviewPivot;
+  summary: string;
+  reason: string;
+};
+
 function normalizeAdvisorActions(actions: unknown): string[] {
   const raw = Array.isArray(actions) ? actions : typeof actions === "string" ? [actions] : [];
   return raw.map((action) => squish(action, 200)).filter(Boolean).slice(0, 2);
+}
+
+function buildAdvisorySignalsBlock(task: string, advisorySignals: string[], pivot: ParsedReviewPivot): string {
+  if (!advisorySignals.length && !pivot.recommended) return "";
+  const parts = [
+    task ? `Active task: ${sanitizeAdvisorText(task).slice(0, 220)}` : "",
+    advisorySignals.length ? `Advisory signals (non-commanding): ${advisorySignals.join("; ")}` : "",
+    pivot.recommended
+      ? `Pivot (${pivot.blocking ? "blocking" : "non-blocking"}): ${pivot.rationale || "review before task switch"}${pivot.blocking ? " (requires user confirmation)" : ""}`
+      : "",
+  ].filter(Boolean);
+  return parts.join("\n");
+}
+
+export function consumeTaskScopedReviewSignals(state: SessionState, task: string): string {
+  if (!state.reviewSignals.length) return "";
+  const signalTask = state.reviewSignalsTask ?? "";
+  if (signalTask && !isTaskContinuation(signalTask, task)) {
+    state.reviewSignals = [];
+    state.reviewSignalsTask = undefined;
+    return "";
+  }
+  const text = state.reviewSignals.join("\n");
+  state.reviewSignals = [];
+  state.reviewSignalsTask = undefined;
+  return text;
+}
+
+export function consumeTaskScopedFollowUp(state: SessionState, task: string): string {
+  if (!state.followUp) return "";
+  if (!state.followUpTask) {
+    const text = state.followUp;
+    state.followUp = "";
+    return text;
+  }
+  if (!isTaskContinuation(state.followUpTask, task)) {
+    state.followUp = "";
+    state.followUpTask = undefined;
+    return "";
+  }
+  const text = state.followUp;
+  state.followUp = "";
+  state.followUpTask = undefined;
+  return text;
 }
 
 function comparableAdvisorText(text: string): string {
@@ -1045,9 +1214,8 @@ async function doReview(pi: ExtensionAPI, ctx: any, trigger: string, delta: stri
     cache[rk] = raw;
     saveCache(cache);
 
-    let json: any = null;
-    try { json = JSON.parse(raw.replace(/^```(?:json)?\n?/i, "").replace(/\n?```$/i, "")); } catch { /* ignore */ }
-    if (!json) {
+    const parsed = parseReviewPayload(raw, state.lastTask);
+    if (!parsed) {
       finalDecision = "defer";
       finalReason = "unparseable verdict";
       markReviewApplied(state, signature, trigger, finalDecision, finalReason, true);
@@ -1056,7 +1224,7 @@ async function doReview(pi: ExtensionAPI, ctx: any, trigger: string, delta: stri
       return;
     }
 
-    if (json.verdict === "skip") {
+    if (parsed.verdict === "skip") {
       finalDecision = "defer";
       finalReason = "explicit skip";
       markReviewApplied(state, signature, trigger, finalDecision, finalReason, true);
@@ -1065,31 +1233,49 @@ async function doReview(pi: ExtensionAPI, ctx: any, trigger: string, delta: stri
       return;
     }
 
-    if (json.verdict === "on_track") {
+    if (parsed.verdict === "on_track") {
       finalDecision = "continue";
-      finalReason = (json.reason || json.summary || "review result").slice(0, 120);
+      finalReason = parsed.reason || parsed.summary || "review result";
+      finalReason = finalReason.slice(0, 120);
+      state.followUp = "";
+      state.followUpTask = undefined;
+      state.reviewSignals = [];
+      state.reviewSignalsTask = undefined;
       markReviewApplied(state, signature, trigger, finalDecision, finalReason, true);
       persistReviewState(state, true);
       finalized = true;
       return;
     }
 
-    const decision = json.verdict === "course_correct" ? "review"
-      : json.verdict === "not_done" ? "review"
-        : "defer";
+    const decision = parsed.verdict === "course_correct" || parsed.verdict === "not_done" ? "review" : "defer";
     finalDecision = decision;
-    const rawReason = sanitizeAdvisorText(json.reason || json.summary || "review result");
-    finalReason = rawReason.slice(0, 120);
+    finalReason = (parsed.reason || parsed.summary || "review result").slice(0, 120);
 
     const display = formatAdvisorDisplay("advisor:llm", decision, finalReason);
     writeText(CURRENT_PATH, `${display}\n`);
-    sendAdvisorHint(pi, decision, rawReason, json.summary || "", json.actions || []);
 
-    if (json.verdict !== "on_track") {
-      state.followUp = [sanitizeAdvisorText(json.summary), ...normalizeAdvisorActions(json.actions)].filter(Boolean).join(" — ");
+    const reviewTask = parsed.activeTask || state.lastTask || "";
+    const hasTaskActions = parsed.taskActions.length > 0;
+    if (hasTaskActions) {
+      state.followUp = [sanitizeAdvisorText(parsed.summary), ...parsed.taskActions].filter(Boolean).join(" — ");
+      state.followUpTask = reviewTask;
+      sendAdvisorHint(pi, decision, finalReason, parsed.summary || "", parsed.taskActions);
+    } else {
+      state.followUp = "";
+      state.followUpTask = undefined;
     }
 
-    markReviewApplied(state, signature, trigger, finalDecision, finalReason, false);
+    const advisoryText = buildAdvisorySignalsBlock(reviewTask, parsed.advisorySignals, parsed.pivot);
+    if (advisoryText) {
+      state.reviewSignals = [advisoryText];
+      state.reviewSignalsTask = reviewTask;
+      sendAdvisorAnswer(pi, advisoryText);
+    } else {
+      state.reviewSignals = [];
+      state.reviewSignalsTask = undefined;
+    }
+
+    markReviewApplied(state, signature, trigger, finalDecision, finalReason, !hasTaskActions);
     persistReviewState(state, true);
     finalized = true;
   } finally {
@@ -1156,6 +1342,7 @@ export function registerAdvisor(pi: ExtensionAPI): void {
     setPiRogueStatus(ctx, cfg, state);
     const prompt = typeof event.prompt === "string" && event.prompt.trim() ? squish(event.prompt, 1000) : "";
     if (prompt) state.lastTask = prompt;
+    const currentTask = state.lastTask || "";
     const briefText = brief(state);
     const brokerBrief = contextBrokerBrief(pi);
     const intent = prompt ? classifyIntent(prompt) : "";
@@ -1192,8 +1379,11 @@ export function registerAdvisor(pi: ExtensionAPI): void {
     }
     appendRouteLog(route);
     state.router.preflight = route;
-    const follow = state.followUp;
-    if (follow) {
+
+    const hadFollowUp = Boolean(state.followUp);
+    const follow = consumeTaskScopedFollowUp(state, currentTask);
+    const reviewSignals = consumeTaskScopedReviewSignals(state, currentTask);
+    if (hadFollowUp) {
       consumeReviewFollowUp(state);
     }
     saveState(state);
@@ -1207,6 +1397,7 @@ export function registerAdvisor(pi: ExtensionAPI): void {
         event.systemPrompt,
         follow ? `Advisor follow-up:\n${follow}` : "",
         note,
+        reviewSignals ? `Advisor signals (non-commanding):\n${reviewSignals}` : "",
         controlTag,
         briefText ? `Brief (cache-aware):\n${briefText}` : "",
         brokerBrief ? `Context broker brief (lookup-first):\n${brokerBrief}` : "",
