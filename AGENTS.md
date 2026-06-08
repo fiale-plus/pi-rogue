@@ -20,13 +20,15 @@ This AGENTS file intentionally stays agentic (not maintainer process).
 
 ### Release policy (consolidated)
 
-- **Single artefact only:** All releases use the `pi-rogue-bundle` artefact (`@fiale-plus/pi-rogue-bundle` on npm).
-  - Git tag: `pi-rogue-bundle-<semver>` (e.g. `pi-rogue-bundle-0.2.0`)
-  - Triggers only the bundle publish workflow.
-- **Advisor and orchestration releases paused:** Their packages are `private: true`. No new `advisor-*` or `pi-rogue-orchestration-*` tags/releases. Logic changes are made in `packages/advisor/` and `packages/orchestration/`, but ship exclusively inside bundle releases (via `bundledDependencies` for a true single artefact).
-- **Recommended user install:** `pi install npm:@fiale-plus/pi-rogue-bundle`
-- **Do not:** cut separate releases for leaves; update leaf package.json versions only as dev markers (CI for bundle handles published version from tag).
+- **Single public artefact only:** All new releases are published as `@fiale-plus/pi-rogue`.
+  - Git tag: `pi-rogue-<semver>` (e.g. `pi-rogue-0.2.0`)
+  - Triggers only the canonical publish workflow.
+- **Advisor and orchestration releases remain paused:** Their packages are `private: true` and have no independent tags/releases; logic changes are still made in `packages/advisor/` and `packages/orchestration/`, but ship exclusively inside the `@fiale-plus/pi-rogue` bundle release.
+- **Recommended user install:** `pi install npm:@fiale-plus/pi-rogue`
+- **Legacy artifact policy:** keep `@fiale-plus/pi-rogue-bundle`, `@fiale-plus/pi-rogue-advisor`, and `@fiale-plus/pi-rogue-orchestration` in npm as deprecated/thombstone tracks that explicitly point users to `@fiale-plus/pi-rogue`.
+- **Do not:** cut separate user-facing releases for advisor/orchestration/bundle aliases.
+- **Do not:** publish separate releases for non-user-facing leaves except for local dev markers; leaf package.json version bumps remain development-only.
 - Full details, checklists, naming, and process: see `docs/release.md` and `.github/ISSUE_TEMPLATE/release.md`.
-- Workflows: only `.github/workflows/npm-publish-bundle.yml` is active for releases.
+- Workflows: only the canonical publish workflow under `.github/workflows/` is active for releases.
 
 See also the referenced docs for the canonical checklists.

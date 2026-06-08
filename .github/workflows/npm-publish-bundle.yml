@@ -1,4 +1,4 @@
-name: Publish Pi-Rogue Bundle to npm
+name: Publish Pi-Rogue to npm
 
 on:
   release:
@@ -10,7 +10,7 @@ permissions:
 
 jobs:
   publish:
-    if: startsWith(github.event.release.tag_name, 'pi-rogue-bundle-')
+    if: startsWith(github.event.release.tag_name, 'pi-rogue-')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -28,10 +28,10 @@ jobs:
           npm run check
           npm test
 
-      - name: Sync bundle package version from release tag
+      - name: Sync canonical package version from release tag
         working-directory: packages/bundle
         run: |
-          RAW_TAG="${GITHUB_REF_NAME#pi-rogue-bundle-}"
+          RAW_TAG="${GITHUB_REF_NAME#pi-rogue-}"
           VERSION="${RAW_TAG#v}"
           npm version "$VERSION" --no-git-tag-version --allow-same-version
           echo "Synced packages/bundle/package.json to $VERSION"
@@ -46,7 +46,7 @@ jobs:
           cp -a ../../packages/orchestration node_modules/@fiale-plus/pi-rogue-orchestration
           echo "Vendored local (git-at-tag) core, advisor, context-broker, and orchestration into bundle for bundling as single artefact"
 
-      - name: Publish bundle package
+      - name: Publish canonical package
         run: npm publish ./packages/bundle --provenance --access public
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
@@ -83,3 +83,11 @@ jobs:
 
           echo "Timed out waiting for $PKG@$VERSION to appear on npm"
           exit 1
+
+      - name: Deprecate legacy packages
+        run: |
+          npm deprecate "@fiale-plus/pi-rogue-bundle@*" "Deprecated: replaced by @fiale-plus/pi-rogue. Install with \"pi install npm:@fiale-plus/pi-rogue\"."
+          npm deprecate "@fiale-plus/pi-rogue-advisor@*" "Deprecated: advisor/orchestration are bundled in @fiale-plus/pi-rogue. Use that package."
+          npm deprecate "@fiale-plus/pi-rogue-orchestration@*" "Deprecated: advisor/orchestration are bundled in @fiale-plus/pi-rogue. Use that package."
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

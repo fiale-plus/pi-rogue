@@ -2,16 +2,19 @@
 
 Use this when cutting a new release.
 
-**Current policy (as of this doc):** Releases are consolidated under the single published artefact `@fiale-plus/pi-rogue-bundle`. Direct releases of `@fiale-plus/pi-rogue-advisor` and `@fiale-plus/pi-rogue-orchestration` are on pause (their packages are marked private in source; no new npm releases or GitHub tags for them). All logic changes ship via bundle releases.
+**Current policy (as of this doc):** Releases are consolidated under a single public package, `@fiale-plus/pi-rogue`.
+Direct releases of `@fiale-plus/pi-rogue-advisor` and `@fiale-plus/pi-rogue-orchestration` are on pause (their packages are `private: true` in source; no independent npm tags/releases).
+Legacy alias package `@fiale-plus/pi-rogue-bundle` is deprecated and redirects users to `@fiale-plus/pi-rogue`.
 
 ## Checklist
 
-- [ ] Version is bumped and committed (for the bundle; leaves use dev versions only)
+- [ ] Version is bumped and committed (for `@fiale-plus/pi-rogue`; leaves keep dev-marker versions only)
 - [ ] Changelog is provisioned for this release
 - [ ] Release notes are drafted
 - [ ] CI is green on the release commit
-- [ ] npm publish workflow is ready (only the bundle workflow)
+- [ ] publish workflow is ready (canonical publish workflow only)
 - [ ] Post-release verification passes (`npm view`, install smoke test)
+- [ ] Legacy artefacts are deprecated against latest `@fiale-plus/pi-rogue`
 
 ## Changelog provisioning
 
@@ -24,12 +27,12 @@ Prefer the changelog entry to be done before the release is cut, not after.
 
 ## Naming policy
 
-- Only `pi-rogue-bundle` releases are cut:
-  - Tag format: `pi-rogue-bundle-<semver>` (e.g. `pi-rogue-bundle-0.2.0`)
+- Only `pi-rogue` releases are cut:
+  - Tag format: `pi-rogue-<semver>` (e.g. `pi-rogue-0.2.0`)
   - Release title: `<semver>` (e.g. `0.2.0`)
-- No new tags or releases for `advisor-*` or `pi-rogue-orchestration-*` (paused).
-- Keep the component prefix in the tag only.
-- Use the same note sections for the bundle release:
+- No new tags or releases for `advisor-*` or `pi-rogue-orchestration-*` packages (paused).
+- Keep the package prefix in the tag only.
+- Use this note shape for release notes:
   - `## Summary`
   - `## Changes`
   - `## Validation`
@@ -37,17 +40,29 @@ Prefer the changelog entry to be done before the release is cut, not after.
 ## Greenhouse / paused packages
 
 - Internal helper packages (`pi-rogue-guardrails`, `pi-rogue-brain`, `pi-rogue-repo-arch`) remain lab/greenhouse scope and are not published.
-- `@fiale-plus/pi-rogue-advisor` and `@fiale-plus/pi-rogue-orchestration` releases are paused (see package.json "private": true). Their code evolves in this repo; updates ship exclusively via the bundle artefact.
-- `@fiale-plus/pi-rogue-bundle` is the single public/consolidated artefact for advisor + orchestration logic. Install via `pi install npm:@fiale-plus/pi-rogue-bundle`.
+- `@fiale-plus/pi-rogue-advisor` and `@fiale-plus/pi-rogue-orchestration` releases are paused. Their code evolves in this repo and ships inside `@fiale-plus/pi-rogue`.
+- `@fiale-plus/pi-rogue-bundle`, `@fiale-plus/pi-rogue-advisor`, and `@fiale-plus/pi-rogue-orchestration` should be deprecation tracks:
+  - Keep install/installers discoverable but warning-forwarding only.
+  - Their current published versions should have deprecation notices pointing to `@fiale-plus/pi-rogue`.
 
 ## Release process notes
 
-- Cut a GitHub release with tag `pi-rogue-bundle-<semver>` (this triggers only the bundle publish workflow).
-- The bundle publish workflow:
+- Cut a GitHub release with tag `pi-rogue-<semver>` (this triggers only the canonical publish workflow).
+- Canonical publish workflow:
   - Runs checks + tests.
-  - Syncs the bundle version from the tag (local only).
-  - Publishes the bundle (which bundles the advisor/orchestration logic via bundledDependencies for single-artefact install).
-- No need to release leaves first (they are no longer independently released).
-- For users: always use the bundle; direct leaf installs are deprecated/paused.
+  - Syncs package version from the tag (local only).
+  - Publishes `@fiale-plus/pi-rogue` with bundled dependencies for a true single-artefact install.
+- After publishing, deprecate legacy artefacts (`@fiale-plus/pi-rogue-bundle`, `@fiale-plus/pi-rogue-advisor`, `@fiale-plus/pi-rogue-orchestration`) so installs of those names warn users to migrate.
+- Post-release verification includes:
+  - `npm view` confirms new version is visible for `@fiale-plus/pi-rogue`.
+  - `npm info <legacy-pkg> deprecated` shows the migration message.
+
+Example legacy deprecation commands (run in the release workflow):
+
+```bash
+npm deprecate "@fiale-plus/pi-rogue-bundle@*" "Deprecated: replaced by @fiale-plus/pi-rogue. Install via `pi install npm:@fiale-plus/pi-rogue`."
+npm deprecate "@fiale-plus/pi-rogue-advisor@*" "Deprecated: advisor/orchestration are now bundled in @fiale-plus/pi-rogue. Install via `pi install npm:@fiale-plus/pi-rogue`."
+npm deprecate "@fiale-plus/pi-rogue-orchestration@*" "Deprecated: orchestration is now bundled in @fiale-plus/pi-rogue. Install via `pi install npm:@fiale-plus/pi-rogue`."
+```
 
 See also: `.github/ISSUE_TEMPLATE/release.md`, AGENTS.md (maintenance references), and the individual package READMEs.
