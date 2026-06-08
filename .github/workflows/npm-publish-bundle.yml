@@ -86,8 +86,20 @@ jobs:
 
       - name: Deprecate legacy packages
         run: |
-          npm deprecate "@fiale-plus/pi-rogue-bundle@*" "Deprecated: replaced by @fiale-plus/pi-rogue. Install with \"pi install npm:@fiale-plus/pi-rogue\"."
-          npm deprecate "@fiale-plus/pi-rogue-advisor@*" "Deprecated: advisor/orchestration are bundled in @fiale-plus/pi-rogue. Use that package."
-          npm deprecate "@fiale-plus/pi-rogue-orchestration@*" "Deprecated: advisor/orchestration are bundled in @fiale-plus/pi-rogue. Use that package."
+          set -e
+
+          deprecate_with_retry() {
+            local pkg="$1"
+            local msg="$2"
+            if ! npm deprecate "$pkg" "$msg"; then
+              echo "Warning: npm deprecate failed for ${pkg} (continuing)"
+              return 0
+            fi
+          }
+
+          deprecate_with_retry "@fiale-plus/pi-rogue-bundle@*" "Deprecated: replaced by @fiale-plus/pi-rogue. Install with \"pi install npm:@fiale-plus/pi-rogue\"."
+          deprecate_with_retry "@fiale-plus/pi-rogue-advisor@*" "Deprecated: advisor/orchestration are bundled in @fiale-plus/pi-rogue. Use that package."
+          deprecate_with_retry "@fiale-plus/pi-rogue-orchestration@*" "Deprecated: advisor/orchestration are bundled in @fiale-plus/pi-rogue. Use that package."
+          deprecate_with_retry "@fiale-plus/pi-orchestration@*" "Deprecated: replaced by @fiale-plus/pi-rogue. Install via \"pi install npm:@fiale-plus/pi-rogue\"."
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
