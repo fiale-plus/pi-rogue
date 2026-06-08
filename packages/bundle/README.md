@@ -1,6 +1,6 @@
-# Pi-Rogue Bundle
+# @fiale-plus/pi-rogue
 
-`@fiale-plus/pi-rogue-bundle` is the **single consolidated public artefact** for Pi-Rogue.
+`@fiale-plus/pi-rogue` is the **single consolidated public artefact** for Pi-Rogue.
 
 It stitches together (and bundles for a true single-package install):
 
@@ -14,7 +14,7 @@ Direct installs of the advisor/orchestration packages are paused (marked private
 ## Install (recommended)
 
 ```bash
-pi install npm:@fiale-plus/pi-rogue-bundle
+pi install npm:@fiale-plus/pi-rogue
 ```
 
 For local monorepo dev:
@@ -29,10 +29,10 @@ npm install
 
 - **Lab / internal helpers are excluded from this bundle.**
 - The context-broker runtime is bundled and registered by default in the bundle.
-- Consumers can import the runtime through the bundle subpath: `@fiale-plus/pi-rogue-bundle/context-broker`.
+- Consumers can import the runtime through the bundle subpath: `@fiale-plus/pi-rogue/context-broker`.
 - Set `PI_CONTEXT_BROKER_ENABLED=false` before starting Pi to disable the `/context` command surface and prompt-load rewriting.
 - Optional durable broker storage can be enabled with `PI_CONTEXT_BROKER_DURABLE=true` or `PI_CONTEXT_BROKER_STORE_DIR=/path/to/store`; it defaults to SQLite/FTS and supports `PI_CONTEXT_BROKER_BACKEND=jsonl` for the legacy JSONL/blob backend.
-- `@fiale-plus/pi-rogue-bundle` is the only published surface for the logic.
+- `@fiale-plus/pi-rogue` is the only published surface for the logic.
 - Internal helper packages (`@fiale-plus/pi-rogue-guardrails`, `@fiale-plus/pi-rogue-brain`, `@fiale-plus/pi-rogue-repo-arch`) are maintained separately in the lab section and not published.
 
 ## Command surface
@@ -47,4 +47,4 @@ npm install
 
 ## Release notes
 
-Only `pi-rogue-bundle-<semver>` tags/releases are produced. See `docs/release.md` for the full clean policy and checklist.
+Only `pi-rogue-<semver>` tags/releases are produced. See `docs/release.md` for the full clean policy and checklist.

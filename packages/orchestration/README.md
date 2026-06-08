@@ -1,6 +1,6 @@
 # @fiale-plus/pi-rogue-orchestration
 
-> **Releases paused.** This package is now internal. All usage and updates are via the single consolidated `@fiale-plus/pi-rogue-bundle` artefact (see root README, `docs/release.md`, and AGENTS.md). Direct installs and independent releases are on pause; the package is marked private. Code here continues to evolve and ships inside bundle releases.
+> **Releases paused.** This package is now internal. All usage and updates are via the consolidated `@fiale-plus/pi-rogue` artefact (see root README, `docs/release.md`, and AGENTS.md). Direct installs and independent releases are on pause; the package is marked private. Code here continues to evolve and ships inside the canonical package release.
 
 ## What this package is
 
@@ -12,10 +12,10 @@ Session orchestration for Pi-Rogue built around three primitives:
 
 ## Install
 
-**For users:** Use the bundle (releases for this package are paused):
+**For users:** Use the canonical package (releases for this package are paused):
 
 ```bash
-pi install npm:@fiale-plus/pi-rogue-bundle
+pi install npm:@fiale-plus/pi-rogue
 ```
 
 **For local development (monorepo only):**

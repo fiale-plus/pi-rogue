@@ -212,7 +212,7 @@ The current implementation is split across a shared contract package and a runti
 - The in-memory and durable brokers support stable `ctx://...` handles, per-session byte/record caps, optional global cross-session caps, TTL pruning on reads, pinned artifacts, and lookup by handle, session, kind, tag, path, command prefix, branch, and text.
 - Omitted summaries render as metadata-only placeholders so raw payload text is not injected into prompt briefs by default.
 - The bundle registers the context broker by default in mainline. Rollback is `PI_CONTEXT_BROKER_ENABLED=false` followed by `/reload` or restart.
-- Bundle consumers can explicitly import the runtime from `@fiale-plus/pi-rogue-bundle/context-broker`; the private leaf package is not a separate public install target.
+- Bundle consumers can explicitly import the runtime from `@fiale-plus/pi-rogue/context-broker`; the private leaf package is not a separate public install target.
 - The command surface registers `/context status`, `/context brief`, `/context lookup <handle|text>`, `/context pin <handle>`, `/context export <handle>`, and `/context prune` with autocomplete, plus an LLM-callable `context_lookup` tool for exact handle dereferencing.
 - On reload/session start, the runtime backfills the current session branch from `toolResult` and prompt-visible `bashExecution` entries, deduped by session entry id, tolerant of malformed entries, and honoring Pi's `excludeFromContext` bash entries.
 - Prompt integration injects a bounded broker brief and uses the `context` hook to rewrite prompt-visible `toolResult` and `bashExecution` payloads to broker handles/summaries by default while preserving exact lookup.
