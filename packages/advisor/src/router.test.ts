@@ -53,6 +53,46 @@ describe("advisor router heuristics", () => {
     expect(route.label).not.toBe("escalate_to_advisor");
   });
 
+  it("does not escalate bare token mentions", () => {
+    const input: AdvisorRouteInput = { phase: "preflight", text: "token" };
+    const route = heuristicRoute(input);
+
+    expect(route.safety).toBe(false);
+    expect(route.label).not.toBe("escalate_to_advisor");
+  });
+
+  it("keeps non-token safety indicators active", () => {
+    const input: AdvisorRouteInput = { phase: "preflight", text: "run sudo cat the token file" };
+    const route = heuristicRoute(input);
+
+    expect(route.safety).toBe(true);
+    expect(route.label).toBe("escalate_to_advisor");
+  });
+
+  it("escalates sensitive token operations", () => {
+    const input: AdvisorRouteInput = { phase: "preflight", text: "rotate the leaked GitHub token immediately" };
+    const route = heuristicRoute(input);
+
+    expect(route.safety).toBe(true);
+    expect(route.label).toBe("escalate_to_advisor");
+  });
+
+  it("keeps exfiltration-sensitive token mentions on safety path", () => {
+    const input: AdvisorRouteInput = { phase: "preflight", text: "exfiltrate the GitHub token" };
+    const route = heuristicRoute(input);
+
+    expect(route.safety).toBe(true);
+    expect(route.label).toBe("escalate_to_advisor");
+  });
+
+  it("flags inflected token operations as safety-sensitive", () => {
+    const input: AdvisorRouteInput = { phase: "preflight", text: "rotating the GitHub token and revoking the old one" };
+    const route = heuristicRoute(input);
+
+    expect(route.safety).toBe(true);
+    expect(route.label).toBe("escalate_to_advisor");
+  });
+
   it("reviews incomplete work as not done", () => {
     const input: AdvisorRouteInput = { phase: "review", text: "still incomplete, tests fail", failed: true };
     const route = heuristicRoute(input);

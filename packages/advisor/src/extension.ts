@@ -1254,20 +1254,21 @@ async function doReview(pi: ExtensionAPI, ctx: any, trigger: string, delta: stri
     const display = formatAdvisorDisplay("advisor:llm", decision, finalReason);
     writeText(CURRENT_PATH, `${display}\n`);
 
+    const reviewTask = parsed.activeTask || state.lastTask || "";
     const hasTaskActions = parsed.taskActions.length > 0;
     if (hasTaskActions) {
       state.followUp = [sanitizeAdvisorText(parsed.summary), ...parsed.taskActions].filter(Boolean).join(" — ");
-      state.followUpTask = parsed.activeTask || state.lastTask || undefined;
+      state.followUpTask = reviewTask;
       sendAdvisorHint(pi, decision, finalReason, parsed.summary || "", parsed.taskActions);
     } else {
       state.followUp = "";
       state.followUpTask = undefined;
     }
 
-    const advisoryText = buildAdvisorySignalsBlock(parsed.activeTask || state.lastTask || "", parsed.advisorySignals, parsed.pivot);
+    const advisoryText = buildAdvisorySignalsBlock(reviewTask, parsed.advisorySignals, parsed.pivot);
     if (advisoryText) {
       state.reviewSignals = [advisoryText];
-      state.reviewSignalsTask = parsed.activeTask || state.lastTask || undefined;
+      state.reviewSignalsTask = reviewTask;
       sendAdvisorAnswer(pi, advisoryText);
     } else {
       state.reviewSignals = [];
@@ -1379,9 +1380,10 @@ export function registerAdvisor(pi: ExtensionAPI): void {
     appendRouteLog(route);
     state.router.preflight = route;
 
+    const hadFollowUp = Boolean(state.followUp);
     const follow = consumeTaskScopedFollowUp(state, currentTask);
     const reviewSignals = consumeTaskScopedReviewSignals(state, currentTask);
-    if (follow) {
+    if (hadFollowUp) {
       consumeReviewFollowUp(state);
     }
     saveState(state);
