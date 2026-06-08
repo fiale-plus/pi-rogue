@@ -1,0 +1,27 @@
+name: Deprecate legacy npm packages
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  deprecate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          registry-url: https://registry.npmjs.org
+
+      - name: Deprecate legacy packages
+        run: |
+          npm deprecate "@fiale-plus/pi-rogue-bundle@*" "Deprecated: replaced by @fiale-plus/pi-rogue. Install with \"pi install npm:@fiale-plus/pi-rogue\"."
+          npm deprecate "@fiale-plus/pi-rogue-advisor@*" "Deprecated: advisor/orchestration are bundled in @fiale-plus/pi-rogue. Install via \"pi install npm:@fiale-plus/pi-rogue\"."
+          npm deprecate "@fiale-plus/pi-rogue-orchestration@*" "Deprecated: advisor/orchestration are bundled in @fiale-plus/pi-rogue. Install via \"pi install npm:@fiale-plus/pi-rogue\"."
+          npm deprecate "@fiale-plus/pi-orchestration@*" "Deprecated: replaced by @fiale-plus/pi-rogue. Install via \"pi install npm:@fiale-plus/pi-rogue\"."
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
