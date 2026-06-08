@@ -12,6 +12,9 @@ type AdvisorState = Record<string, unknown> & {
   advisorCalls?: number;
   cacheHits?: number;
   followUp?: string;
+  followUpTask?: string;
+  reviewSignals?: unknown[];
+  reviewSignalsTask?: string;
   router?: Record<string, unknown>;
   checkin?: Record<string, unknown>;
   reviewControl?: {
@@ -80,6 +83,9 @@ export function resetAdvisorSessionContext(
     files: [],
     errors: [],
     followUp: "",
+    followUpTask: undefined,
+    reviewSignals: [],
+    reviewSignalsTask: undefined,
     reviewControl: {
       status: "idle",
       pending: false,

@@ -6,8 +6,11 @@ import {
   completeWithModelFallback,
   contentText,
   normalizeAdvisorConfig,
+  parseReviewPayload,
   sanitizeAdvisorText,
   shouldRunCheckin,
+  consumeTaskScopedFollowUp,
+  isTaskContinuation,
   type AdvisorConfig,
 } from "./extension.js";
 
@@ -97,6 +100,98 @@ describe("advisor message extraction", () => {
   it("does not redact ordinary repo or temp file paths", () => {
     const text = "inspect /Users/pavel/repos/fiale-plus/pi-rogue/packages/advisor/src/extension.ts and /tmp/benchmark-results.json";
     expect(sanitizeAdvisorText(text)).toBe(text);
+  });
+});
+
+describe("review output schema parsing", () => {
+  it("parses normal task correction payload and normalizes task actions", () => {
+    const parsed = parseReviewPayload(JSON.stringify({
+      task: "restore advisor task preservation",
+      verdict: "course_correct",
+      task_actions: ["Keep task focused on active objective", "Add routing guardrail"],
+      advisory_signals: ["Model can still benefit from extra check on pivot severity"],
+      pivot: { recommended: true, blocking: false, rationale: "Could be optimized to a smaller model for throughput" },
+      summary: "Task still needs focus guard.",
+      reason: "Focus drift risk",
+    }), "active fallback task");
+
+    expect(parsed).not.toBeNull();
+    expect(parsed?.verdict).toBe("course_correct");
+    expect(parsed?.activeTask).toBe("restore advisor task preservation");
+    expect(parsed?.taskActions).toEqual(["Keep task focused on active objective", "Add routing guardrail"]);
+    expect(parsed?.advisorySignals).toEqual(["Model can still benefit from extra check on pivot severity"]);
+    expect(parsed?.pivot.blocking).toBe(false);
+  });
+
+  it("parses advisory-only signals without task actions", () => {
+    const parsed = parseReviewPayload(JSON.stringify({
+      task: "complete review loop",
+      verdict: "course_correct",
+      task_actions: [],
+      advisory_signals: ["HF token rotation mention in history is non-actionable here"],
+      pivot: { recommended: true, blocking: false, rationale: "None" },
+      summary: "No action items",
+      reason: "Advisory",
+    }), "active fallback task");
+
+    expect(parsed?.taskActions).toEqual([]);
+    expect(parsed?.advisorySignals).toEqual(["HF token rotation mention in history is non-actionable here"]);
+    expect(parsed?.pivot.recommended).toBe(true);
+    expect(parsed?.pivot.blocking).toBe(false);
+  });
+
+  it("flags blocking pivots only for strict risk reasons", () => {
+    const parsed = parseReviewPayload(JSON.stringify({
+      task: "complete review loop",
+      verdict: "course_correct",
+      task_actions: ["Adjust checks"],
+      pivot: {
+        recommended: true,
+        blocking: true,
+        rationale: "Security/data loss risk: requested to skip token rotation cleanup while secrets are unchanged",
+      },
+    }), "active fallback task");
+
+    expect(parsed?.pivot.recommended).toBe(true);
+    expect(parsed?.pivot.blocking).toBe(true);
+  });
+
+  it("keeps non-blocking pivots advisory", () => {
+    const parsed = parseReviewPayload(JSON.stringify({
+      task: "complete review loop",
+      verdict: "course_correct",
+      task_actions: ["Adjust checks"],
+      pivot: {
+        recommended: true,
+        blocking: false,
+        rationale: "Could switch to a smaller model for faster iteration",
+      },
+    }), "active fallback task");
+
+    expect(parsed?.pivot.recommended).toBe(true);
+    expect(parsed?.pivot.blocking).toBe(false);
+  });
+
+  it("stale task-change helper aligns follow-up only with matching task", () => {
+    const nextTask = "run advisor review on original task";
+    const staleState = {
+      followUp: "run focused check",
+      followUpTask: "run advisor review on original task",
+      reviewSignals: [],
+      reviewSignalsTask: undefined,
+    } as any;
+    expect(consumeTaskScopedFollowUp(staleState, nextTask)).toBe("run focused check");
+    expect(staleState.followUp).toBe("");
+
+    const driftState = {
+      followUp: "run focused check",
+      followUpTask: "rotate hf token for benchmark credentials",
+      reviewSignals: ["old signal"],
+      reviewSignalsTask: "rotate hf token for benchmark credentials",
+    } as any;
+    expect(consumeTaskScopedFollowUp(driftState, nextTask)).toBe("");
+    expect(driftState.followUp).toBe("");
+    expect(isTaskContinuation("run advisor review on original task", "rotate hf token for benchmark credentials")).toBe(false);
   });
 });
 

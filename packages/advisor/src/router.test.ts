@@ -45,6 +45,14 @@ describe("advisor router heuristics", () => {
     expect(routeNote(route)).toMatch(/^\[advisor:rules: review, reason: [a-z0-9 ,.'-]+\]$/);
   });
 
+  it("does not treat historical token mentions as safety escalation", () => {
+    const input: AdvisorRouteInput = { phase: "preflight", text: "We previously had HF token rotation and forgot to update this thread" };
+    const route = heuristicRoute(input);
+
+    expect(route.safety).toBe(false);
+    expect(route.label).not.toBe("escalate_to_advisor");
+  });
+
   it("reviews incomplete work as not done", () => {
     const input: AdvisorRouteInput = { phase: "review", text: "still incomplete, tests fail", failed: true };
     const route = heuristicRoute(input);
