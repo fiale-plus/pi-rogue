@@ -1,6 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { homedir } from "node:os";
+import { sessionKey } from "./internal.js";
 
 type AdvisorConfig = Record<string, unknown> & { checkins?: "mid-hour" | "off"; checkinStartedAt?: number };
 type AdvisorState = Record<string, unknown> & {
@@ -34,6 +35,15 @@ const ADVISOR_DIR = join(homedir(), ".pi", "agent", "pi-rogue", "advisor");
 const ADVISOR_CONFIG_PATH = join(homedir(), ".pi", "agent", "pi-rogue", "advisor", "config.json");
 const ADVISOR_STATE_PATH = join(ADVISOR_DIR, "state.json");
 
+function safeSessionKey(key: string): string {
+  const safe = String(key || "session").replace(/[^A-Za-z0-9._-]+/g, "-").replace(/^-+|-+$/g, "");
+  return safe || "session";
+}
+
+export function advisorSessionStatePath(ctx: any): string {
+  return join(ADVISOR_DIR, "sessions", safeSessionKey(sessionKey(ctx)), "state.json");
+}
+
 function readJson<T>(file: string): T {
   if (!existsSync(file)) return {} as T;
   try {
@@ -63,9 +73,14 @@ export function setAdvisorCheckinsEnabled(enabled: boolean, configPath = ADVISOR
 }
 
 export function resetAdvisorSessionContext(
-  configPath = ADVISOR_CONFIG_PATH,
-  statePath = ADVISOR_STATE_PATH,
+  ctxOrConfigPath?: any,
+  configPathOrStatePath = ADVISOR_STATE_PATH,
+  explicitStatePath?: string,
 ): { config: AdvisorConfig; state: AdvisorState } {
+  const configPath = typeof ctxOrConfigPath === "string" ? ctxOrConfigPath : ADVISOR_CONFIG_PATH;
+  const statePath = typeof ctxOrConfigPath === "string"
+    ? configPathOrStatePath
+    : explicitStatePath || (ctxOrConfigPath ? advisorSessionStatePath(ctxOrConfigPath) : ADVISOR_STATE_PATH);
   const currentConfig = cleanAdvisorConfig(readJson<AdvisorConfig>(configPath));
   const nextConfig: AdvisorConfig = {
     ...currentConfig,

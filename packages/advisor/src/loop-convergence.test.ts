@@ -4,7 +4,7 @@ import { dirname } from "node:path";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { completeSimple } from "@earendil-works/pi-ai";
-import { registerAdvisor } from "./extension.js";
+import { advisorSessionStatePath, registerAdvisor } from "./extension.js";
 
 const testHome = vi.hoisted(() => `/tmp/pi-rogue-advisor-loop-convergence-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2)}`);
 
@@ -57,7 +57,7 @@ function makeHandlers() {
 }
 
 const ADVISOR_STATE_DIR = join(homedir(), ".pi", "agent", "pi-rogue", "advisor");
-const ADVISOR_STATE_PATH = join(ADVISOR_STATE_DIR, "state.json");
+const ADVISOR_STATE_PATH = advisorSessionStatePath("session");
 const ADVISOR_CONFIG_PATH = join(ADVISOR_STATE_DIR, "config.json");
 const ADVISOR_CACHE_PATH = join(ADVISOR_STATE_DIR, "cache.json");
 

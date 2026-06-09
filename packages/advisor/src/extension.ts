@@ -5,7 +5,7 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Box, Text } from "@earendil-works/pi-tui";
 import { completeSimple, type ThinkingLevel } from "@earendil-works/pi-ai";
 import { Type } from "typebox";
-import { featureFile, readText, truncate, writeText, atomicWriteText } from "./internal.js";
+import { featureDir, featureFile, readText, truncate, writeText, atomicWriteText } from "./internal.js";
 import { advisorArgumentCompletions, piRogueArgumentCompletions } from "./completions.js";
 import {
   appendRouteLog,
@@ -46,10 +46,10 @@ const DEFAULT_CONFIG: AdvisorConfig = {
 };
 
 const CONFIG_PATH = featureFile("advisor", "config.json");
-const STATE_PATH = featureFile("advisor", "state.json");
+const LEGACY_STATE_PATH = featureFile("advisor", "state.json");
 const CACHE_PATH = featureFile("advisor", "cache.json");
-const CURRENT_PATH = featureFile("advisor", "current.md");
 const HISTORY_PATH = featureFile("advisor", "history.jsonl");
+const SESSION_STATE_PROP = "__piRogueAdvisorStatePath";
 const ORCHESTRATION_DIR = join(homedir(), ".pi", "agent", "fiale-plus", "orchestration");
 
 const MAX_CACHE = 64;
@@ -169,8 +169,47 @@ function saveConfig(c: AdvisorConfig) {
   writeJson(CONFIG_PATH, c);
 }
 
-function loadState(): SessionState {
-  const raw = readJson<Partial<SessionState>>(STATE_PATH, {});
+function advisorSessionDir(ctxOrKey?: any): string {
+  const key = typeof ctxOrKey === "string" ? ctxOrKey : sessionKey(ctxOrKey);
+  return join(featureDir("advisor"), "sessions", safeSessionKey(key));
+}
+
+export function advisorSessionStatePath(ctxOrKey?: any): string {
+  return join(advisorSessionDir(ctxOrKey), "state.json");
+}
+
+function advisorCurrentPath(ctxOrKey?: any): string {
+  return join(advisorSessionDir(ctxOrKey), "current.md");
+}
+
+function safeSessionKey(key: string): string {
+  const safe = String(key || "session").replace(/[^A-Za-z0-9._-]+/g, "-").replace(/^-+|-+$/g, "");
+  return safe || "session";
+}
+
+function statePathFor(state: SessionState): string {
+  return String((state as any)[SESSION_STATE_PROP] || LEGACY_STATE_PATH);
+}
+
+function attachStatePath<T extends SessionState>(state: T, path: string): T {
+  Object.defineProperty(state, SESSION_STATE_PROP, {
+    value: path,
+    enumerable: false,
+    configurable: true,
+    writable: true,
+  });
+  return state;
+}
+
+function loadState(ctxOrKey?: any): SessionState {
+  // Do not fall back to LEGACY_STATE_PATH here: that file was unscoped and is
+  // the source of issue #103 context bleed. New/resumed sessions must only load
+  // their own namespaced mutable advisor state.
+  return loadStateFromPath(advisorSessionStatePath(ctxOrKey));
+}
+
+function loadStateFromPath(path: string): SessionState {
+  const raw = readJson<Partial<SessionState>>(path, {});
   // Handle state versioning: migrate old versions to current
   const version = raw._v ?? 0;
   if (version < STATE_VERSION) {
@@ -181,7 +220,7 @@ function loadState(): SessionState {
   }
   const control = raw.reviewControl;
   const pauseUntil = Number(raw.advisorPauseUntilTurn);
-  return {
+  return attachStatePath({
     _v: STATE_VERSION,
     turns: raw.turns ?? 0,
     lastTask: raw.lastTask ?? "",
@@ -217,11 +256,11 @@ function loadState(): SessionState {
       lastAppliedAt: control?.lastAppliedAt,
     },
     advisorPauseUntilTurn: Number.isFinite(pauseUntil) ? pauseUntil : undefined,
-  };
+  }, path);
 }
 
 function saveState(s: SessionState) {
-  atomicWriteText(STATE_PATH, JSON.stringify(s, null, 2) + "\n");
+  atomicWriteText(statePathFor(s), JSON.stringify(s, null, 2) + "\n");
 }
 
 function loadCache(): Record<string, string> {
@@ -489,7 +528,7 @@ function markReviewApplied(state: SessionState, signature: string, trigger: stri
 }
 
 function persistReviewState(state: SessionState, includeReviewRoute: boolean): void {
-  const persisted = loadState();
+  const persisted = loadStateFromPath(statePathFor(state));
   persisted.reviewControl = state.reviewControl;
   persisted.followUp = state.followUp;
   persisted.followUpTask = state.followUpTask;
@@ -771,8 +810,12 @@ function mergeRouteReview(configReview: AdvisorConfig["review"], route?: ReviewP
 
 function sessionKey(ctx: any): string {
   const sessionFile = ctx?.sessionManager?.getSessionFile?.();
-  if (!sessionFile) return "session";
-  return basename(String(sessionFile)).replace(/\.[^.]+$/, "");
+  if (typeof sessionFile === "string" && sessionFile.length > 0) {
+    return safeSessionKey(basename(String(sessionFile)).replace(/\.[^.]+$/, ""));
+  }
+  const sessionId = ctx?.session?.id || process.env.PI_ROGUE_SESSION_ID;
+  if (typeof sessionId === "string" && sessionId.length > 0) return safeSessionKey(sessionId);
+  return "session";
 }
 
 type OrchestrationSnapshot = {
@@ -846,12 +889,13 @@ function checkinDescription(config: AdvisorConfig): string {
   return `checkins ${config.checkinIntervalMinutes}m`;
 }
 
-function setPiRogueStatus(ctx: any, config = loadConfig(), state = loadState()): void {
+function setPiRogueStatus(ctx: any, config = loadConfig(), state?: SessionState): void {
+  const currentState = state ?? loadState(ctx);
   const normalized = normalizeAdvisorConfig(config);
   const checkin = checkinDescription(normalized);
-  const pause = advisorPauseRemaining(state, state.turns);
+  const pause = advisorPauseRemaining(currentState, currentState.turns);
   const pauseText = pause > 0 ? ` · pause ${pause} turn${pause === 1 ? "" : "s"}` : "";
-  const last = state.checkin.lastAt ? ` · last ${new Date(state.checkin.lastAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}` : "";
+  const last = currentState.checkin.lastAt ? ` · last ${new Date(currentState.checkin.lastAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}` : "";
   ctx.ui.setStatus("pi-rogue", `☠︎ advisor ${normalized.mode}/${normalized.review} · ${checkin}${pauseText}${last}`);
 }
 
@@ -896,7 +940,7 @@ async function maybeAdvisorCheckin(pi: ExtensionAPI, ctx: any, source: string): 
   if (checkinLocks.has(key)) return false;
 
   const config = loadConfig();
-  const state = loadState();
+  const state = loadState(ctx);
   const reason = shouldRunCheckin(config, state, Date.now(), Date.now());
   if (!reason) {
     if (state.checkin.queued) {
@@ -935,7 +979,7 @@ async function maybeAdvisorCheckin(pi: ExtensionAPI, ctx: any, source: string): 
     );
     if (!completed) return false;
 
-    const next = loadState();
+    const next = loadState(ctx);
     next.checkin = {
       lastAt: new Date().toISOString(),
       lastTurn: next.turns,
@@ -1056,7 +1100,7 @@ export async function completeWithHigherAdvisorModel(
 
 async function askAdvisor(pi: ExtensionAPI, ctx: any, question: string, scope: string, includeWork: boolean) {
   const config = loadConfig();
-  const state = loadState();
+  const state = loadState(ctx);
   if (!question.trim()) return { text: "Ask a question.", error: "empty" };
 
   const brokerBrief = includeWork ? contextBrokerBrief(pi) : "";
@@ -1085,7 +1129,7 @@ async function askAdvisor(pi: ExtensionAPI, ctx: any, question: string, scope: s
 async function doReview(pi: ExtensionAPI, ctx: any, trigger: string, delta: string, meta: ReviewMaterialMeta) {
   const config = loadConfig();
   if (config.review === "off") return;
-  const state = loadState();
+  const state = loadState(ctx);
 
   const signature = reviewMaterialSignature(state, delta, meta);
   if (state.reviewControl.running) {
@@ -1252,7 +1296,7 @@ async function doReview(pi: ExtensionAPI, ctx: any, trigger: string, delta: stri
     finalReason = (parsed.reason || parsed.summary || "review result").slice(0, 120);
 
     const display = formatAdvisorDisplay("advisor:llm", decision, finalReason);
-    writeText(CURRENT_PATH, `${display}\n`);
+    writeText(advisorCurrentPath(ctx), `${display}\n`);
 
     const reviewTask = parsed.activeTask || state.lastTask || "";
     const hasTaskActions = parsed.taskActions.length > 0;
@@ -1300,7 +1344,7 @@ export function registerAdvisor(pi: ExtensionAPI): void {
   pi.on("session_start", (_event, ctx) => {
     const key = sessionKey(ctx);
     checkinLocks.delete(key);
-    const state = loadState();
+    const state = loadState(ctx);
     recoverReviewControl(state);
     saveState(state);
     setPiRogueStatus(ctx, loadConfig(), state);
@@ -1334,7 +1378,7 @@ export function registerAdvisor(pi: ExtensionAPI): void {
   // ── Preflight (heuristics only — no LLM call, <1ms) ──────────────────
   pi.on("before_agent_start", async (event: any, ctx: any) => {
     const cfg = loadConfig();
-    const state = loadState();
+    const state = loadState(ctx);
     const hasFollowUp = Boolean(state.followUp);
     if ((isAdvisorAutoRunSuppressed(state, state.turns) && !hasFollowUp) || cfg.mode === "off" || cfg.mode === "manual") {
       return { systemPrompt: event.systemPrompt };
@@ -1391,7 +1435,7 @@ export function registerAdvisor(pi: ExtensionAPI): void {
     const note = routeNote(route);
     const control = state.reviewControl;
     const controlTag = control.status === "needed" || control.status === "running" ? `Review-control: ${control.status}${control.lastDecision ? ` (${control.lastDecision})` : ""}` : "";
-    writeText(CURRENT_PATH, `${note}\n`);
+    writeText(advisorCurrentPath(ctx), `${note}\n`);
     return {
       systemPrompt: [
         event.systemPrompt,
@@ -1409,7 +1453,7 @@ export function registerAdvisor(pi: ExtensionAPI): void {
   pi.on("turn_end", async (event: any, ctx: any) => {
     const cfg = loadConfig();
     if (cfg.mode === "off") return;
-    const state = loadState();
+    const state = loadState(ctx);
     const suppressedThisTurn = isAdvisorAutoRunSuppressedForTurnContext(state, state.turns);
     const tools = (event.toolResults || []).map((t: any) => String(t?.toolName || t?.name || "tool"));
     const fileChanged = tools.some((t: string) => /^(edit|write)$/i.test(t));
@@ -1431,7 +1475,7 @@ export function registerAdvisor(pi: ExtensionAPI): void {
       });
     }
 
-    const post = loadState();
+    const post = loadState(ctx);
     if (!isAdvisorAutoRunSuppressed(post, post.turns)) {
       void maybeAdvisorCheckin(pi, ctx, "turn_end");
     }
@@ -1441,7 +1485,7 @@ export function registerAdvisor(pi: ExtensionAPI): void {
   pi.on("agent_end", async (event: any, ctx: any) => {
     const cfg = loadConfig();
     if (cfg.mode === "off") return;
-    const state = loadState();
+    const state = loadState(ctx);
     const suppressed = isAdvisorAutoRunSuppressedForTurnContext(state, state.turns);
     if (cfg.review === "off" || suppressed) {
       if (!suppressed) {
@@ -1466,7 +1510,7 @@ export function registerAdvisor(pi: ExtensionAPI): void {
       materialSignals: signals,
     });
 
-    const post = loadState();
+    const post = loadState(ctx);
     if (!isAdvisorAutoRunSuppressed(post, post.turns)) {
       void maybeAdvisorCheckin(pi, ctx, "agent_end");
     }
@@ -1478,12 +1522,12 @@ export function registerAdvisor(pi: ExtensionAPI): void {
     getArgumentCompletions: (prefix: string) => piRogueArgumentCompletions(prefix),
     handler: async (args, ctx) => {
       const cfg = loadConfig();
-      const state = loadState();
+      const state = loadState(ctx);
       const arg = String(args ?? "").trim().toLowerCase();
       setPiRogueStatus(ctx, cfg, state);
 
       if (!arg || arg === "status" || arg === "help") {
-        ctx.ui.notify(piRogueCockpitText(cfg, state, readText(CURRENT_PATH).trim(), orchestrationSnapshotText(ctx)), "info");
+        ctx.ui.notify(piRogueCockpitText(cfg, state, readText(advisorCurrentPath(ctx)).trim(), orchestrationSnapshotText(ctx)), "info");
         return;
       }
 
@@ -1519,7 +1563,7 @@ export function registerAdvisor(pi: ExtensionAPI): void {
         return;
       }
 
-      ctx.ui.notify(piRogueCockpitText(cfg, state, readText(CURRENT_PATH).trim(), orchestrationSnapshotText(ctx)), "info");
+      ctx.ui.notify(piRogueCockpitText(cfg, state, readText(advisorCurrentPath(ctx)).trim(), orchestrationSnapshotText(ctx)), "info");
     },
   });
 
@@ -1531,10 +1575,10 @@ export function registerAdvisor(pi: ExtensionAPI): void {
       const a = String(args ?? "").trim().toLowerCase();
       const [cmd, ...rest] = a.split(/\s+/);
       const cfg = loadConfig();
-      const state = loadState();
+      const state = loadState(ctx);
 
       if (!a || cmd === "status") {
-        const note = readText(CURRENT_PATH).trim();
+        const note = readText(advisorCurrentPath(ctx)).trim();
         const resolved = await resolveModel(ctx, cfg);
         const route = state.router.review ?? state.router.preflight;
         const pause = advisorPauseRemaining(state, state.turns);
