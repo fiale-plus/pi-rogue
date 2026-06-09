@@ -2,7 +2,7 @@ import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { homedir } from "node:os";
-import { registerAdvisor } from "./extension.js";
+import { advisorSessionStatePath, registerAdvisor } from "./extension.js";
 
 const testHome = vi.hoisted(() => `/tmp/pi-rogue-advisor-state-versioning-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2)}`);
 
@@ -37,17 +37,17 @@ function makeHandlers() {
 }
 
 const ADVISOR_STATE_DIR = join(homedir(), ".pi", "agent", "pi-rogue", "advisor");
-const ADVISOR_STATE_PATH = join(ADVISOR_STATE_DIR, "state.json");
 const ADVISOR_CONFIG_PATH = join(ADVISOR_STATE_DIR, "config.json");
+const ADVISOR_STATE_PATH = advisorSessionStatePath("session");
 
 function readAdvisorState(): any {
   return JSON.parse(readFileSync(ADVISOR_STATE_PATH, "utf8"));
 }
 
-function mkCtx() {
+function mkCtx(session = "session") {
   return {
     sessionManager: {
-      getSessionFile: () => join(homedir(), ".pi", "agent", "pi-rogue", "advisor", "session.jsonl"),
+      getSessionFile: () => join(homedir(), ".pi", "agent", "pi-rogue", "advisor", `${session}.jsonl`),
     },
     isIdle: () => true,
     modelRegistry: {
@@ -223,5 +223,26 @@ describe("state versioning and recovery", () => {
     expect(recovered.reviewControl.status).toBe("needed");
     expect(recovered.reviewControl.pending).toBe(true);
     expect(recovered.reviewControl.lastDecision).toBe("review");
+  });
+
+  it("keeps mutable advisor state isolated by session", async () => {
+    const setup = makeHandlers();
+    const { handlers: h, pi } = setup;
+    registerAdvisor(pi);
+
+    const ctxA = mkCtx("model-training");
+    const ctxB = mkCtx("runpod");
+
+    void h.session_start?.[0]?.({}, ctxA);
+    await h.before_agent_start?.[0]?.({ prompt: "train advisor on regex logs", systemPrompt: "base" }, ctxA);
+
+    const stateA = JSON.parse(readFileSync(advisorSessionStatePath("model-training"), "utf8"));
+    expect(stateA.lastTask).toBe("train advisor on regex logs");
+
+    void h.session_start?.[0]?.({}, ctxB);
+    const stateB = JSON.parse(readFileSync(advisorSessionStatePath("runpod"), "utf8"));
+    expect(stateB.lastTask).toBe("");
+    expect(stateB.followUp).toBe("");
+    expect(stateB.reviewSignals).toEqual([]);
   });
 });

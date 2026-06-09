@@ -62,6 +62,16 @@ describe("advisor check-in lifecycle bridge", () => {
     expect(JSON.parse(readFileSync(file, "utf8")).checkins).toBe("off");
   });
 
+  it("preserves legacy one-argument reset signature", () => {
+    const { config } = tempState();
+    writeFileSync(config, JSON.stringify({ checkins: "off" }), "utf8");
+
+    const next = resetAdvisorSessionContext(config);
+
+    expect(next.config.checkins).toBe("off");
+    expect(JSON.parse(readFileSync(config, "utf8")).checkins).toBe("off");
+  });
+
   it("resets advisor brief context and check-in timing for a new goal", () => {
     const { config, state } = tempState();
     const startedAt = Date.now();

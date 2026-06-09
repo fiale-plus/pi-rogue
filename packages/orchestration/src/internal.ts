@@ -77,10 +77,19 @@ export function featureDir(feature: string): string {
   return dir;
 }
 
+function safeSessionKey(key: string): string {
+  const safe = String(key || "session").replace(/[^A-Za-z0-9._-]+/g, "-").replace(/^-+|-+$/g, "");
+  return safe || "session";
+}
+
 export function sessionKey(ctx: any): string {
   const sessionFile = ctx?.sessionManager?.getSessionFile?.();
-  if (!sessionFile) return "session";
-  return basename(String(sessionFile)).replace(/\.[^.]+$/, "");
+  if (typeof sessionFile === "string" && sessionFile.length > 0) {
+    return safeSessionKey(basename(String(sessionFile)).replace(/\.[^.]+$/, ""));
+  }
+  const sessionId = ctx?.session?.id || process.env.PI_ROGUE_SESSION_ID;
+  if (typeof sessionId === "string" && sessionId.length > 0) return safeSessionKey(sessionId);
+  return "session";
 }
 
 export function sessionDir(feature: string, ctx: any): string {

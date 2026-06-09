@@ -54,7 +54,7 @@ export function setGoal(ctx: any, goal: string, options: { restartDuplicate?: bo
   }
   clearLoop(ctx, { clearResearch: true, preserveCheckins: true });
   writeText(sessionFile(FEATURE, ctx, CURRENT_FILE), note ? `${note}\n` : "");
-  resetAdvisorSessionContext();
+  resetAdvisorSessionContext(ctx);
   if (note) {
     setAdvisorCheckinsEnabled(true);
   }
@@ -68,7 +68,7 @@ export function setGoal(ctx: any, goal: string, options: { restartDuplicate?: bo
 
 export function clearGoal(ctx: any): void {
   writeText(sessionFile(FEATURE, ctx, CURRENT_FILE), "");
-  resetAdvisorSessionContext();
+  resetAdvisorSessionContext(ctx);
 }
 
 function goalBlock(goal: string): string {
