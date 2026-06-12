@@ -18,7 +18,8 @@
       "@fiale-plus/pi-rogue-context-broker/sqlite": ["./packages/context-broker/src/sqlite.ts"],
       "@fiale-plus/pi-rogue-guardrails": ["./packages/guardrails/src"],
       "@fiale-plus/pi-rogue-brain": ["./packages/brain/src"],
-      "@fiale-plus/pi-rogue-repo-arch": ["./packages/repo-arch/src"]
+      "@fiale-plus/pi-rogue-repo-arch": ["./packages/repo-arch/src"],
+      "@fiale-plus/pi-rogue-router": ["./packages/router/src"]
     }
   },
   "include": [
