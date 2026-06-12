@@ -7,4 +7,5 @@ This package intentionally does **not** change live advisor or orchestration beh
 ```bash
 npm run router:rebuild -- --session ~/.pi/agent/sessions/.../session.jsonl --output .pi/router/checkpoints.jsonl
 npm run router:rebuild -- --session-dir ~/.pi/agent/sessions/... --output .pi/router/checkpoints.jsonl
+npm run router:decide -- --checkpoint-file .pi/router/checkpoints.jsonl --ledger .pi/router/events.jsonl
 ```
