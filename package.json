@@ -23,7 +23,8 @@
     "binary:eval-file": "npx tsx scripts/eval-binary-gate-file.ts",
     "binary:benchmark": "npx tsx scripts/benchmark-binary-gate.ts",
     "routing:score": "tsx scripts/score-routing-active-learning.ts",
-    "routing:eval": "tsx scripts/eval-routing-baselines.ts"
+    "routing:eval": "tsx scripts/eval-routing-baselines.ts",
+    "router:rebuild": "tsx packages/router/src/cli.ts rebuild"
   },
   "engines": {
     "node": ">=22.5.0"
