@@ -4,6 +4,7 @@ import { join, resolve } from "node:path";
 import { decideRoute, readCheckpointJsonl, selectCheckpoint } from "./decision.js";
 import { writeSessionCheckpointsJsonl } from "./checkpoints.js";
 import { appendRouteEvent, buildRouteEvent } from "./ledger.js";
+import { writeCapabilityCards, writeShadowEval, writeTeacherReflection } from "./learning.js";
 
 interface Args {
   command?: string;
@@ -13,6 +14,11 @@ interface Args {
   checkpointFile?: string;
   checkpointId?: string;
   ledger?: string;
+  events?: string;
+  labels?: string;
+  reflection?: string;
+  teacher?: string;
+  teacherOutput?: string;
   pretty: boolean;
 }
 
@@ -21,10 +27,16 @@ function usage(): never {
   npm run router:rebuild -- --session <session.jsonl> [--session <session2.jsonl>] [--output <path>] [--pretty]
   npm run router:rebuild -- --session-dir <dir> [--output <path>] [--pretty]
   npm run router:decide -- --checkpoint-file <checkpoints.jsonl> [--checkpoint-id <id>] [--ledger <events.jsonl>] [--pretty]
+  npm run router:cards -- --events <events.jsonl> --output <model-cards.jsonl> [--pretty]
+  npm run router:reflect -- --checkpoint-file <checkpoints.jsonl> --labels <labels.jsonl> --reflection <reflection.md> [--teacher local-rule] [--teacher-output <decisions.jsonl>] [--pretty]
+  npm run router:shadow -- --checkpoint-file <checkpoints.jsonl> --output <report.json> [--ledger <events.jsonl>] [--pretty]
 
 Commands:
   rebuild    Rebuild derived router checkpoints from raw Pi session JSONL files.
   decide     Emit a strict JSON route decision for a checkpoint and optionally append a route event.
+  cards      Generate local observed model capability cards from route events.
+  reflect    Generate command-triggered soft routing labels and a reflection artifact.
+  shadow     Shadow-evaluate the current rule policy over historical checkpoints.
 `);
   process.exit(2);
 }
@@ -62,6 +74,31 @@ function parseArgs(argv: string[]): Args {
     }
     if (arg === "--ledger" && next) {
       args.ledger = next;
+      index++;
+      continue;
+    }
+    if (arg === "--events" && next) {
+      args.events = next;
+      index++;
+      continue;
+    }
+    if (arg === "--labels" && next) {
+      args.labels = next;
+      index++;
+      continue;
+    }
+    if (arg === "--reflection" && next) {
+      args.reflection = next;
+      index++;
+      continue;
+    }
+    if (arg === "--teacher" && next) {
+      args.teacher = next;
+      index++;
+      continue;
+    }
+    if (arg === "--teacher-output" && next) {
+      args.teacherOutput = next;
       index++;
       continue;
     }
@@ -129,13 +166,48 @@ function decide(args: Args): unknown {
   return decision;
 }
 
+function cards(args: Args): unknown {
+  if (!args.events || !args.output) usage();
+  const cards = writeCapabilityCards(args.events, args.output);
+  return { schema: "pi-router.cards-summary.v1", output: resolve(args.output), cards: cards.length };
+}
+
+function reflect(args: Args): unknown {
+  if (!args.checkpointFile || !args.labels || !args.reflection) usage();
+  const result = writeTeacherReflection({
+    checkpointPath: args.checkpointFile,
+    labelsPath: args.labels,
+    reflectionPath: args.reflection,
+    teacher: args.teacher ?? "local-rule",
+    teacherOutputPath: args.teacherOutput,
+  });
+  return {
+    schema: "pi-router.reflect-summary.v1",
+    labels: resolve(args.labels),
+    reflection: resolve(args.reflection),
+    labelCount: result.labels.length,
+    teacher: args.teacher ?? "local-rule",
+  };
+}
+
+function shadow(args: Args): unknown {
+  if (!args.checkpointFile || !args.output) usage();
+  return writeShadowEval(args.checkpointFile, args.output, args.ledger);
+}
+
 async function main(): Promise<void> {
   const args = parseArgs(process.argv.slice(2));
   const result = args.command === "rebuild"
     ? await rebuild(args)
     : args.command === "decide"
       ? decide(args)
-      : usage();
+      : args.command === "cards"
+        ? cards(args)
+        : args.command === "reflect"
+          ? reflect(args)
+          : args.command === "shadow"
+            ? shadow(args)
+            : usage();
   console.log(args.pretty ? JSON.stringify(result, null, 2) : JSON.stringify(result));
 }
 
