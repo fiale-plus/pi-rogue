@@ -25,7 +25,10 @@
     "routing:score": "tsx scripts/score-routing-active-learning.ts",
     "routing:eval": "tsx scripts/eval-routing-baselines.ts",
     "router:rebuild": "tsx packages/router/src/cli.ts rebuild",
-    "router:decide": "tsx packages/router/src/cli.ts decide"
+    "router:decide": "tsx packages/router/src/cli.ts decide",
+    "router:cards": "tsx packages/router/src/cli.ts cards",
+    "router:reflect": "tsx packages/router/src/cli.ts reflect",
+    "router:shadow": "tsx packages/router/src/cli.ts shadow"
   },
   "engines": {
     "node": ">=22.5.0"
