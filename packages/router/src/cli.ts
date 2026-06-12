@@ -1,13 +1,18 @@
 #!/usr/bin/env node
 import { existsSync, readdirSync, statSync } from "node:fs";
 import { join, resolve } from "node:path";
+import { decideRoute, readCheckpointJsonl, selectCheckpoint } from "./decision.js";
 import { writeSessionCheckpointsJsonl } from "./checkpoints.js";
+import { appendRouteEvent, buildRouteEvent } from "./ledger.js";
 
 interface Args {
   command?: string;
   sessions: string[];
   sessionDir?: string;
   output?: string;
+  checkpointFile?: string;
+  checkpointId?: string;
+  ledger?: string;
   pretty: boolean;
 }
 
@@ -15,9 +20,11 @@ function usage(): never {
   console.error(`Usage:
   npm run router:rebuild -- --session <session.jsonl> [--session <session2.jsonl>] [--output <path>] [--pretty]
   npm run router:rebuild -- --session-dir <dir> [--output <path>] [--pretty]
+  npm run router:decide -- --checkpoint-file <checkpoints.jsonl> [--checkpoint-id <id>] [--ledger <events.jsonl>] [--pretty]
 
 Commands:
   rebuild    Rebuild derived router checkpoints from raw Pi session JSONL files.
+  decide     Emit a strict JSON route decision for a checkpoint and optionally append a route event.
 `);
   process.exit(2);
 }
@@ -40,6 +47,21 @@ function parseArgs(argv: string[]): Args {
     }
     if (arg === "--output" && next) {
       args.output = next;
+      index++;
+      continue;
+    }
+    if (arg === "--checkpoint-file" && next) {
+      args.checkpointFile = next;
+      index++;
+      continue;
+    }
+    if (arg === "--checkpoint-id" && next) {
+      args.checkpointId = next;
+      index++;
+      continue;
+    }
+    if (arg === "--ledger" && next) {
+      args.ledger = next;
       index++;
       continue;
     }
@@ -83,15 +105,12 @@ function resolveSessions(args: Args): string[] {
   return [...new Set(sessions.map((session) => resolve(session)))];
 }
 
-async function main(): Promise<void> {
-  const args = parseArgs(process.argv.slice(2));
+async function rebuild(args: Args): Promise<unknown> {
   const sessions = resolveSessions(args);
-  if (args.command !== "rebuild" || sessions.length === 0) usage();
-
+  if (sessions.length === 0) usage();
   const output = args.output ?? defaultOutput();
   const result = await writeSessionCheckpointsJsonl(sessions, output);
-
-  const summary = {
+  return {
     schema: "pi-router.rebuild-summary.v1",
     sessions: result.sessions,
     output: result.output,
@@ -99,7 +118,25 @@ async function main(): Promise<void> {
     firstCheckpointId: result.firstCheckpointId,
     lastCheckpointId: result.lastCheckpointId,
   };
-  console.log(args.pretty ? JSON.stringify(summary, null, 2) : JSON.stringify(summary));
+}
+
+function decide(args: Args): unknown {
+  if (!args.checkpointFile) usage();
+  const checkpoints = readCheckpointJsonl(args.checkpointFile);
+  const checkpoint = selectCheckpoint(checkpoints, args.checkpointId);
+  const decision = decideRoute(checkpoint);
+  if (args.ledger) appendRouteEvent(args.ledger, buildRouteEvent(checkpoint, decision));
+  return decision;
+}
+
+async function main(): Promise<void> {
+  const args = parseArgs(process.argv.slice(2));
+  const result = args.command === "rebuild"
+    ? await rebuild(args)
+    : args.command === "decide"
+      ? decide(args)
+      : usage();
+  console.log(args.pretty ? JSON.stringify(result, null, 2) : JSON.stringify(result));
 }
 
 main().catch((error: unknown) => {
