@@ -44,10 +44,12 @@ jobs:
           cp -a ../../packages/advisor node_modules/@fiale-plus/pi-rogue-advisor
           cp -a ../../packages/context-broker node_modules/@fiale-plus/pi-rogue-context-broker
           cp -a ../../packages/orchestration node_modules/@fiale-plus/pi-rogue-orchestration
-          echo "Vendored local (git-at-tag) core, advisor, context-broker, and orchestration into bundle for bundling as single artefact"
+          cp -a ../../packages/router node_modules/@fiale-plus/pi-rogue-router
+          echo "Vendored local (git-at-tag) core, advisor, context-broker, orchestration, and router into bundle for bundling as single artefact"
 
       - name: Publish canonical package
-        run: npm publish ./packages/bundle --provenance --access public
+        working-directory: packages/bundle
+        run: npm publish . --provenance --access public
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 

@@ -8,6 +8,7 @@ It stitches together (and bundles for a true single-package install):
 - `@fiale-plus/pi-rogue-advisor` (logic; direct releases paused)
 - `@fiale-plus/pi-rogue-context-broker` (context-broker runtime; registered by default with an env kill switch)
 - `@fiale-plus/pi-rogue-orchestration` (logic; direct releases paused)
+- `@fiale-plus/pi-rogue-router` (observe-only trajectory-router lab; direct releases paused)
 
 Direct installs of the advisor/orchestration packages are paused (marked private). All users and future releases go through the bundle. See `docs/release.md` and root `AGENTS.md` / `README.md` for the release policy.
 
@@ -37,7 +38,7 @@ npm install
 
 ## Command surface
 
-- Default: `/advisor`, `/goal`, `/loop`, `/autoresearch`, `/autoresearch-lab` plus status/config/command paths (all provided via the bundle).
+- Default: `/advisor`, `/goal`, `/loop`, `/autoresearch`, `/autoresearch-lab`, `/router` plus status/config/command paths (all provided via the bundle).
 - Context broker: enabled by default; `PI_CONTEXT_BROKER_ENABLED=false` disables `/context status`, `/context brief`, `/context lookup <handle|text>`, `/context pin <handle>`, `/context export <handle>`, and `/context prune` with autocomplete.
 
 ## Status

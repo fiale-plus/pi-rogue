@@ -40,6 +40,7 @@ describe("bundle extension defaults", () => {
     await registerBundle(pi);
 
     expect(commands.has("context")).toBe(true);
+    expect(commands.has("router")).toBe(true);
   });
 
   it("keeps an explicit env kill switch for context broker rollout", async () => {
