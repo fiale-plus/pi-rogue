@@ -382,7 +382,7 @@ lookupBytes: 500,
     await commands.get("context").handler(`export ${handle}`, ctx);
     const result = await handlers.get("context")?.[0]({
       type: "context",
-      messages: [{ role: "toolResult", toolCallId: "tool-result-telemetry", toolName: "bash", content: [{ type: "text", text: "telemetry_payload_" + "y".repeat(150) }], isError: false, timestamp: 1 }],
+      messages: [{ role: "toolResult", toolCallId: "tool-result-telemetry", toolName: "bash", content: [{ type: "text", text: "telemetry_payload_" + "y".repeat(1000) }], isError: false, timestamp: 1 }],
     }, ctx);
 
     await commands.get("context").handler("status", ctx);
@@ -392,15 +392,46 @@ lookupBytes: 500,
     expect(result).toBeDefined();
     const telemetry = notifications.at(-1)?.message ?? "";
     expect(telemetry).toContain("Context broker routing telemetry:");
+    expect(telemetry).toContain("rewriteSavings rawBytes=");
+    expect(telemetry).toContain("replacementBytes=");
+    expect(telemetry).toContain("savedBytes=");
+    expect(telemetry).toMatch(/savedBytes=[1-9]\d*/);
+    expect(telemetry).toContain("contextLookupHistoryOmitted=");
     expect(telemetry).toContain("lookups tool(calls=");
     expect(telemetry).toContain("lookups slash(calls=");
     expect(telemetry).toContain("exports=");
     expect(telemetry).toContain("pins=");
   });
 
-  it("does not broker context_lookup results recursively", async () => {
+  it("keeps current context_lookup results visible before the model consumes them", async () => {
     const { pi, handlers, commands, tools } = createPiMock();
-    registerContextBrokerBeta(pi, { lookupBytes: 500, rewriteThresholdBytes: 1 });
+    registerContextBrokerBeta(pi, { lookupBytes: 1000, rewriteThresholdBytes: 1 });
+    const { ctx } = createCtx();
+
+    await runHandlers(handlers, "session_start", { type: "session_start" }, ctx);
+    await runHandlers(handlers, "tool_result", {
+      type: "tool_result",
+      toolCallId: "call-current-lookup-source",
+      toolName: "bash",
+      input: { command: "printf current-lookup" },
+      content: [{ type: "text", text: "CURRENT_LOOKUP_EVIDENCE_" + "x".repeat(120) }],
+      isError: false,
+    }, ctx);
+    const handle = commands.get("context").getArgumentCompletions("lookup ")?.[0].value.replace(/^lookup /, "");
+    const lookupResult = await tools.get("context_lookup").execute("lookup-current", { handle }, undefined, undefined, ctx);
+
+    const contextResult = await handlers.get("context")?.[0]({
+      type: "context",
+      messages: [{ role: "toolResult", toolCallId: "lookup-current", toolName: "context_lookup", content: lookupResult.content, isError: false }],
+    }, ctx);
+
+    expect(contextResult).toBeUndefined();
+    expect(lookupResult.content[0].text).toContain("CURRENT_LOOKUP_EVIDENCE_");
+  });
+
+  it("does not broker historical context_lookup results recursively", async () => {
+    const { pi, handlers, commands, tools } = createPiMock();
+    registerContextBrokerBeta(pi, { lookupBytes: 500 });
     const { ctx, notifications } = createCtx();
 
     await runHandlers(handlers, "session_start", { type: "session_start" }, ctx);
@@ -425,7 +456,10 @@ lookupBytes: 500,
     }, ctx);
     const contextResult = await handlers.get("context")?.[0]({
       type: "context",
-      messages: [{ role: "toolResult", toolCallId: "lookup-call", toolName: "context_lookup", content: lookupResult.content, isError: false }],
+      messages: [
+        { role: "toolResult", toolCallId: "lookup-call", toolName: "context_lookup", content: lookupResult.content, isError: false },
+        { role: "assistant", content: [{ type: "text", text: "I consumed the lookup." }] },
+      ],
     }, ctx);
     await commands.get("context").handler("brief", ctx);
 

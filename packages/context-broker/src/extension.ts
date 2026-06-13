@@ -176,6 +176,16 @@ function compact(value: string, max = 120): string {
   return truncateUtf8(value.replace(/\s+/g, " ").trim(), max);
 }
 
+function utf8Bytes(text: string): number {
+  return Buffer.byteLength(text, "utf8");
+}
+
+function promptPayloadBytes(message: any): number {
+  if (message?.role === "bashExecution") return utf8Bytes(String(message.output ?? ""));
+  if (message?.role === "toolResult") return utf8Bytes(contentText(message.content));
+  return utf8Bytes(toText(message));
+}
+
 function stableHash(value: string): string {
   return createHash("sha256").update(value).digest("hex").slice(0, 16);
 }
@@ -308,6 +318,9 @@ export async function registerContextBrokerBeta(pi: ExtensionAPI, options: Conte
     contextHookBash: 0,
     contextHookBashRewrites: 0,
     contextHookBashHostile: 0,
+    contextHookRewriteRawBytes: 0,
+    contextHookRewriteReplacementBytes: 0,
+    contextHookContextLookupHistoryOmissions: 0,
     toolResultEvents: 0,
     toolResultArtifacts: 0,
     backfillScans: 0,
@@ -329,11 +342,21 @@ export async function registerContextBrokerBeta(pi: ExtensionAPI, options: Conte
     pruneCalls: 0,
   };
 
+  function recordContextRewrite(rawBytes: number, replacementBytes: number): void {
+    routingTelemetry.contextHookRewriteRawBytes += Math.max(0, rawBytes);
+    routingTelemetry.contextHookRewriteReplacementBytes += Math.max(0, replacementBytes);
+  }
+
   function formatRoutingTelemetry(): string {
+    const savedBytes = Math.max(0, routingTelemetry.contextHookRewriteRawBytes - routingTelemetry.contextHookRewriteReplacementBytes);
+    const savedPct = routingTelemetry.contextHookRewriteRawBytes > 0
+      ? ((savedBytes / routingTelemetry.contextHookRewriteRawBytes) * 100).toFixed(1)
+      : "0.0";
     const line = [
       `contextHook calls=${routingTelemetry.contextHookCalls}`,
       `toolResults seen=${routingTelemetry.contextHookToolResults} rewritten=${routingTelemetry.contextHookToolResultRewrites} hostile=${routingTelemetry.contextHookToolResultHostile}`,
       `bash seen=${routingTelemetry.contextHookBash} rewritten=${routingTelemetry.contextHookBashRewrites} hostile=${routingTelemetry.contextHookBashHostile}`,
+      `rewriteSavings rawBytes=${routingTelemetry.contextHookRewriteRawBytes} replacementBytes=${routingTelemetry.contextHookRewriteReplacementBytes} savedBytes=${savedBytes} savedPct=${savedPct}% contextLookupHistoryOmitted=${routingTelemetry.contextHookContextLookupHistoryOmissions}`,
       `lookups tool(calls=${routingTelemetry.toolLookupCalls}, hits=${routingTelemetry.toolLookupHits}, misses=${routingTelemetry.toolLookupMisses})`,
       `lookups slash(calls=${routingTelemetry.commandLookupCalls}, hits=${routingTelemetry.commandLookupHits}, misses=${routingTelemetry.commandLookupMisses})`,
       `exports=${routingTelemetry.exportCalls}`,
@@ -572,19 +595,35 @@ export async function registerContextBrokerBeta(pi: ExtensionAPI, options: Conte
     activeSessionId = sessionIdFor(ctx);
     routingTelemetry.contextHookCalls += 1;
     const toolInputs = collectToolInputs(event.messages);
-    const drafts = event.messages.map((message: any): { original: any; replacement?: any; artifact?: ContextArtifact; rewrite?: (artifact: ContextArtifact) => any; safeFallback?: any } => {
+    type RewriteDraft = {
+      original: any;
+      replacement?: any;
+      rawBytes?: number;
+      artifact?: ContextArtifact;
+      rewrite?: (artifact: ContextArtifact) => any;
+      safeFallback?: any;
+    };
+    const drafts = event.messages.map((message: any, index: number): RewriteDraft => {
       if (message?.role === "toolResult") {
         routingTelemetry.contextHookToolResults += 1;
         const raw = contentText(message.content);
+        const rawBytes = utf8Bytes(raw);
         const toolInput = typeof message.toolCallId === "string" ? toolInputs.get(message.toolCallId) : undefined;
         const toolName = String(message.toolName ?? toolInput?.toolName ?? "tool");
         const hostile = hasHostileText(raw) || hasHostileValue(message.content);
         if (hostile) routingTelemetry.contextHookToolResultHostile += 1;
-        const shouldRewrite = Buffer.byteLength(raw, "utf8") > rewriteThresholdBytes || hostile;
-        if (!shouldRewrite) return { original: message };
         if (!shouldBrokerToolName(toolName)) {
-          return { original: message, replacement: { ...message, content: [{ type: "text", text: contextLookupHistoryPlaceholder() }] } };
+          const hasLaterAssistant = event.messages.slice(index + 1).some((candidate: any) => candidate?.role === "assistant");
+          if (!hasLaterAssistant) return { original: message };
+          routingTelemetry.contextHookContextLookupHistoryOmissions += 1;
+          return {
+            original: message,
+            rawBytes,
+            replacement: { ...message, content: [{ type: "text", text: contextLookupHistoryPlaceholder() }] },
+          };
         }
+        const shouldRewrite = rawBytes > rewriteThresholdBytes || hostile;
+        if (!shouldRewrite) return { original: message };
         const artifact = publishToolArtifact({
           toolName,
           input: message.input ?? toolInput?.input,
@@ -599,6 +638,7 @@ export async function registerContextBrokerBeta(pi: ExtensionAPI, options: Conte
         routingTelemetry.contextHookToolResultRewrites += 1;
         return {
           original: message,
+          rawBytes,
           artifact,
           rewrite: (live) => ({ ...message, content: [{ type: "text", text: brokerPlaceholder(live) }] }),
           safeFallback: { ...message, content: [{ type: "text", text: prunedPayloadPlaceholder(hostile) }] },
@@ -608,9 +648,10 @@ export async function registerContextBrokerBeta(pi: ExtensionAPI, options: Conte
       if (message?.role === "bashExecution" && message.excludeFromContext !== true) {
         routingTelemetry.contextHookBash += 1;
         const raw = String(message.output ?? "");
+        const rawBytes = utf8Bytes(raw);
         const hostile = hasHostileText(raw) || hasHostileValue(message.output);
         if (hostile) routingTelemetry.contextHookBashHostile += 1;
-        const shouldRewrite = Buffer.byteLength(raw, "utf8") > rewriteThresholdBytes || hostile;
+        const shouldRewrite = rawBytes > rewriteThresholdBytes || hostile;
         if (!shouldRewrite) return { original: message };
         const sourceId = typeof message.timestamp === "number"
           ? `bash:${message.timestamp}:${stableHash([message.command ?? "", raw, message.exitCode ?? "", message.cancelled ?? ""].join("\n"))}`
@@ -634,6 +675,7 @@ export async function registerContextBrokerBeta(pi: ExtensionAPI, options: Conte
         routingTelemetry.contextHookBashRewrites += 1;
         return {
           original: message,
+          rawBytes,
           artifact,
           rewrite: (live) => ({ ...message, output: brokerPlaceholder(live), truncated: true }),
           safeFallback: { ...message, output: prunedPayloadPlaceholder(hostile), truncated: true },
@@ -647,6 +689,7 @@ export async function registerContextBrokerBeta(pi: ExtensionAPI, options: Conte
     const messages = drafts.map((draft) => {
       if (draft.replacement) {
         changed = true;
+        recordContextRewrite(draft.rawBytes ?? promptPayloadBytes(draft.original), promptPayloadBytes(draft.replacement));
         return draft.replacement;
       }
       if (!draft.artifact || !draft.rewrite) return draft.original;
@@ -655,12 +698,15 @@ export async function registerContextBrokerBeta(pi: ExtensionAPI, options: Conte
         for (const parentId of draft.artifact.parentIds) sourceHandles.delete(parentId);
         if (draft.safeFallback) {
           changed = true;
+          recordContextRewrite(draft.rawBytes ?? promptPayloadBytes(draft.original), promptPayloadBytes(draft.safeFallback));
           return draft.safeFallback;
         }
         return draft.original;
       }
       changed = true;
-      return draft.rewrite(live);
+      const replacement = draft.rewrite(live);
+      recordContextRewrite(draft.rawBytes ?? promptPayloadBytes(draft.original), promptPayloadBytes(replacement));
+      return replacement;
     });
 
     return changed ? { messages } : undefined;
