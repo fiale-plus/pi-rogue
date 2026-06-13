@@ -7,6 +7,7 @@ import { appendRouteEvent, buildRouteEvent } from "./ledger.js";
 import { writeCapabilityCards, writeShadowEval, writeTeacherPromptRequests, writeTeacherReflection } from "./learning.js";
 import { writeTrainingRows } from "./dataset.js";
 import { writeInferredOutcomes } from "./outcomes.js";
+import { runTeacherLabeling } from "./teacher-runner.js";
 
 interface Args {
   command?: string;
@@ -22,9 +23,12 @@ interface Args {
   teacher?: string;
   teacherOutput?: string;
   teacherPrompts?: string;
+  requests?: string;
+  decisionsOutput?: string;
   outcomes?: string;
   includeLocalRuleLabels?: boolean;
   workspaceDiff?: boolean;
+  dryRun?: boolean;
   pretty: boolean;
 }
 
@@ -36,6 +40,7 @@ function usage(): never {
   npm run router:cards -- --events <events.jsonl> --output <model-cards.jsonl> [--outcomes <outcomes.jsonl>] [--pretty]
   npm run router:outcomes -- --checkpoint-file <checkpoints.jsonl> --events <events.jsonl> --output <outcomes.jsonl> [--pretty]
   npm run router:teacher-requests -- --checkpoint-file <checkpoints.jsonl> --output <requests.jsonl> [--teacher openai-codex/gpt-5.5] [--pretty]
+  npm run router:teacher-label -- --requests <requests.jsonl> --teacher-output <decisions.jsonl> --labels <labels.jsonl> [--teacher openai-codex/gpt-5.5] [--dry-run] [--pretty]
   npm run router:reflect -- --checkpoint-file <checkpoints.jsonl> --labels <labels.jsonl> --reflection <reflection.md> [--teacher local-rule] [--teacher-output <decisions.jsonl>] [--teacher-prompts <requests.jsonl>] [--pretty]
   npm run router:dataset -- --checkpoint-file <checkpoints.jsonl> --output <training.jsonl> [--events <events.jsonl>] [--outcomes <outcomes.jsonl>] [--labels <labels.jsonl>] [--include-local-rule-labels] [--pretty]
   npm run router:shadow -- --checkpoint-file <checkpoints.jsonl> --output <report.json> [--ledger <events.jsonl>] [--pretty]
@@ -46,6 +51,7 @@ Commands:
   cards      Generate local observed model capability cards from route events and optional outcomes.
   outcomes   Infer conservative outcome skeletons that can be manually enriched.
   teacher-requests Generate local JSONL prompt requests for explicit teacher labeling.
+  teacher-label Run explicit teacher model labeling over request JSONL.
   reflect    Generate command-triggered soft routing labels and a reflection artifact.
   dataset    Export trainable rows for a conservative continue-vs-intervene gate.
   shadow     Shadow-evaluate the current rule policy over historical checkpoints.
@@ -119,6 +125,16 @@ function parseArgs(argv: string[]): Args {
       index++;
       continue;
     }
+    if (arg === "--requests" && next) {
+      args.requests = next;
+      index++;
+      continue;
+    }
+    if (arg === "--decisions-output" && next) {
+      args.decisionsOutput = next;
+      index++;
+      continue;
+    }
     if (arg === "--outcomes" && next) {
       args.outcomes = next;
       index++;
@@ -130,6 +146,10 @@ function parseArgs(argv: string[]): Args {
     }
     if (arg === "--workspace-diff") {
       args.workspaceDiff = true;
+      continue;
+    }
+    if (arg === "--dry-run") {
+      args.dryRun = true;
       continue;
     }
     if (arg === "--pretty") {
@@ -213,6 +233,17 @@ function teacherRequests(args: Args): unknown {
   return { schema: "pi-router.teacher-requests-summary.v1", output: resolve(args.output), requests: requests.length, teacher: args.teacher ?? "openai-codex/gpt-5.5" };
 }
 
+async function teacherLabel(args: Args): Promise<unknown> {
+  if (!args.requests || !args.teacherOutput || !args.labels) usage();
+  return runTeacherLabeling({
+    requestsPath: args.requests,
+    decisionsOutputPath: args.teacherOutput,
+    labelsOutputPath: args.labels,
+    teacher: args.teacher,
+    dryRun: args.dryRun,
+  });
+}
+
 function reflect(args: Args): unknown {
   if (!args.checkpointFile || !args.labels || !args.reflection) usage();
   const result = writeTeacherReflection({
@@ -261,13 +292,15 @@ async function main(): Promise<void> {
           ? outcomes(args)
           : args.command === "teacher-requests"
             ? teacherRequests(args)
-            : args.command === "reflect"
-              ? reflect(args)
-              : args.command === "dataset"
-                ? dataset(args)
-                : args.command === "shadow"
-                  ? shadow(args)
-                  : usage();
+            : args.command === "teacher-label"
+              ? await teacherLabel(args)
+              : args.command === "reflect"
+                ? reflect(args)
+                : args.command === "dataset"
+                  ? dataset(args)
+                  : args.command === "shadow"
+                    ? shadow(args)
+                    : usage();
   console.log(args.pretty ? JSON.stringify(result, null, 2) : JSON.stringify(result));
 }
 

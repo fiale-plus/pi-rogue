@@ -12,7 +12,8 @@ npm run router:decide -- --checkpoint-file .pi/router/checkpoints.jsonl --ledger
 npm run router:cards -- --events .pi/router/events.jsonl --output .pi/router/model-cards.jsonl
 npm run router:outcomes -- --checkpoint-file .pi/router/checkpoints.jsonl --events .pi/router/events.jsonl --output .pi/router/outcomes.jsonl
 npm run router:teacher-requests -- --checkpoint-file .pi/router/checkpoints.jsonl --output .pi/router/teacher-requests.jsonl --teacher openai-codex/gpt-5.5
-npm run router:reflect -- --checkpoint-file .pi/router/checkpoints.jsonl --labels .pi/router/labels/teacher-labels.jsonl --reflection .pi/router/reflections/session.md --teacher local-rule
+npm run router:teacher-label -- --requests .pi/router/teacher-requests.jsonl --teacher-output .pi/router/teacher-decisions.jsonl --labels .pi/router/labels/teacher-labels.jsonl --teacher openai-codex/gpt-5.5
+npm run router:reflect -- --checkpoint-file .pi/router/checkpoints.jsonl --labels .pi/router/labels/teacher-labels.jsonl --reflection .pi/router/reflections/session.md --teacher openai-codex/gpt-5.5 --teacher-output .pi/router/teacher-decisions.jsonl
 npm run router:dataset -- --checkpoint-file .pi/router/checkpoints.jsonl --events .pi/router/events.jsonl --outcomes .pi/router/outcomes.jsonl --labels .pi/router/labels/teacher-labels.jsonl --output .pi/router/training.jsonl
 npm run router:shadow -- --checkpoint-file .pi/router/checkpoints.jsonl --ledger .pi/router/events.jsonl --output .pi/router/shadow-report.json
 
@@ -29,6 +30,6 @@ Live config is repo-global at `.pi/router/config.json`, while mutable live state
 
 - Diff telemetry stores counts and hashes from `git diff`, not raw patches. Offline rebuilds remain deterministic by default; use `--workspace-diff` only with one current live session/worktree snapshot.
 - Error fingerprints normalize paths, line numbers, timestamps, UUIDs, ports, and object ids before hashing.
-- `router:teacher-requests` writes local JSONL requests for an explicit teacher model; imported teacher decisions are still required before labels become training truth.
+- `router:teacher-requests` writes local JSONL requests for an explicit teacher model; `router:teacher-label` calls the explicitly configured teacher and writes decision/label JSONL artifacts.
 - `router:dataset` excludes `local-rule` labels by default so a future model does not merely imitate the current rules.
 - Subagent route/ledger schemas describe parent-child evidence flow, but live autonomous spawning remains out of scope.

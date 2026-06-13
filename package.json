@@ -29,6 +29,7 @@
     "router:cards": "tsx packages/router/src/cli.ts cards",
     "router:outcomes": "tsx packages/router/src/cli.ts outcomes",
     "router:teacher-requests": "tsx packages/router/src/cli.ts teacher-requests",
+    "router:teacher-label": "tsx packages/router/src/cli.ts teacher-label",
     "router:reflect": "tsx packages/router/src/cli.ts reflect",
     "router:dataset": "tsx packages/router/src/cli.ts dataset",
     "router:shadow": "tsx packages/router/src/cli.ts shadow"
