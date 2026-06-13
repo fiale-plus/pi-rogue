@@ -1,3 +1,4 @@
+export * from "./binary-gate.js";
 export * from "./checkpoints.js";
 export * from "./completions.js";
 export * from "./config.js";
