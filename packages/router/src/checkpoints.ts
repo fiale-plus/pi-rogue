@@ -1,6 +1,7 @@
 import { closeSync, mkdirSync, openSync, writeSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { hashMaybe, hashText, normalizeText } from "./hash.js";
+import { routerSessionKey } from "./config.js";
 import { diffChurnScore, EMPTY_DIFF_STATS, readGitDiffStats } from "./git-features.js";
 import { touchedFileHashesFromEvent } from "./progress.js";
 import { readPiSession, sessionIdFromPath, streamPiSessionEvents, type PiSession, type RawPiSessionEvent } from "./session-reader.js";
@@ -321,7 +322,14 @@ export async function writeSessionCheckpointsJsonl(sessionPaths: string[], outpu
     ? (() => {
       const session = readPiSession(sessionPaths[0]);
       const routerDir = session.cwd ? resolve(session.cwd, ".pi", "router") : undefined;
-      const routerArtifacts = routerDir ? [resolve(routerDir, "config.json"), resolve(routerDir, "state.json"), resolve(routerDir, "events.jsonl")] : [];
+      const routerSessionDir = routerDir ? resolve(routerDir, "sessions", routerSessionKey(session.path)) : undefined;
+      const routerArtifacts = routerDir ? [
+        routerDir,
+        resolve(routerDir, "config.json"),
+        resolve(routerDir, "state.json"),
+        resolve(routerDir, "events.jsonl"),
+        ...(routerSessionDir ? [resolve(routerSessionDir, "state.json"), resolve(routerSessionDir, "events.jsonl")] : []),
+      ] : [];
       return applyWorkspaceDiffToLatest(buildCheckpoints(session), session.cwd, [session.path, resolved, ...routerArtifacts]);
     })()
     : null;

@@ -25,6 +25,8 @@ npm run router:shadow -- --checkpoint-file .pi/router/checkpoints.jsonl --ledger
 
 Router v1 is still observe-only. It adds outcome skeletons, stronger diff/error fingerprints, teacher-label request export, binary gate dataset export, and subagent-aware telemetry schemas. It does not switch models, spawn agents, or promote policies automatically.
 
+Live config is repo-global at `.pi/router/config.json`, while mutable live state and route ledgers are isolated per Pi session under `.pi/router/sessions/<session-key>/state.json` and `events.jsonl`.
+
 - Diff telemetry stores counts and hashes from `git diff`, not raw patches. Offline rebuilds remain deterministic by default; use `--workspace-diff` only with one current live session/worktree snapshot.
 - Error fingerprints normalize paths, line numbers, timestamps, UUIDs, ports, and object ids before hashing.
 - `router:teacher-requests` writes local JSONL requests for an explicit teacher model; imported teacher decisions are still required before labels become training truth.

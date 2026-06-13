@@ -1,5 +1,6 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
+import { hashText } from "./hash.js";
 
 export type RouterMode = "observe";
 export type RouterPrintMode = "all" | "mismatch_only" | "off";
@@ -83,12 +84,36 @@ export function routerConfigPath(ctx: any): string {
   return join(routerDir(ctx), "config.json");
 }
 
-export function routerStatePath(ctx: any): string {
-  return join(routerDir(ctx), "state.json");
+function sessionPathFromCtx(ctx: any): string | undefined {
+  const value = ctx?.sessionManager?.getSessionFile?.();
+  return value ? String(value) : undefined;
 }
 
-export function routerEventsPath(ctx: any): string {
-  return join(routerDir(ctx), "events.jsonl");
+function safeSegment(value: string): string {
+  return value.replace(/[^a-zA-Z0-9._-]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 96) || "session";
+}
+
+export function routerSessionKey(sessionPath: string): string {
+  const resolved = resolve(sessionPath);
+  const name = safeSegment(basename(resolved).replace(/\.jsonl$/i, ""));
+  return `${name}-${hashText(resolved).slice(0, 8)}`;
+}
+
+export function routerSessionsDir(ctx: any): string {
+  return join(routerDir(ctx), "sessions");
+}
+
+export function routerSessionDir(ctx: any, sessionPath = sessionPathFromCtx(ctx)): string {
+  const key = sessionPath ? routerSessionKey(sessionPath) : "no-session";
+  return join(routerSessionsDir(ctx), key);
+}
+
+export function routerStatePath(ctx: any, sessionPath = sessionPathFromCtx(ctx)): string {
+  return join(routerSessionDir(ctx, sessionPath), "state.json");
+}
+
+export function routerEventsPath(ctx: any, sessionPath = sessionPathFromCtx(ctx)): string {
+  return join(routerSessionDir(ctx, sessionPath), "events.jsonl");
 }
 
 function readJson<T>(path: string, fallback: T): T {
@@ -135,12 +160,12 @@ export function ensureRouterConfig(ctx: any): RouterConfig {
   return config;
 }
 
-export function loadRouterState(ctx: any): RouterState {
-  return readJson<RouterState>(routerStatePath(ctx), {});
+export function loadRouterState(ctx: any, sessionPath?: string): RouterState {
+  return readJson<RouterState>(routerStatePath(ctx, sessionPath), {});
 }
 
-export function saveRouterState(ctx: any, state: RouterState): void {
-  const path = routerStatePath(ctx);
+export function saveRouterState(ctx: any, state: RouterState, sessionPath?: string): void {
+  const path = routerStatePath(ctx, sessionPath);
   mkdirSync(dirname(path), { recursive: true });
   writeFileSync(path, `${JSON.stringify(state, null, 2)}\n`);
 }

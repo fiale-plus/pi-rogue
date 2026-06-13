@@ -1,26 +1,36 @@
-import { mkdtempSync, readFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { routerArgumentCompletions } from "./completions.js";
-import { activeProfile, cycleRouterProfile, ensureRouterConfig, loadRouterConfig, routerConfigPath, setRouterProfile } from "./config.js";
+import { activeProfile, cycleRouterProfile, ensureRouterConfig, loadRouterConfig, routerConfigPath, routerEventsPath, routerSessionDir, routerStatePath, saveRouterConfig, setRouterProfile } from "./config.js";
 import { registerRouter } from "./extension.js";
 import { decideRoute } from "./decision.js";
-import { summarizeRouterDecision } from "./observe.js";
+import { observeRouterTurn, summarizeRouterDecision } from "./observe.js";
 import type { RouterCheckpoint } from "./types.js";
 
-function ctxMock() {
+function ctxMock(sessionPath?: string) {
   const cwd = mkdtempSync(join(tmpdir(), "pi-router-ext-"));
   const notifications: Array<{ text: string; level: string }> = [];
   return {
     cwd,
     notifications,
+    sessionManager: sessionPath ? { getSessionFile: () => sessionPath } : undefined,
     ui: {
       notify(text: string, level: string) {
         notifications.push({ text, level });
       },
     },
   };
+}
+
+function writeSessionFixture(dir: string, name: string): string {
+  const path = join(dir, name);
+  writeFileSync(path, [
+    JSON.stringify({ type: "session", id: name, cwd: dir }),
+    JSON.stringify({ type: "message", id: `${name}-user`, message: { role: "user", content: [{ type: "text", text: "please implement a small fix" }] } }),
+  ].join("\n") + "\n");
+  return path;
 }
 
 function piMock() {
@@ -97,6 +107,28 @@ describe("router config profiles", () => {
   it("completes router commands and profile names", () => {
     expect(routerArgumentCompletions("")?.map((item) => item.value)).toEqual(expect.arrayContaining(["on", "off", "status", "profile"]));
     expect(routerArgumentCompletions("profile s")?.map((item) => item.value)).toEqual(["profile spark-smart"]);
+  });
+
+  it("keeps config repo-global while state and live events are session-scoped", async () => {
+    const cwd = mkdtempSync(join(tmpdir(), "pi-router-sessions-"));
+    const firstSession = writeSessionFixture(cwd, "session-a.jsonl");
+    const secondSession = writeSessionFixture(cwd, "session-b.jsonl");
+    const firstCtx = { ...ctxMock(firstSession), cwd };
+    const secondCtx = { ...ctxMock(secondSession), cwd };
+    saveRouterConfig(firstCtx, { ...loadRouterConfig(firstCtx), enabled: true, print: "all" });
+
+    expect(routerConfigPath(firstCtx)).toBe(routerConfigPath(secondCtx));
+    expect(routerStatePath(firstCtx, firstSession)).not.toBe(routerStatePath(secondCtx, secondSession));
+    expect(routerEventsPath(firstCtx, firstSession)).not.toBe(routerEventsPath(secondCtx, secondSession));
+    expect(routerSessionDir(firstCtx, firstSession)).toContain("session-a");
+
+    await observeRouterTurn(firstCtx);
+    await observeRouterTurn(secondCtx);
+
+    expect(existsSync(routerStatePath(firstCtx, firstSession))).toBe(true);
+    expect(existsSync(routerStatePath(secondCtx, secondSession))).toBe(true);
+    expect(readFileSync(routerEventsPath(firstCtx, firstSession), "utf8").trim().split("\n")).toHaveLength(1);
+    expect(readFileSync(routerEventsPath(secondCtx, secondSession), "utf8").trim().split("\n")).toHaveLength(1);
   });
 });
 
