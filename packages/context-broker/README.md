@@ -22,7 +22,7 @@ PI_CONTEXT_BROKER_ENABLED=false pi
 
 When active, the bundle registers:
 
-- `/context status` — enabled state, record/byte counts, pinned counts, and routing telemetry.
+- `/context status` — enabled state, record/byte counts, pinned counts, routing telemetry, and prompt rewrite savings bytes.
 - `/context brief` — bounded prompt-safe broker brief with handles and summaries.
 - `/context lookup <handle|text>` — exact handle rehydration or current-session text search.
 - `/context pin <handle>` — protect an artifact from normal TTL/cap pruning.
@@ -33,9 +33,9 @@ The command includes autocomplete for subcommands and known artifact handles. Ex
 
 Optional durability is available with `PI_CONTEXT_BROKER_DURABLE=true` or `PI_CONTEXT_BROKER_STORE_DIR=/path/to/store`. Durable mode now defaults to SQLite (`artifacts.sqlite`) with an FTS index for text lookup, so exact handles, tier, and pin state survive restarts without replay reconstruction. Set `PI_CONTEXT_BROKER_BACKEND=jsonl` to use the legacy JSONL/blob backend.
 
-- `PI_CONTEXT_BROKER_REWRITE_THRESHOLD_BYTES` controls when large `toolResult` / `bashExecution` payloads are rewritten in-context. The default is `0` (rewritten), so raw tool evidence is replaced by handles by default.
+- `PI_CONTEXT_BROKER_REWRITE_THRESHOLD_BYTES` controls when large `toolResult` / `bashExecution` payloads are rewritten in-context. The default is `8192` bytes, so small tool evidence remains inline while larger outputs are replaced by handles.
 
-For quieter sessions, set `PI_CONTEXT_BROKER_REWRITE_THRESHOLD_BYTES` to a higher value to only rewrite larger outputs.
+For more aggressive prompt reduction, set `PI_CONTEXT_BROKER_REWRITE_THRESHOLD_BYTES=0`. For quieter sessions, set it to a higher value to only rewrite larger outputs.
 
 
 ## Session behavior and limits
@@ -45,6 +45,7 @@ For quieter sessions, set `PI_CONTEXT_BROKER_REWRITE_THRESHOLD_BYTES` to a highe
 - Without durable mode, restarting Pi loses broker state until the current branch is backfilled again.
 - Prompt integration injects a bounded, tier-aware broker brief and lookup guidance; the LLM also gets a `context_lookup` tool for exact handle dereferencing. Payloads that hit hostile-binary heuristics are represented in prompt as handles plus short guidance to export the full content.
 - The `context` hook rewrites prompt-visible `toolResult` and `bashExecution` payloads in the LLM-bound message copy to broker handles and summaries, reducing prompt load while preserving exact `/context lookup` rehydration.
+- Current-turn `context_lookup` results are left visible so the model can consume requested exact evidence once. Historical `context_lookup` results that already have a later assistant response are omitted from later prompt assembly to avoid recursive prompt growth.
 - Pi `excludeFromContext` bash entries are not backfilled or rewritten into broker prompts.
 - Basic secret redaction runs before broker storage and display for common token/password/API-key patterns.
 - Optional global caps can be configured via env vars:
