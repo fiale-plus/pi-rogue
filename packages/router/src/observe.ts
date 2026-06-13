@@ -6,6 +6,7 @@ import {
   loadRouterConfig,
   loadRouterState,
   routerConfigPath,
+  routerDir,
   routerEventsPath,
   routerStatePath,
   saveRouterState,
@@ -100,18 +101,24 @@ export async function observeRouterTurn(ctx: any): Promise<RouterObserveSummary 
   if (!sessionPath) return null;
   const checkpoint = await latestCheckpointFromSession(String(sessionPath));
   if (!checkpoint) return null;
-  const state = loadRouterState(ctx);
+  const state = loadRouterState(ctx, String(sessionPath));
   if (state.lastObservedCheckpointId === checkpoint.checkpointId) return null;
 
-  const liveCheckpoint = checkpointWithDiffStats(checkpoint, ctx?.cwd, [sessionPath, routerConfigPath(ctx), routerStatePath(ctx), routerEventsPath(ctx)]);
+  const liveCheckpoint = checkpointWithDiffStats(checkpoint, ctx?.cwd, [
+    String(sessionPath),
+    routerConfigPath(ctx),
+    routerDir(ctx),
+    routerStatePath(ctx, String(sessionPath)),
+    routerEventsPath(ctx, String(sessionPath)),
+  ]);
   const decision = decideRoute(liveCheckpoint);
   const summary = summarizeRouterDecision(liveCheckpoint, decision, config);
-  appendRouteEvent(routerEventsPath(ctx), buildRouteEvent(liveCheckpoint, decision));
+  appendRouteEvent(routerEventsPath(ctx, String(sessionPath)), buildRouteEvent(liveCheckpoint, decision));
   saveRouterState(ctx, {
     lastObservedCheckpointId: checkpoint.checkpointId,
     lastDecisionAction: decision.action,
     lastSummary: summary.text,
-  });
+  }, String(sessionPath));
 
   if (config.print === "mismatch_only" && summary.match !== false) return summary;
   ctx.ui?.notify?.(summary.text, summary.match === false ? "warning" : "info");

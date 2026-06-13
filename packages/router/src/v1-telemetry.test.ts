@@ -91,14 +91,18 @@ describe("router v1 outcome and feature telemetry", () => {
     writeFileSync(join(repo, "new-file.txt"), "secret-ish content\n");
 
     const stats = readGitDiffStats(repo);
+    execFileSync("mkdir", ["-p", ".pi/router/sessions/other"], { cwd: repo });
+    writeFileSync(join(repo, ".pi/router/sessions/other/events.jsonl"), "{}\n");
     const excluded = readGitDiffStats(repo, { excludePaths: [join(repo, "new-file.txt")] });
+    const excludedRouterDir = readGitDiffStats(repo, { excludePaths: [join(repo, ".pi/router")] });
 
     expect(stats.filesChanged).toBeGreaterThanOrEqual(2);
     expect(stats.linesAdded).toBeGreaterThanOrEqual(1);
     expect(stats.fileHashes).toHaveLength(stats.filesChanged);
     expect(JSON.stringify(stats)).not.toContain("tracked.txt");
     expect(JSON.stringify(stats)).not.toContain("new-file.txt");
-    expect(excluded.filesChanged).toBe(1);
+    expect(excluded.filesChanged).toBe(2);
+    expect(excludedRouterDir.filesChanged).toBe(2);
   });
 
   it("reads untracked files from repo root when launched in a subdirectory", () => {
