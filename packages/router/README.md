@@ -11,6 +11,7 @@ npm run router:rebuild -- --session ./current-session.jsonl --workspace-diff --o
 npm run router:decide -- --checkpoint-file .pi/router/checkpoints.jsonl --ledger .pi/router/events.jsonl
 npm run router:cards -- --events .pi/router/events.jsonl --output .pi/router/model-cards.jsonl
 npm run router:outcomes -- --checkpoint-file .pi/router/checkpoints.jsonl --events .pi/router/events.jsonl --output .pi/router/outcomes.jsonl
+npm run router:outcome-enrich -- --outcomes .pi/router/outcomes.jsonl --checkpoint-file .pi/router/checkpoints.jsonl --events .pi/router/events.jsonl --output .pi/router/outcomes.enriched.jsonl
 npm run router:teacher-requests -- --checkpoint-file .pi/router/checkpoints.jsonl --output .pi/router/teacher-requests.jsonl --teacher openai-codex/gpt-5.5
 npm run router:teacher-label -- --requests .pi/router/teacher-requests.jsonl --teacher-output .pi/router/teacher-decisions.jsonl --labels .pi/router/labels/teacher-labels.jsonl --teacher openai-codex/gpt-5.5
 npm run router:reflect -- --checkpoint-file .pi/router/checkpoints.jsonl --labels .pi/router/labels/teacher-labels.jsonl --reflection .pi/router/reflections/session.md --teacher openai-codex/gpt-5.5 --teacher-output .pi/router/teacher-decisions.jsonl
@@ -29,6 +30,7 @@ Router v1 is still observe-only. It adds outcome skeletons, stronger diff/error 
 Live config is repo-global at `.pi/router/config.json`, while mutable live state and route ledgers are isolated per Pi session under `.pi/router/sessions/<session-key>/state.json` and `events.jsonl`.
 
 - Diff telemetry stores counts and hashes from `git diff`, not raw patches. Offline rebuilds remain deterministic by default; use `--workspace-diff` only with one current live session/worktree snapshot.
+- `router:outcome-enrich` upgrades conservative outcome skeletons with checkpoint/event-derived verifier, rework, interruption, override, and accepted-diff signals.
 - Error fingerprints normalize paths, line numbers, timestamps, UUIDs, ports, and object ids before hashing.
 - `router:teacher-requests` writes local JSONL requests for an explicit teacher model; `router:teacher-label` calls the explicitly configured teacher and writes decision/label JSONL artifacts.
 - `router:dataset` excludes `local-rule` labels by default so a future model does not merely imitate the current rules.

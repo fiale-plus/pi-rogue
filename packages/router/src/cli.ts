@@ -6,7 +6,7 @@ import { writeSessionCheckpointsJsonl } from "./checkpoints.js";
 import { appendRouteEvent, buildRouteEvent } from "./ledger.js";
 import { writeCapabilityCards, writeShadowEval, writeTeacherPromptRequests, writeTeacherReflection } from "./learning.js";
 import { writeTrainingRows } from "./dataset.js";
-import { writeInferredOutcomes } from "./outcomes.js";
+import { writeEnrichedOutcomes, writeInferredOutcomes } from "./outcomes.js";
 import { runTeacherLabeling } from "./teacher-runner.js";
 
 interface Args {
@@ -39,6 +39,7 @@ function usage(): never {
   npm run router:decide -- --checkpoint-file <checkpoints.jsonl> [--checkpoint-id <id>] [--ledger <events.jsonl>] [--pretty]
   npm run router:cards -- --events <events.jsonl> --output <model-cards.jsonl> [--outcomes <outcomes.jsonl>] [--pretty]
   npm run router:outcomes -- --checkpoint-file <checkpoints.jsonl> --events <events.jsonl> --output <outcomes.jsonl> [--pretty]
+  npm run router:outcome-enrich -- --outcomes <outcomes.jsonl> --output <enriched-outcomes.jsonl> [--checkpoint-file <checkpoints.jsonl>] [--events <events.jsonl>] [--pretty]
   npm run router:teacher-requests -- --checkpoint-file <checkpoints.jsonl> --output <requests.jsonl> [--teacher openai-codex/gpt-5.5] [--pretty]
   npm run router:teacher-label -- --requests <requests.jsonl> --teacher-output <decisions.jsonl> --labels <labels.jsonl> [--teacher openai-codex/gpt-5.5] [--dry-run] [--pretty]
   npm run router:reflect -- --checkpoint-file <checkpoints.jsonl> --labels <labels.jsonl> --reflection <reflection.md> [--teacher local-rule] [--teacher-output <decisions.jsonl>] [--teacher-prompts <requests.jsonl>] [--pretty]
@@ -50,6 +51,7 @@ Commands:
   decide     Emit a strict JSON route decision for a checkpoint and optionally append a route event.
   cards      Generate local observed model capability cards from route events and optional outcomes.
   outcomes   Infer conservative outcome skeletons that can be manually enriched.
+  outcome-enrich Enrich outcome records from checkpoints and route events.
   teacher-requests Generate local JSONL prompt requests for explicit teacher labeling.
   teacher-label Run explicit teacher model labeling over request JSONL.
   reflect    Generate command-triggered soft routing labels and a reflection artifact.
@@ -227,6 +229,11 @@ function outcomes(args: Args): unknown {
   return writeInferredOutcomes({ checkpointPath: args.checkpointFile, eventsPath: args.events, outputPath: args.output });
 }
 
+function outcomeEnrich(args: Args): unknown {
+  if (!args.outcomes || !args.output) usage();
+  return writeEnrichedOutcomes({ outcomesPath: args.outcomes, outputPath: args.output, checkpointPath: args.checkpointFile, eventsPath: args.events });
+}
+
 function teacherRequests(args: Args): unknown {
   if (!args.checkpointFile || !args.output) usage();
   const requests = writeTeacherPromptRequests(args.checkpointFile, args.output, args.teacher ?? "openai-codex/gpt-5.5");
@@ -290,17 +297,19 @@ async function main(): Promise<void> {
         ? cards(args)
         : args.command === "outcomes"
           ? outcomes(args)
-          : args.command === "teacher-requests"
+          : args.command === "outcome-enrich"
+            ? outcomeEnrich(args)
+            : args.command === "teacher-requests"
             ? teacherRequests(args)
             : args.command === "teacher-label"
-              ? await teacherLabel(args)
-              : args.command === "reflect"
-                ? reflect(args)
-                : args.command === "dataset"
-                  ? dataset(args)
-                  : args.command === "shadow"
-                    ? shadow(args)
-                    : usage();
+                ? await teacherLabel(args)
+                : args.command === "reflect"
+                  ? reflect(args)
+                  : args.command === "dataset"
+                    ? dataset(args)
+                    : args.command === "shadow"
+                      ? shadow(args)
+                      : usage();
   console.log(args.pretty ? JSON.stringify(result, null, 2) : JSON.stringify(result));
 }
 

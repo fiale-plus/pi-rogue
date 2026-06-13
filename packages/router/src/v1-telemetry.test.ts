@@ -9,7 +9,7 @@ import { decideRoute } from "./decision.js";
 import { buildRouteEvent } from "./ledger.js";
 import { readGitDiffStats } from "./git-features.js";
 import { generateTeacherPromptRequests } from "./learning.js";
-import { buildUnknownOutcome, inferOutcomes, writeInferredOutcomes } from "./outcomes.js";
+import { buildUnknownOutcome, enrichOutcome, inferOutcomes, writeEnrichedOutcomes, writeInferredOutcomes } from "./outcomes.js";
 import { buildSubagentLedgerEvent, recommendSubagentDecision } from "./subagents.js";
 import type { RouterCheckpoint } from "./types.js";
 
@@ -150,6 +150,59 @@ describe("router v1 outcome and feature telemetry", () => {
     });
     expect(buildUnknownOutcome(event, checkpoint({ features: { diffFilesChanged: 0, filesTouched: 1 } }))).toMatchObject({ finalFilesTouched: 1 });
     expect(JSON.stringify(outcome)).not.toContain("Error: boom");
+  });
+
+  it("enriches outcome skeletons from checkpoint and route-event evidence", () => {
+    const item = checkpoint({ features: { verifierUsed: true, testsImproved: true, progressScore: 0.9, loopScore: 0.1, diffLines: 44, diffFilesChanged: 3, sameErrorRepeatedCount: 1 } });
+    const event = buildRouteEvent(item, decideRoute(item));
+    const outcome = buildUnknownOutcome(event, item);
+
+    const enriched = enrichOutcome({ ...outcome, taskStatus: "unknown", testsPassedAfter: true, verifierImproved: null, acceptedDiff: null }, { checkpoint: item, event, recordedAt: "2026-06-14T00:00:00.000Z" });
+
+    expect(enriched).toMatchObject({
+      taskStatus: "success",
+      testsPassedAfter: true,
+      verifierImproved: true,
+      acceptedDiff: true,
+      finalFilesTouched: 3,
+      finalDiffLines: 44,
+    });
+    expect(enriched.evidence.notesHash).toBeTruthy();
+    expect(JSON.stringify(enriched)).not.toContain("npm test");
+  });
+
+  it("writes enriched outcomes from explicit inputs", () => {
+    const item = checkpoint({ features: { verifierUsed: true, testsImproved: false, progressScore: 0.2, loopScore: 0.8, sameErrorRepeatedCount: 3 } });
+    const event = buildRouteEvent(item, decideRoute(item));
+    const checkpointPath = tempFile("checkpoints.jsonl");
+    const eventsPath = tempFile("events.jsonl");
+    const outcomesPath = tempFile("outcomes.jsonl");
+    const outputPath = tempFile("outcomes.enriched.jsonl");
+    writeFileSync(checkpointPath, `${JSON.stringify(item)}\n`);
+    writeFileSync(eventsPath, `${JSON.stringify(event)}\n`);
+    writeFileSync(outcomesPath, `${JSON.stringify({ ...buildUnknownOutcome(event, item), testsPassedAfter: false })}\n`);
+
+    const summary = writeEnrichedOutcomes({ outcomesPath, checkpointPath, eventsPath, outputPath });
+    const enriched = JSON.parse(readFileSync(outputPath, "utf8").trim());
+
+    expect(summary).toMatchObject({ schema: "pi-router.outcome-enrich-summary.v1", inputOutcomes: 1, outputOutcomes: 1, enriched: 1 });
+    expect(enriched).toMatchObject({ testsPassedAfter: false, verifierImproved: false, taskStatus: "failed" });
+    const eventOnlyOutput = tempFile("outcomes.event-only.jsonl");
+    writeEnrichedOutcomes({ outcomesPath, eventsPath, outputPath: eventOnlyOutput });
+    expect(JSON.parse(readFileSync(eventOnlyOutput, "utf8").trim())).toMatchObject({ finalDiffLines: event.metrics.diffLines, finalFilesTouched: event.metrics.diffFilesChanged, reworkTurns: 2 });
+    expect(writeEnrichedOutcomes({ outcomesPath: outputPath, checkpointPath, eventsPath, outputPath: tempFile("outcomes.enriched.again.jsonl") }).enriched).toBe(0);
+    const manualOutput = tempFile("outcomes.manual.enriched.jsonl");
+    writeFileSync(outcomesPath, `${JSON.stringify({ ...buildUnknownOutcome(event, item), evidence: { source: "manual", notesHash: "manual-notes-hash" } })}\n`);
+    writeEnrichedOutcomes({ outcomesPath, checkpointPath, eventsPath, outputPath: manualOutput });
+    expect(JSON.parse(readFileSync(manualOutput, "utf8").trim()).evidence.notesHash).toBe("manual-notes-hash");
+    const wrongEventsPath = tempFile("wrong-events.jsonl");
+    writeFileSync(wrongEventsPath, `${JSON.stringify({ ...event, checkpointId: "other-checkpoint" })}\n`);
+    expect(() => writeEnrichedOutcomes({ outcomesPath, eventsPath: wrongEventsPath, outputPath: tempFile("bad-wrong-events.jsonl") })).toThrow(/outcome routeEventId\/checkpointId mismatch/);
+    const emptyEvents = tempFile("empty-events.jsonl");
+    writeFileSync(emptyEvents, "");
+    expect(() => writeEnrichedOutcomes({ outcomesPath, eventsPath: emptyEvents, outputPath: tempFile("bad-empty-evidence.jsonl") })).toThrow(/contains no events/);
+    expect(() => writeEnrichedOutcomes({ outcomesPath, outputPath: tempFile("bad-no-evidence.jsonl") })).toThrow(/requires --checkpoint-file or --events/);
+    expect(() => writeEnrichedOutcomes({ outcomesPath, eventsPath: join(tmpdir(), "missing-events.jsonl"), outputPath: tempFile("bad-enriched.jsonl") })).toThrow(/route events file not found/);
   });
 
   it("writes inferred outcomes from checkpoint and route-event files", () => {
