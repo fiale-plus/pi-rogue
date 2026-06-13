@@ -34,6 +34,7 @@
     "router:reflect": "tsx packages/router/src/cli.ts reflect",
     "router:dataset": "tsx packages/router/src/cli.ts dataset",
     "router:gate-train": "tsx packages/router/src/cli.ts gate-train",
+    "router:report": "tsx packages/router/src/cli.ts report",
     "router:shadow": "tsx packages/router/src/cli.ts shadow"
   },
   "engines": {
