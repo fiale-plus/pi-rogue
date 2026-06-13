@@ -20,6 +20,8 @@ export interface ContextBrokerBetaOptions {
   lookupBytes?: number;
   searchBytes?: number;
   rewriteThresholdBytes?: number;
+  hotToWarmMs?: number;
+  warmToColdMs?: number;
   durable?: boolean;
   storeDir?: string;
 }
@@ -32,6 +34,10 @@ const DEFAULT_LOOKUP_BYTES = 12_000;
 const DEFAULT_SEARCH_BYTES = 2_000;
 const DEFAULT_REWRITE_THRESHOLD_BYTES = 8 * 1024;
 const DEFAULT_TTL_MS = 24 * 60 * 60 * 1000;
+const DEFAULT_HOT_TO_WARM_MS = 2 * 60 * 60 * 1000;
+const DEFAULT_WARM_TO_COLD_MS = 12 * 60 * 60 * 1000;
+const DEFAULT_DURABLE_GLOBAL_MAX_RECORDS = 2_048;
+const DEFAULT_DURABLE_GLOBAL_MAX_BYTES = 256 * 1024 * 1024;
 const ENABLED_VALUES = new Set(["1", "true", "yes", "on"]);
 
 function envFlag(name: string): boolean {
@@ -89,6 +95,28 @@ function isHostilePayload(payload: string): boolean {
   return hasHostileText(payload);
 }
 
+function isOpaquePayload(payload: string): boolean {
+  return hasOpaqueText(payload);
+}
+
+function hasOpaqueText(text: string): boolean {
+  const value = String(text ?? "");
+  const bytes = Buffer.byteLength(value, "utf8");
+  if (bytes < 4096) return false;
+
+  const compacted = value.replace(/\s+/g, "");
+  if (compacted.length >= 4096 && /^[A-Za-z0-9+/=_-]+$/.test(compacted) && compacted.length / Math.max(1, value.length) > 0.85) return true;
+  if (/\b(?:[A-Fa-f0-9]{2}){2048,}\b/.test(value)) return true;
+
+  const lines = value.split(/\r?\n/);
+  const longestLine = lines.reduce((max, line) => Math.max(max, line.length), 0);
+  const whitespace = (value.match(/\s/g) ?? []).length;
+  const whitespaceRatio = whitespace / Math.max(1, value.length);
+  if (longestLine >= 4096 && whitespaceRatio < 0.03) return true;
+  if (longestLine >= 2048 && whitespaceRatio < 0.02 && /[{};:,]/.test(value)) return true;
+  return false;
+}
+
 function hasHostileText(text: string): boolean {
   let suspicious = 0;
   let scanned = 0;
@@ -117,12 +145,24 @@ function hasHostileValue(value: unknown): boolean {
   return false;
 }
 
+function hasOpaqueValue(value: unknown): boolean {
+  if (typeof value === "string") return hasOpaqueText(value);
+  if (Array.isArray(value)) return value.some(hasOpaqueValue);
+  if (value && typeof value === "object") {
+    return Object.values(value as Record<string, unknown>).some((entry) => hasOpaqueValue(entry));
+  }
+  return false;
+}
+
 function renderLookupOutput(item: ContextArtifact, payloadLimit: number): string {
   const isBinary = item.tags.includes("hostile") || item.tags.includes("binary");
-  const payloadLines = isBinary
+  const isOpaque = item.tags.includes("opaque");
+  const payloadLines = isBinary || isOpaque
     ? [
       "payload:",
-      "[payload intentionally omitted from prompt for safety; use /context export",
+      isOpaque && !isBinary
+        ? "[payload omitted from prompt because it appears opaque/high-token; use /context export"
+        : "[payload intentionally omitted from prompt for safety; use /context export",
       sanitizeForPrompt(item.handle),
       "for full content]",
     ]
@@ -174,6 +214,16 @@ function truncateUtf8(text: string, maxBytes: number): string {
 
 function compact(value: string, max = 120): string {
   return truncateUtf8(value.replace(/\s+/g, " ").trim(), max);
+}
+
+function capText(value: number): string {
+  return Number.isFinite(value) ? String(value) : "unbounded";
+}
+
+function lookupMissMessage(exact: boolean): string {
+  return exact
+    ? "No context artifact matched that exact handle. The artifact may be missing, expired, pruned, or from a non-durable prior session."
+    : "No context artifacts matched that text/filter query. Try an exact ctx:// handle, narrower path/tag/kind/tier filters, or a more specific search term.";
 }
 
 function utf8Bytes(text: string): number {
@@ -293,14 +343,16 @@ export async function registerContextBrokerBeta(pi: ExtensionAPI, options: Conte
     options.rewriteThresholdBytes
     ?? envNonNegativeInt("PI_CONTEXT_BROKER_REWRITE_THRESHOLD_BYTES")
     ?? DEFAULT_REWRITE_THRESHOLD_BYTES;
+  const durable = options.durable ?? (envFlag("PI_CONTEXT_BROKER_DURABLE") || Boolean(options.storeDir ?? process.env.PI_CONTEXT_BROKER_STORE_DIR));
   const brokerOptions = {
     maxRecords: options.maxRecords ?? 64,
     maxBytes: options.maxBytes ?? 8 * 1024 * 1024,
-    globalMaxRecords: options.globalMaxRecords ?? envNonNegativeInt("PI_CONTEXT_BROKER_GLOBAL_MAX_RECORDS"),
-    globalMaxBytes: options.globalMaxBytes ?? envNonNegativeInt("PI_CONTEXT_BROKER_GLOBAL_MAX_BYTES"),
+    globalMaxRecords: options.globalMaxRecords ?? envNonNegativeInt("PI_CONTEXT_BROKER_GLOBAL_MAX_RECORDS") ?? (durable ? DEFAULT_DURABLE_GLOBAL_MAX_RECORDS : undefined),
+    globalMaxBytes: options.globalMaxBytes ?? envNonNegativeInt("PI_CONTEXT_BROKER_GLOBAL_MAX_BYTES") ?? (durable ? DEFAULT_DURABLE_GLOBAL_MAX_BYTES : undefined),
+    hotToWarmMs: options.hotToWarmMs ?? envNonNegativeInt("PI_CONTEXT_BROKER_HOT_TO_WARM_MS") ?? DEFAULT_HOT_TO_WARM_MS,
+    warmToColdMs: options.warmToColdMs ?? envNonNegativeInt("PI_CONTEXT_BROKER_WARM_TO_COLD_MS") ?? DEFAULT_WARM_TO_COLD_MS,
     briefBytes,
   };
-  const durable = options.durable ?? (envFlag("PI_CONTEXT_BROKER_DURABLE") || Boolean(options.storeDir ?? process.env.PI_CONTEXT_BROKER_STORE_DIR));
   const durableBackend = String(process.env.PI_CONTEXT_BROKER_BACKEND ?? "sqlite").trim().toLowerCase();
   const broker = durable
     ? durableBackend === "jsonl"
@@ -331,11 +383,15 @@ export async function registerContextBrokerBeta(pi: ExtensionAPI, options: Conte
     toolLookupTextCalls: 0,
     toolLookupHits: 0,
     toolLookupMisses: 0,
+    toolLookupExactMisses: 0,
+    toolLookupTextMisses: 0,
     commandLookupCalls: 0,
     commandLookupExactCalls: 0,
     commandLookupTextCalls: 0,
     commandLookupHits: 0,
     commandLookupMisses: 0,
+    commandLookupExactMisses: 0,
+    commandLookupTextMisses: 0,
     exportCalls: 0,
     pinCalls: 0,
     statusCalls: 0,
@@ -357,8 +413,8 @@ export async function registerContextBrokerBeta(pi: ExtensionAPI, options: Conte
       `toolResults seen=${routingTelemetry.contextHookToolResults} rewritten=${routingTelemetry.contextHookToolResultRewrites} hostile=${routingTelemetry.contextHookToolResultHostile}`,
       `bash seen=${routingTelemetry.contextHookBash} rewritten=${routingTelemetry.contextHookBashRewrites} hostile=${routingTelemetry.contextHookBashHostile}`,
       `rewriteSavings rawBytes=${routingTelemetry.contextHookRewriteRawBytes} replacementBytes=${routingTelemetry.contextHookRewriteReplacementBytes} savedBytes=${savedBytes} savedPct=${savedPct}% contextLookupHistoryOmitted=${routingTelemetry.contextHookContextLookupHistoryOmissions}`,
-      `lookups tool(calls=${routingTelemetry.toolLookupCalls}, hits=${routingTelemetry.toolLookupHits}, misses=${routingTelemetry.toolLookupMisses})`,
-      `lookups slash(calls=${routingTelemetry.commandLookupCalls}, hits=${routingTelemetry.commandLookupHits}, misses=${routingTelemetry.commandLookupMisses})`,
+      `lookups tool(calls=${routingTelemetry.toolLookupCalls}, exact=${routingTelemetry.toolLookupExactCalls}, text=${routingTelemetry.toolLookupTextCalls}, hits=${routingTelemetry.toolLookupHits}, misses=${routingTelemetry.toolLookupMisses}, exactMisses=${routingTelemetry.toolLookupExactMisses}, textMisses=${routingTelemetry.toolLookupTextMisses})`,
+      `lookups slash(calls=${routingTelemetry.commandLookupCalls}, exact=${routingTelemetry.commandLookupExactCalls}, text=${routingTelemetry.commandLookupTextCalls}, hits=${routingTelemetry.commandLookupHits}, misses=${routingTelemetry.commandLookupMisses}, exactMisses=${routingTelemetry.commandLookupExactMisses}, textMisses=${routingTelemetry.commandLookupTextMisses})`,
       `exports=${routingTelemetry.exportCalls}`,
       `pins=${routingTelemetry.pinCalls}`,
       `pruneCalls=${routingTelemetry.pruneCalls}`,
@@ -400,6 +456,7 @@ export async function registerContextBrokerBeta(pi: ExtensionAPI, options: Conte
     const payload = toolPayload(sanitizedEvent);
     const bytes = Buffer.byteLength(payload, "utf8");
     const hostilePayload = isHostilePayload(payload) || hasHostileValue(sanitizedEvent);
+    const opaquePayload = !hostilePayload && (isOpaquePayload(payload) || hasOpaqueValue(sanitizedEvent));
     const artifact = broker.publish({
       sessionId: activeSessionId,
       kind: "tool_output",
@@ -410,6 +467,7 @@ export async function registerContextBrokerBeta(pi: ExtensionAPI, options: Conte
         event.isError ? "error" : "ok",
         event.sourceId ? "session-backfill" : "live",
         ...(hostilePayload ? ["hostile", "binary"] : []),
+        ...(opaquePayload ? ["opaque"] : []),
       ],
       command: event.toolName === "bash" && typeof sanitizedEvent.input?.command === "string" ? sanitizedEvent.input.command : undefined,
       paths: typeof sanitizedEvent.input?.path === "string" ? [sanitizedEvent.input.path] : [],
@@ -765,7 +823,9 @@ export async function registerContextBrokerBeta(pi: ExtensionAPI, options: Conte
       });
       if (!results.length) {
         routingTelemetry.toolLookupMisses += 1;
-        return textResult("No context artifacts matched. Missing or expired handles should be reported explicitly.");
+        if (exact) routingTelemetry.toolLookupExactMisses += 1;
+        else routingTelemetry.toolLookupTextMisses += 1;
+        return textResult(lookupMissMessage(exact));
       }
       routingTelemetry.toolLookupHits += 1;
       return textResult(results.map((item) => renderLookupOutput(item, exact ? lookupBytes : searchBytes)).join("\n\n---\n\n"));
@@ -784,7 +844,7 @@ export async function registerContextBrokerBeta(pi: ExtensionAPI, options: Conte
         routingTelemetry.statusCalls += 1;
         const status = broker.status();
         ctx.ui.notify(
-          `Context broker: enabled, session=${activeSessionId}, records=${status.records}, bytes=${status.bytes}/${status.maxBytes}, tiers=hot:${status.hotRecords}/${status.hotBytes} warm:${status.warmRecords}/${status.warmBytes} cold:${status.coldRecords}/${status.coldBytes}, pinned=${status.pinnedRecords}/${status.pinnedBytes} bytes`,
+          `Context broker: enabled, session=${activeSessionId}, records=${status.records}/${status.maxRecords}, bytes=${status.bytes}/${status.maxBytes}, globalCaps=records:${capText(status.globalMaxRecords)} bytes:${capText(status.globalMaxBytes)}, tiers=hot:${status.hotRecords}/${status.hotBytes} warm:${status.warmRecords}/${status.warmBytes} cold:${status.coldRecords}/${status.coldBytes}, pinned=${status.pinnedRecords}/${status.pinnedBytes} bytes`,
           "info",
         );
         ctx.ui.notify(formatRoutingTelemetry(), "info");
@@ -810,8 +870,10 @@ export async function registerContextBrokerBeta(pi: ExtensionAPI, options: Conte
           routingTelemetry.commandLookupHits += 1;
         } else {
           routingTelemetry.commandLookupMisses += 1;
+          if (exact) routingTelemetry.commandLookupExactMisses += 1;
+          else routingTelemetry.commandLookupTextMisses += 1;
         }
-        ctx.ui.notify(results.length ? results.map((item) => renderLookupOutput(item, exact ? lookupBytes : searchBytes)).join("\n\n---\n\n") : "No context artifacts matched.", "info");
+        ctx.ui.notify(results.length ? results.map((item) => renderLookupOutput(item, exact ? lookupBytes : searchBytes)).join("\n\n---\n\n") : lookupMissMessage(exact), "info");
         return;
       }
 

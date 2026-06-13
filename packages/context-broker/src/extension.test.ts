@@ -287,6 +287,57 @@ lookupBytes: 80, searchBytes: 50,
     expect(commandMessage).not.toContain("\u0000");
   });
 
+  it("omits opaque printable payloads from lookup output and suggests export", async () => {
+    const { pi, handlers, commands } = createPiMock();
+    registerContextBrokerBeta(pi, { rewriteThresholdBytes: 1 });
+    const { ctx, notifications } = createCtx();
+    const payload = "A".repeat(6000);
+
+    await runHandlers(handlers, "session_start", { type: "session_start" }, ctx);
+    await runHandlers(handlers, "tool_result", {
+      type: "tool_result",
+      toolCallId: "call-opaque",
+      toolName: "bash",
+      input: { command: "printf opaque" },
+      content: [{ type: "text", text: payload }],
+      isError: false,
+    }, ctx);
+
+    const lookupCompletion = commands.get("context").getArgumentCompletions("lookup ")?.[0];
+    const lookupHandle = lookupCompletion?.value.replace(/^lookup /, "");
+
+    await commands.get("context").handler(`lookup ${lookupHandle}`, ctx);
+    const commandMessage = notifications.at(-1)?.message ?? "";
+    expect(commandMessage).toContain("payload omitted from prompt because it appears opaque/high-token");
+    expect(commandMessage).toContain("/context export");
+    expect(commandMessage).not.toContain(payload.slice(0, 200));
+  });
+
+  it("does not classify normal multiline code as opaque", async () => {
+    const { pi, handlers, commands } = createPiMock();
+    registerContextBrokerBeta(pi, { lookupBytes: 8000, rewriteThresholdBytes: 1 });
+    const { ctx, notifications } = createCtx();
+    const payload = Array.from({ length: 240 }, (_, index) => `export function fn${index}() { return ${index}; }`).join("\n");
+
+    await runHandlers(handlers, "session_start", { type: "session_start" }, ctx);
+    await runHandlers(handlers, "tool_result", {
+      type: "tool_result",
+      toolCallId: "call-code",
+      toolName: "read",
+      input: { path: "src/generated.ts" },
+      content: [{ type: "text", text: payload }],
+      isError: false,
+    }, ctx);
+
+    const lookupCompletion = commands.get("context").getArgumentCompletions("lookup ")?.[0];
+    const lookupHandle = lookupCompletion?.value.replace(/^lookup /, "");
+
+    await commands.get("context").handler(`lookup ${lookupHandle}`, ctx);
+    const commandMessage = notifications.at(-1)?.message ?? "";
+    expect(commandMessage).toContain("export function fn0");
+    expect(commandMessage).not.toContain("payload omitted from prompt because it appears opaque/high-token");
+  });
+
   it("text search lookup returns a smaller byte-clipped excerpt", async () => {
     const { pi, handlers, commands } = createPiMock();
     registerContextBrokerBeta(pi, {
@@ -360,6 +411,27 @@ lookupBytes: 500,
     expect(result.content[0].text).toContain("exact evidence payload");
   });
 
+  it("distinguishes exact-handle and text lookup misses", async () => {
+    const { pi, handlers, commands, tools } = createPiMock();
+    registerContextBrokerBeta(pi, { rewriteThresholdBytes: 1 });
+    const { ctx, notifications } = createCtx();
+
+    await runHandlers(handlers, "session_start", { type: "session_start" }, ctx);
+    const toolExactMiss = await tools.get("context_lookup").execute("lookup-missing-handle", { handle: "ctx://missing/handle" }, undefined, undefined, ctx);
+    const toolTextMiss = await tools.get("context_lookup").execute("lookup-missing-text", { text: "definitely absent" }, undefined, undefined, ctx);
+    await commands.get("context").handler("lookup ctx://missing/handle", ctx);
+    await commands.get("context").handler("lookup definitely absent", ctx);
+    await commands.get("context").handler("status", ctx);
+
+    expect(toolExactMiss.content[0].text).toContain("exact handle");
+    expect(toolTextMiss.content[0].text).toContain("text/filter query");
+    expect(notifications.at(-4)?.message).toContain("exact handle");
+    expect(notifications.at(-3)?.message).toContain("text/filter query");
+    const telemetry = notifications.at(-1)?.message ?? "";
+    expect(telemetry).toContain("exactMisses=1");
+    expect(telemetry).toContain("textMisses=1");
+  });
+
   it("reports routing telemetry in /context status", async () => {
     const { pi, handlers, commands, tools } = createPiMock();
     registerContextBrokerBeta(pi, { rewriteThresholdBytes: 1, lookupBytes: 500, searchBytes: 500 });
@@ -390,6 +462,8 @@ lookupBytes: 500,
     expect(handle).toBeTruthy();
     expect(toolResult.content[0].text).toContain("telemetry_payload_");
     expect(result).toBeDefined();
+    const statusMessage = notifications.at(-2)?.message ?? "";
+    expect(statusMessage).toContain("globalCaps=records:unbounded bytes:unbounded");
     const telemetry = notifications.at(-1)?.message ?? "";
     expect(telemetry).toContain("Context broker routing telemetry:");
     expect(telemetry).toContain("rewriteSavings rawBytes=");
@@ -398,6 +472,8 @@ lookupBytes: 500,
     expect(telemetry).toMatch(/savedBytes=[1-9]\d*/);
     expect(telemetry).toContain("contextLookupHistoryOmitted=");
     expect(telemetry).toContain("lookups tool(calls=");
+    expect(telemetry).toContain("exact=");
+    expect(telemetry).toContain("textMisses=");
     expect(telemetry).toContain("lookups slash(calls=");
     expect(telemetry).toContain("exports=");
     expect(telemetry).toContain("pins=");
@@ -736,6 +812,7 @@ maxRecords: 1,
       const secondHandle = second.commands.get("context").getArgumentCompletions("lookup ")?.[0].value.replace(/^lookup /, "");
       await second.commands.get("context").handler(`lookup ${handle}`, secondRun.ctx);
       await second.commands.get("context").handler("brief", secondRun.ctx);
+      await second.commands.get("context").handler("status", secondRun.ctx);
 
       const third = createPiMock();
       const thirdRun = createCtx();
@@ -744,9 +821,10 @@ maxRecords: 1,
       await third.commands.get("context").handler(`lookup ${secondHandle}`, thirdRun.ctx);
       await third.commands.get("context").handler("brief", thirdRun.ctx);
 
-      expect(secondRun.notifications.at(-2)?.message).toContain("durable payload");
-      expect(secondRun.notifications.at(-1)?.message).toContain("tier=hot");
-      expect(secondRun.notifications.at(-1)?.message).toContain("pinned");
+      expect(secondRun.notifications.at(-4)?.message).toContain("durable payload");
+      expect(secondRun.notifications.at(-3)?.message).toContain("tier=hot");
+      expect(secondRun.notifications.at(-3)?.message).toContain("pinned");
+      expect(secondRun.notifications.at(-2)?.message).toContain("globalCaps=records:2048 bytes:268435456");
       expect(thirdRun.notifications.at(-2)?.message).toContain("durable payload");
       expect(thirdRun.notifications.at(-1)?.message).toContain("tier=hot");
       expect(thirdRun.notifications.at(-1)?.message).toContain("pinned");

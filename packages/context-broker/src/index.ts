@@ -32,6 +32,10 @@ const DEFAULT_BRIEF_BYTES = 2_000;
 const TIER_ORDER: Record<ContextArtifactTier, number> = { hot: 0, warm: 1, cold: 2 };
 const TIER_REMOVAL_ORDER: Record<ContextArtifactTier, number> = { cold: 0, warm: 1, hot: 2 };
 
+function optionMs(value: number | undefined): number {
+  return typeof value === "number" && Number.isFinite(value) && value > 0 ? Math.floor(value) : Number.POSITIVE_INFINITY;
+}
+
 function normalizeList(values: string[] | undefined): string[] {
   return [...new Set((values ?? []).map((value) => String(value || "").trim()).filter(Boolean))];
 }
@@ -149,10 +153,31 @@ export function createInMemoryContextBroker(options: ContextBrokerOptions = {}):
     warm: Math.max(1, Math.floor(options.warmMaxBytes ?? maxBytes)),
     cold: Math.max(1, Math.floor(options.coldMaxBytes ?? maxBytes)),
   };
+  const hotToWarmMs = optionMs(options.hotToWarmMs);
+  const warmToColdMs = optionMs(options.warmToColdMs);
   const summaryBytes = Math.max(16, Math.floor(options.summaryBytes ?? DEFAULT_SUMMARY_BYTES));
   const defaultBriefBytes = Math.max(64, Math.floor(options.briefBytes ?? DEFAULT_BRIEF_BYTES));
   let artifacts: Array<ContextArtifact & { sequence: number; baseTier: ContextArtifactTier }> = [];
   let sequence = 0;
+
+  function cooledTier(artifact: ContextArtifact & { baseTier: ContextArtifactTier }, now = Date.now()): ContextArtifactTier {
+    if (artifact.pinned) return "hot";
+    if (artifact.baseTier === "cold") return "cold";
+    const age = Math.max(0, now - artifact.createdAt);
+    if (age >= warmToColdMs) return "cold";
+    if (artifact.baseTier === "hot" && age >= hotToWarmMs) return "warm";
+    return artifact.baseTier;
+  }
+
+  function applyCooling(now = Date.now(), _protectedIds = new Set<string>()): void {
+    for (const artifact of artifacts) {
+      const nextTier = cooledTier(artifact, now);
+      if (artifact.tier !== nextTier) {
+        artifact.tier = nextTier;
+        artifact.updatedAt = now;
+      }
+    }
+  }
 
   function currentStatus(): ContextBrokerStatus {
     const bytes = artifacts.reduce((sum, artifact) => sum + artifact.bytes, 0);
@@ -174,6 +199,8 @@ export function createInMemoryContextBroker(options: ContextBrokerOptions = {}):
       coldBytes: cold.reduce((sum, artifact) => sum + artifact.bytes, 0),
       maxRecords,
       maxBytes,
+      globalMaxRecords,
+      globalMaxBytes,
     };
   }
 
@@ -225,6 +252,7 @@ export function createInMemoryContextBroker(options: ContextBrokerOptions = {}):
 
   function prune(now = Date.now(), protectedIds = new Set<string>()): ContextBrokerStatus {
     dropExpired(now, protectedIds);
+    applyCooling(now, protectedIds);
 
     for (const sessionId of new Set(artifacts.map((artifact) => artifact.sessionId))) {
       for (const tier of ["cold", "warm", "hot"] as ContextArtifactTier[]) {
@@ -253,11 +281,13 @@ export function createInMemoryContextBroker(options: ContextBrokerOptions = {}):
 
   function status(): ContextBrokerStatus {
     dropExpired();
+    applyCooling();
     return currentStatus();
   }
 
   function purge(options: ContextPurgeOptions = {}): ContextBrokerStatus {
     dropExpired();
+    applyCooling();
     const keepPinned = options.keepPinned ?? true;
     artifacts = artifacts.filter((artifact) => {
       if (options.sessionId && artifact.sessionId !== options.sessionId) return true;
@@ -305,12 +335,13 @@ export function createInMemoryContextBroker(options: ContextBrokerOptions = {}):
     };
 
     artifacts = [artifact, ...artifacts];
-    prune(now, new Set([artifact.id]));
+    prune(Date.now(), new Set([artifact.id]));
     return artifact;
   }
 
   function lookup(query: ContextLookupQuery = {}): ContextArtifact[] {
     dropExpired();
+    applyCooling();
     const limit = Math.max(1, Math.floor(query.limit ?? (artifacts.length || 1)));
     return artifacts
       .filter((artifact) => artifactMatches(artifact, query))

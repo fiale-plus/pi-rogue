@@ -8,6 +8,7 @@ This package contains the executable in-memory bounded broker implementation:
 - Lookups support handle, session, kind, tag, path, command prefix, branch, tier, and text filters.
 - Omitted summaries become metadata-only placeholders, keeping raw payloads out of prompt briefs by default.
 - Artifacts are classified as hot/warm/cold on publish; prompt briefs render hot first, warm second, and exclude cold unless explicitly queried.
+- Aging cools unpinned artifacts from hot to warm and from warm to cold; compaction remains cleanup/removal, not a separate cooling trigger.
 - Pruning enforces per-session record/byte caps, optional global (cross-session) record/byte caps, tier-specific caps, TTL expiry on reads, and pinned-artifact retention.
 
 It is registered by default in the bundle, with an explicit env kill switch.
@@ -29,13 +30,29 @@ When active, the bundle registers:
 - `/context export <handle>` — write full payload to a temp file without dumping it into prompt.
 - `/context prune` — run TTL/cap pruning immediately.
 
-The command includes autocomplete for subcommands and known artifact handles. Exact handle lookup returns clipped payload text; text search returns a smaller clipped excerpt, and truncation is marked explicitly.
+The command includes autocomplete for subcommands and known artifact handles. Exact handle lookup returns clipped payload text; text search returns a smaller clipped excerpt, and truncation is marked explicitly. Exact-handle misses and text/filter misses use distinct messages, and `/context status` reports exact/text miss counters.
 
-Optional durability is available with `PI_CONTEXT_BROKER_DURABLE=true` or `PI_CONTEXT_BROKER_STORE_DIR=/path/to/store`. Durable mode now defaults to SQLite (`artifacts.sqlite`) with an FTS index for text lookup, so exact handles, tier, and pin state survive restarts without replay reconstruction. Set `PI_CONTEXT_BROKER_BACKEND=jsonl` to use the legacy JSONL/blob backend.
+Optional durability is available with `PI_CONTEXT_BROKER_DURABLE=true` or `PI_CONTEXT_BROKER_STORE_DIR=/path/to/store`. Durable mode now defaults to SQLite (`artifacts.sqlite`) with an FTS index for text lookup, so exact handles, tier, and pin state survive restarts without replay reconstruction. Set `PI_CONTEXT_BROKER_BACKEND=jsonl` to use the legacy JSONL/blob backend. Durable mode applies default global retention caps when env caps are not set: 2,048 records and 256 MiB across sessions.
 
 - `PI_CONTEXT_BROKER_REWRITE_THRESHOLD_BYTES` controls when large `toolResult` / `bashExecution` payloads are rewritten in-context. The default is `8192` bytes, so small tool evidence remains inline while larger outputs are replaced by handles.
+- `PI_CONTEXT_BROKER_HOT_TO_WARM_MS` controls unpinned artifact cooling from hot to warm. The default is 2 hours.
+- `PI_CONTEXT_BROKER_WARM_TO_COLD_MS` controls unpinned artifact cooling from warm/hot to cold. The default is 12 hours.
 
 For more aggressive prompt reduction, set `PI_CONTEXT_BROKER_REWRITE_THRESHOLD_BYTES=0`. For quieter sessions, set it to a higher value to only rewrite larger outputs.
+
+## Tier lifecycle policy
+
+- Publish-time classification remains deterministic: explicit `tier`, `hot`/`warm`/`cold` tags, error tags, completed/archive tags, and artifact kind choose the base tier.
+- Cooling only retiers unpinned artifacts for prompt visibility and cap pressure; it does not delete payloads.
+- Pinned artifacts stay hot and are retained through compaction cleanup.
+- Cold artifacts remain retrievable by exact handle/search, but are excluded from the default prompt brief unless explicitly queried.
+- `/compact` / `session_compact` cleanup purges unpinned artifacts for the session; cooling is age-based and separate from compaction cleanup.
+
+## Payload display policy
+
+- Hostile/binary payloads are unsafe or control-heavy. They are stored/exportable but omitted from prompt lookup output with `/context export` guidance.
+- Opaque payloads are printable but low-value/high-token, such as large base64-like blobs, hex dumps, minified single-line output, or compressed-looking text. They are also stored/exportable but omitted from prompt lookup output with `/context export` guidance.
+- Normal code, logs, and test output remain visible subject to normal byte clipping.
 
 
 ## Session behavior and limits
@@ -51,4 +68,5 @@ For more aggressive prompt reduction, set `PI_CONTEXT_BROKER_REWRITE_THRESHOLD_B
 - Optional global caps can be configured via env vars:
   - `PI_CONTEXT_BROKER_GLOBAL_MAX_RECORDS`
   - `PI_CONTEXT_BROKER_GLOBAL_MAX_BYTES`
+- Durable mode defaults to global caps of 2,048 records and 256 MiB when those env vars are unset; in-memory mode remains per-session capped unless global caps are explicitly provided.
 - Rollback is immediate: set `PI_CONTEXT_BROKER_ENABLED=false` and `/reload` or restart Pi. Disable durable writes by unsetting `PI_CONTEXT_BROKER_DURABLE` and `PI_CONTEXT_BROKER_STORE_DIR`.

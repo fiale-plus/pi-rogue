@@ -193,6 +193,38 @@ describe("createInMemoryContextBroker", () => {
     expect(broker.lookup({ sessionId: "s", tier: "cold" }).map((artifact) => artifact.id)).toEqual([explicit.id, archive.id]);
   });
 
+  it("cools old artifacts across hot, warm, and cold tiers without deleting them", () => {
+    const broker = createInMemoryContextBroker({ briefBytes: 1200, defaultTtlMs: 0, hotToWarmMs: 100, warmToColdMs: 200 });
+    const now = Date.now();
+    const oldHot = broker.publish({ sessionId: "s", kind: "tool_output", payload: "old-hot", summary: "old hot", tier: "hot", createdAt: now - 300 });
+    const oldWarm = broker.publish({ sessionId: "s", kind: "tool_output", payload: "old-warm", summary: "old warm", tier: "warm", createdAt: now - 300 });
+    const freshHot = broker.publish({ sessionId: "s", kind: "tool_output", payload: "fresh-hot", summary: "fresh hot", tier: "hot", createdAt: now - 50 });
+    const pinned = broker.publish({ sessionId: "s", kind: "tool_output", payload: "pinned", summary: "pinned hot", tier: "hot", pinned: true, createdAt: now - 300 });
+
+    broker.prune(now);
+
+    expect(broker.lookup({ handle: oldHot.handle })[0]?.tier).toBe("cold");
+    expect(broker.lookup({ handle: oldWarm.handle })[0]?.tier).toBe("cold");
+    expect(broker.lookup({ handle: freshHot.handle })[0]?.tier).toBe("hot");
+    expect(broker.lookup({ handle: pinned.handle })[0]?.tier).toBe("hot");
+    const brief = broker.renderBrief({ sessionId: "s" });
+    expect(brief).not.toContain(oldHot.handle);
+    expect(brief).not.toContain(oldWarm.handle);
+    expect(brief).toContain(freshHot.handle);
+    expect(brief).toContain(pinned.handle);
+  });
+
+  it("cools protected new artifacts before enforcing tier caps", () => {
+    const broker = createInMemoryContextBroker({ defaultTtlMs: 0, maxRecords: 10, hotMaxRecords: 1, hotToWarmMs: 10_000, warmToColdMs: 20_000 });
+    const now = Date.now();
+    const fresh = broker.publish({ sessionId: "s", kind: "tool_output", payload: "fresh", summary: "fresh", tier: "hot", createdAt: now - 1_000 });
+    const aged = broker.publish({ sessionId: "s", kind: "tool_output", payload: "aged", summary: "aged", tier: "hot", createdAt: now - 30_000 });
+
+    expect(aged.tier).toBe("cold");
+    expect(broker.lookup({ handle: fresh.handle })[0]?.tier).toBe("hot");
+    expect(broker.lookup({ handle: aged.handle })[0]?.tier).toBe("cold");
+  });
+
   it("renders prompt briefs hot-first, warm-second, and excludes cold unless explicit", () => {
     const broker = createInMemoryContextBroker({ briefBytes: 900, defaultTtlMs: 0 });
     const cold = broker.publish({ sessionId: "s", kind: "tool_output", payload: "cold", summary: "cold archive", tier: "cold", createdAt: 1 });

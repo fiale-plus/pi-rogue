@@ -72,6 +72,8 @@ export interface ContextBrokerStatus {
   coldBytes: number;
   maxRecords: number;
   maxBytes: number;
+  globalMaxRecords: number;
+  globalMaxBytes: number;
 }
 
 export interface ContextBrokerOptions {
@@ -89,6 +91,8 @@ export interface ContextBrokerOptions {
   hotMaxBytes?: number;
   warmMaxBytes?: number;
   coldMaxBytes?: number;
+  hotToWarmMs?: number;
+  warmToColdMs?: number;
   summaryBytes?: number;
   briefBytes?: number;
 }
