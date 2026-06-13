@@ -2,6 +2,7 @@
 import { existsSync, readdirSync, statSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { decideRoute, readCheckpointJsonl, selectCheckpoint } from "./decision.js";
+import { writeBinaryGateTraining } from "./binary-gate.js";
 import { writeSessionCheckpointsJsonl } from "./checkpoints.js";
 import { appendRouteEvent, buildRouteEvent } from "./ledger.js";
 import { writeCapabilityCards, writeShadowEval, writeTeacherPromptRequests, writeTeacherReflection } from "./learning.js";
@@ -20,6 +21,9 @@ interface Args {
   events?: string;
   labels?: string;
   reflection?: string;
+  artifact?: string;
+  report?: string;
+  evalDataset?: string;
   teacher?: string;
   teacherOutput?: string;
   teacherPrompts?: string;
@@ -44,6 +48,7 @@ function usage(): never {
   npm run router:teacher-label -- --requests <requests.jsonl> --teacher-output <decisions.jsonl> --labels <labels.jsonl> [--teacher openai-codex/gpt-5.5] [--dry-run] [--pretty]
   npm run router:reflect -- --checkpoint-file <checkpoints.jsonl> --labels <labels.jsonl> --reflection <reflection.md> [--teacher local-rule] [--teacher-output <decisions.jsonl>] [--teacher-prompts <requests.jsonl>] [--pretty]
   npm run router:dataset -- --checkpoint-file <checkpoints.jsonl> --output <training.jsonl> [--events <events.jsonl>] [--outcomes <outcomes.jsonl>] [--labels <labels.jsonl>] [--include-local-rule-labels] [--pretty]
+  npm run router:gate-train -- --dataset <training.jsonl> --eval-dataset <eval.jsonl> --artifact <gate.json> --report <gate-report.json> [--pretty]
   npm run router:shadow -- --checkpoint-file <checkpoints.jsonl> --output <report.json> [--ledger <events.jsonl>] [--pretty]
 
 Commands:
@@ -56,6 +61,7 @@ Commands:
   teacher-label Run explicit teacher model labeling over request JSONL.
   reflect    Generate command-triggered soft routing labels and a reflection artifact.
   dataset    Export trainable rows for a conservative continue-vs-intervene gate.
+  gate-train Train/evaluate a local binary continue-vs-intervene gate artifact.
   shadow     Shadow-evaluate the current rule policy over historical checkpoints.
 `);
   process.exit(2);
@@ -109,6 +115,26 @@ function parseArgs(argv: string[]): Args {
     }
     if (arg === "--reflection" && next) {
       args.reflection = next;
+      index++;
+      continue;
+    }
+    if (arg === "--artifact" && next) {
+      args.artifact = next;
+      index++;
+      continue;
+    }
+    if (arg === "--report" && next) {
+      args.report = next;
+      index++;
+      continue;
+    }
+    if (arg === "--dataset" && next) {
+      args.output = next;
+      index++;
+      continue;
+    }
+    if (arg === "--eval-dataset" && next) {
+      args.evalDataset = next;
       index++;
       continue;
     }
@@ -282,6 +308,11 @@ function dataset(args: Args): unknown {
   });
 }
 
+function gateTrain(args: Args): unknown {
+  if (!args.output || !args.evalDataset || !args.artifact || !args.report) usage();
+  return writeBinaryGateTraining({ trainingRowsPath: args.output, evalRowsPath: args.evalDataset, artifactPath: args.artifact, reportPath: args.report });
+}
+
 function shadow(args: Args): unknown {
   if (!args.checkpointFile || !args.output) usage();
   return writeShadowEval(args.checkpointFile, args.output, args.ledger);
@@ -307,9 +338,11 @@ async function main(): Promise<void> {
                   ? reflect(args)
                   : args.command === "dataset"
                     ? dataset(args)
-                    : args.command === "shadow"
-                      ? shadow(args)
-                      : usage();
+                    : args.command === "gate-train"
+                      ? gateTrain(args)
+                      : args.command === "shadow"
+                        ? shadow(args)
+                        : usage();
   console.log(args.pretty ? JSON.stringify(result, null, 2) : JSON.stringify(result));
 }
 
