@@ -8,6 +8,7 @@ import { appendRouteEvent, buildRouteEvent } from "./ledger.js";
 import { writeCapabilityCards, writeShadowEval, writeTeacherPromptRequests, writeTeacherReflection } from "./learning.js";
 import { writeTrainingRows } from "./dataset.js";
 import { writeEnrichedOutcomes, writeInferredOutcomes } from "./outcomes.js";
+import { writeRouterReport } from "./reports.js";
 import { runTeacherLabeling } from "./teacher-runner.js";
 
 interface Args {
@@ -23,7 +24,10 @@ interface Args {
   reflection?: string;
   artifact?: string;
   report?: string;
+  dataset?: string;
   evalDataset?: string;
+  markdown?: string;
+  gateReport?: string;
   teacher?: string;
   teacherOutput?: string;
   teacherPrompts?: string;
@@ -49,6 +53,7 @@ function usage(): never {
   npm run router:reflect -- --checkpoint-file <checkpoints.jsonl> --labels <labels.jsonl> --reflection <reflection.md> [--teacher local-rule] [--teacher-output <decisions.jsonl>] [--teacher-prompts <requests.jsonl>] [--pretty]
   npm run router:dataset -- --checkpoint-file <checkpoints.jsonl> --output <training.jsonl> [--events <events.jsonl>] [--outcomes <outcomes.jsonl>] [--labels <labels.jsonl>] [--include-local-rule-labels] [--pretty]
   npm run router:gate-train -- --dataset <training.jsonl> --eval-dataset <eval.jsonl> --artifact <gate.json> --report <gate-report.json> [--pretty]
+  npm run router:report -- --output <report.json> [--markdown <report.md>] [--events <events.jsonl>] [--outcomes <outcomes.jsonl>] [--dataset <training.jsonl>] [--gate-report <gate-report.json>] [--pretty]
   npm run router:shadow -- --checkpoint-file <checkpoints.jsonl> --output <report.json> [--ledger <events.jsonl>] [--pretty]
 
 Commands:
@@ -62,6 +67,7 @@ Commands:
   reflect    Generate command-triggered soft routing labels and a reflection artifact.
   dataset    Export trainable rows for a conservative continue-vs-intervene gate.
   gate-train Train/evaluate a local binary continue-vs-intervene gate artifact.
+  report     Summarize route events, outcomes, labels, and gate eval metrics.
   shadow     Shadow-evaluate the current rule policy over historical checkpoints.
 `);
   process.exit(2);
@@ -129,12 +135,22 @@ function parseArgs(argv: string[]): Args {
       continue;
     }
     if (arg === "--dataset" && next) {
-      args.output = next;
+      args.dataset = next;
       index++;
       continue;
     }
     if (arg === "--eval-dataset" && next) {
       args.evalDataset = next;
+      index++;
+      continue;
+    }
+    if (arg === "--markdown" && next) {
+      args.markdown = next;
+      index++;
+      continue;
+    }
+    if (arg === "--gate-report" && next) {
+      args.gateReport = next;
       index++;
       continue;
     }
@@ -309,8 +325,13 @@ function dataset(args: Args): unknown {
 }
 
 function gateTrain(args: Args): unknown {
-  if (!args.output || !args.evalDataset || !args.artifact || !args.report) usage();
-  return writeBinaryGateTraining({ trainingRowsPath: args.output, evalRowsPath: args.evalDataset, artifactPath: args.artifact, reportPath: args.report });
+  if (!args.dataset || !args.evalDataset || !args.artifact || !args.report) usage();
+  return writeBinaryGateTraining({ trainingRowsPath: args.dataset, evalRowsPath: args.evalDataset, artifactPath: args.artifact, reportPath: args.report });
+}
+
+function report(args: Args): unknown {
+  if (!args.output) usage();
+  return writeRouterReport({ outputPath: args.output, markdownPath: args.markdown, eventsPath: args.events, outcomesPath: args.outcomes, trainingRowsPath: args.dataset, gateReportPath: args.gateReport });
 }
 
 function shadow(args: Args): unknown {
@@ -340,7 +361,9 @@ async function main(): Promise<void> {
                     ? dataset(args)
                     : args.command === "gate-train"
                       ? gateTrain(args)
-                      : args.command === "shadow"
+                      : args.command === "report"
+                        ? report(args)
+                        : args.command === "shadow"
                         ? shadow(args)
                         : usage();
   console.log(args.pretty ? JSON.stringify(result, null, 2) : JSON.stringify(result));
