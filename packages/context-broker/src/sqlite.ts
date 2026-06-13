@@ -29,6 +29,10 @@ const DEFAULT_BRIEF_BYTES = 2_000;
 const TIER_ORDER: Record<ContextArtifactTier, number> = { hot: 0, warm: 1, cold: 2 };
 const TIER_REMOVAL_ORDER: Record<ContextArtifactTier, number> = { cold: 0, warm: 1, hot: 2 };
 
+function optionMs(value: number | undefined): number {
+  return typeof value === "number" && Number.isFinite(value) && value > 0 ? Math.floor(value) : Number.POSITIVE_INFINITY;
+}
+
 function defaultStoreDir(): string {
   return join(homedir(), ".pi", "agent", "fiale-plus", "context-broker");
 }
@@ -226,6 +230,8 @@ export function createSqliteContextBroker(options: SqliteContextBrokerOptions = 
     warm: Math.max(1, Math.floor(options.warmMaxBytes ?? maxBytes)),
     cold: Math.max(1, Math.floor(options.coldMaxBytes ?? maxBytes)),
   };
+  const hotToWarmMs = optionMs(options.hotToWarmMs);
+  const warmToColdMs = optionMs(options.warmToColdMs);
   const summaryBytes = Math.max(16, Math.floor(options.summaryBytes ?? DEFAULT_SUMMARY_BYTES));
   const defaultBriefBytes = Math.max(64, Math.floor(options.briefBytes ?? DEFAULT_BRIEF_BYTES));
 
@@ -239,6 +245,31 @@ export function createSqliteContextBroker(options: SqliteContextBrokerOptions = 
   function deleteArtifact(id: string): void {
     db.prepare("DELETE FROM artifact_fts WHERE id = ?").run(id);
     db.prepare("DELETE FROM artifacts WHERE id = ?").run(id);
+  }
+
+  function cooledTier(artifact: ContextArtifact & { baseTier: ContextArtifactTier }, now = Date.now()): ContextArtifactTier {
+    if (artifact.pinned) return "hot";
+    if (artifact.baseTier === "cold") return "cold";
+    const age = Math.max(0, now - artifact.createdAt);
+    if (age >= warmToColdMs) return "cold";
+    if (artifact.baseTier === "hot" && age >= hotToWarmMs) return "warm";
+    return artifact.baseTier;
+  }
+
+  function applyCooling(now = Date.now(), _protectedIds = new Set<string>()): void {
+    const rows = db.prepare("SELECT id, createdAt, tier, baseTier, pinned FROM artifacts WHERE pinned = 0").all();
+    const update = db.prepare("UPDATE artifacts SET tier = ?, updatedAt = ? WHERE id = ?");
+    for (const row of rows) {
+      const artifact = {
+        id: String(row.id),
+        createdAt: Number(row.createdAt),
+        tier: String(row.tier) as ContextArtifactTier,
+        baseTier: String(row.baseTier ?? row.tier) as ContextArtifactTier,
+        pinned: Boolean(row.pinned),
+      };
+      const nextTier = cooledTier(artifact as ContextArtifact & { baseTier: ContextArtifactTier }, now);
+      if (artifact.tier !== nextTier) update.run(nextTier, now, artifact.id);
+    }
   }
 
   function currentStatus(): ContextBrokerStatus {
@@ -269,6 +300,8 @@ export function createSqliteContextBroker(options: SqliteContextBrokerOptions = 
       coldBytes: Number(row.coldBytes ?? 0),
       maxRecords,
       maxBytes,
+      globalMaxRecords,
+      globalMaxBytes,
     };
   }
 
@@ -329,6 +362,7 @@ export function createSqliteContextBroker(options: SqliteContextBrokerOptions = 
 
   function prune(now = Date.now(), protectedIds = new Set<string>()): ContextBrokerStatus {
     dropExpired(now, protectedIds);
+    applyCooling(now, protectedIds);
     const sessions = db.prepare("SELECT DISTINCT sessionId FROM artifacts").all().map((row) => String(row.sessionId));
     for (const sessionId of sessions) {
       for (const tier of ["cold", "warm", "hot"] as ContextArtifactTier[]) {
@@ -356,11 +390,13 @@ export function createSqliteContextBroker(options: SqliteContextBrokerOptions = 
 
   function status(): ContextBrokerStatus {
     dropExpired();
+    applyCooling();
     return currentStatus();
   }
 
   function purge(options: ContextPurgeOptions = {}): ContextBrokerStatus {
     dropExpired();
+    applyCooling();
     const keepPinned = options.keepPinned ?? true;
     const clauses: string[] = [];
     const params: Array<string | number> = [];
@@ -468,12 +504,13 @@ export function createSqliteContextBroker(options: SqliteContextBrokerOptions = 
       throw error;
     }
 
-    prune(now, new Set([artifact.id]));
-    return artifact;
+    prune(Date.now(), new Set([artifact.id]));
+    return lookup({ id: artifact.id })[0] ?? artifact;
   }
 
   function lookup(query: ContextLookupQuery = {}): ContextArtifact[] {
     dropExpired();
+    applyCooling();
     const storedCount = Number(db.prepare("SELECT COUNT(*) AS count FROM artifacts").get()?.count ?? 1) || 1;
     const limit = Math.max(1, Math.floor(query.limit ?? storedCount));
     const clauses: string[] = [];

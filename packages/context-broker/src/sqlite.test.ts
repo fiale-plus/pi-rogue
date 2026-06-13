@@ -40,6 +40,43 @@ describe("createSqliteContextBroker", () => {
     }
   });
 
+  it("persists age-based tier cooling without deleting artifacts", () => {
+    const dir = mkdtempSync(join(tmpdir(), "ctx-sqlite-test-"));
+    try {
+      const path = join(dir, "artifacts.sqlite");
+      let broker = createSqliteContextBroker({ path, defaultTtlMs: 0, hotToWarmMs: 100, warmToColdMs: 200, briefBytes: 900 });
+      const now = Date.now();
+      const oldHot = broker.publish({ sessionId: "s", kind: "tool_output", payload: "old hot", summary: "old hot", tier: "hot", createdAt: now - 300 });
+      const pinned = broker.publish({ sessionId: "s", kind: "tool_output", payload: "pinned", summary: "pinned", tier: "hot", pinned: true, createdAt: now - 300 });
+
+      broker.prune(now);
+      broker = createSqliteContextBroker({ path, defaultTtlMs: 0, hotToWarmMs: 100, warmToColdMs: 200, briefBytes: 900 });
+
+      expect(broker.lookup({ handle: oldHot.handle })[0]?.tier).toBe("cold");
+      expect(broker.lookup({ handle: pinned.handle })[0]?.tier).toBe("hot");
+      expect(broker.renderBrief({ sessionId: "s" })).not.toContain(oldHot.handle);
+      expect(broker.renderBrief({ sessionId: "s" })).toContain(pinned.handle);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("cools protected new artifacts before enforcing durable tier caps", () => {
+    const dir = mkdtempSync(join(tmpdir(), "ctx-sqlite-test-"));
+    try {
+      const now = Date.now();
+      const broker = createSqliteContextBroker({ path: join(dir, "artifacts.sqlite"), defaultTtlMs: 0, maxRecords: 10, hotMaxRecords: 1, hotToWarmMs: 10_000, warmToColdMs: 20_000 });
+      const fresh = broker.publish({ sessionId: "s", kind: "tool_output", payload: "fresh", summary: "fresh", tier: "hot", createdAt: now - 1_000 });
+      const aged = broker.publish({ sessionId: "s", kind: "tool_output", payload: "aged", summary: "aged", tier: "hot", createdAt: now - 30_000 });
+
+      expect(aged.tier).toBe("cold");
+      expect(broker.lookup({ handle: fresh.handle })[0]?.tier).toBe("hot");
+      expect(broker.lookup({ handle: aged.handle })[0]?.tier).toBe("cold");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it("dedupes replayed source artifacts so durable handles survive caps", () => {
     const dir = mkdtempSync(join(tmpdir(), "ctx-sqlite-test-"));
     try {
