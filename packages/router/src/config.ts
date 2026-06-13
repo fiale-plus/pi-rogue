@@ -5,10 +5,15 @@ export type RouterMode = "observe";
 export type RouterPrintMode = "all" | "mismatch_only" | "off";
 
 export interface RouterProfile {
+  main?: string;
   worker: string;
   smart: string;
   teacher: string;
   reviewer: string;
+  explore?: string;
+  debug_diagnose?: string;
+  review?: string;
+  verify?: string;
 }
 
 export interface RouterConfig {
@@ -38,18 +43,30 @@ export const DEFAULT_ROUTER_CONFIG: RouterConfig = {
       smart: "openai-codex/gpt-5.5",
       teacher: "openai-codex/gpt-5.5",
       reviewer: "openai-codex/gpt-5.5",
+      explore: "openai-codex/gpt-5.5",
+      debug_diagnose: "openai-codex/gpt-5.5",
+      review: "openai-codex/gpt-5.5",
+      verify: "openai-codex/gpt-5.5",
     },
     "spark-smart": {
       worker: "openai-codex/gpt-5.3-codex-spark",
       smart: "openai-codex/gpt-5.5",
       teacher: "openai-codex/gpt-5.5",
       reviewer: "openai-codex/gpt-5.5",
+      explore: "openai-codex/gpt-5.3-codex-spark",
+      debug_diagnose: "openai-codex/gpt-5.5",
+      review: "openai-codex/gpt-5.5",
+      verify: "openai-codex/gpt-5.3-codex-spark",
     },
     "local-smart": {
       worker: "qwen3.6-35b-a3b-128k",
       smart: "openai-codex/gpt-5.5",
       teacher: "openai-codex/gpt-5.5",
       reviewer: "openai-codex/gpt-5.5",
+      explore: "qwen3.6-35b-a3b-128k",
+      debug_diagnose: "openai-codex/gpt-5.5",
+      review: "openai-codex/gpt-5.5",
+      verify: "qwen3.6-35b-a3b-128k",
     },
   },
 };
@@ -146,5 +163,6 @@ export function setRouterProfile(config: RouterConfig, name: string): RouterConf
 }
 
 export function formatProfile(name: string, profile: RouterProfile): string {
-  return `${name}: worker=${profile.worker} smart=${profile.smart} teacher=${profile.teacher} reviewer=${profile.reviewer}`;
+  const subagents = [`explore=${profile.explore ?? profile.worker}`, `debug=${profile.debug_diagnose ?? profile.smart}`, `review=${profile.review ?? profile.reviewer}`, `verify=${profile.verify ?? profile.worker}`].join(" ");
+  return `${name}: worker=${profile.worker} smart=${profile.smart} teacher=${profile.teacher} reviewer=${profile.reviewer} ${subagents}`;
 }

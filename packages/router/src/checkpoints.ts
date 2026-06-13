@@ -1,6 +1,7 @@
 import { closeSync, mkdirSync, openSync, writeSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { hashMaybe, hashText, normalizeText } from "./hash.js";
+import { diffChurnScore, EMPTY_DIFF_STATS, readGitDiffStats } from "./git-features.js";
 import { touchedFileHashesFromEvent } from "./progress.js";
 import { readPiSession, sessionIdFromPath, streamPiSessionEvents, type PiSession, type RawPiSessionEvent } from "./session-reader.js";
 import { RAW_SESSION_REF_SCHEMA, ROUTER_CHECKPOINT_SCHEMA, type ProgressSignals, type RawSessionRef, type RouterCheckpoint, type SessionCommandEvent, type SessionToolResultEvent } from "./types.js";
@@ -79,11 +80,14 @@ interface BuildState {
   sameCommandRepeatedCount: number;
   lastErrorHash?: string;
   previousErrorHash?: string;
+  lastErrorFingerprintHash?: string;
+  previousErrorFingerprintHash?: string;
   sameErrorRepeatedCount: number;
   verifierUsed: boolean;
   commandCount: number;
   recentCommands: string[];
   touchedFileHashes: Set<string>;
+  diffStats: import("./types.js").DiffStats;
 }
 
 function updateCommandState(state: BuildState, command: SessionCommandEvent): void {
@@ -99,11 +103,14 @@ function updateCommandState(state: BuildState, command: SessionCommandEvent): vo
 }
 
 function updateToolResultState(state: BuildState, result: SessionToolResultEvent): void {
-  if (!result.errorHash) return;
+  const errorKey = result.errorFingerprintHash ?? result.errorHash;
+  if (!errorKey) return;
   state.previousErrorHash = state.lastErrorHash;
-  if (state.lastErrorHash === result.errorHash) state.sameErrorRepeatedCount++;
+  state.previousErrorFingerprintHash = state.lastErrorFingerprintHash;
+  if ((state.lastErrorFingerprintHash ?? state.lastErrorHash) === errorKey) state.sameErrorRepeatedCount++;
   else state.sameErrorRepeatedCount = 1;
   state.lastErrorHash = result.errorHash;
+  state.lastErrorFingerprintHash = result.errorFingerprintHash;
 }
 
 function signalsFromState(state: BuildState): ProgressSignals {
@@ -111,18 +118,27 @@ function signalsFromState(state: BuildState): ProgressSignals {
   const commandRepeatPressure = clamp01((state.sameCommandRepeatedCount - 1) / 3);
   const errorRepeatPressure = clamp01((state.sameErrorRepeatedCount - 1) / 3);
   const toolThrashScore = state.recentCommands.length === 0 ? 0 : clamp01(1 - uniqueRecentCommands.size / state.recentCommands.length);
-  const noVerifierUsed = state.commandCount >= 4 && !state.verifierUsed;
+  const changedFiles = state.touchedFileHashes.size + state.diffStats.filesChanged;
+  const phaseWantsVerifier = state.phase === "implementation" || state.phase === "debug" || state.phase === "review";
+  const noVerifierUsed = phaseWantsVerifier && changedFiles > 0 && state.commandCount >= 4 && !state.verifierUsed;
   const noVerifierPressure = noVerifierUsed ? 0.2 : 0;
   const loopScore = clamp01(commandRepeatPressure * 0.35 + errorRepeatPressure * 0.4 + toolThrashScore * 0.2 + noVerifierPressure);
   const progressScore = clamp01(1 - loopScore - (noVerifierUsed ? 0.1 : 0));
   return {
     sameCommandRepeatedCount: state.sameCommandRepeatedCount,
     sameErrorRepeatedCount: state.sameErrorRepeatedCount,
-    errorChanged: Boolean(state.lastErrorHash && state.previousErrorHash && state.lastErrorHash !== state.previousErrorHash),
+    errorChanged: Boolean(
+      (state.lastErrorFingerprintHash ?? state.lastErrorHash)
+      && (state.previousErrorFingerprintHash ?? state.previousErrorHash)
+      && (state.lastErrorFingerprintHash ?? state.lastErrorHash) !== (state.previousErrorFingerprintHash ?? state.previousErrorHash),
+    ),
     testsImproved: null,
     filesTouched: state.touchedFileHashes.size,
-    diffLines: 0,
-    diffChurnScore: 0,
+    diffLines: state.diffStats.totalLines,
+    diffFilesChanged: state.diffStats.filesChanged,
+    diffLinesAdded: state.diffStats.linesAdded,
+    diffLinesDeleted: state.diffStats.linesDeleted,
+    diffChurnScore: diffChurnScore(state.diffStats),
     toolThrashScore,
     goalDriftScore: 0,
     loopScore,
@@ -157,7 +173,9 @@ function checkpointFromState(session: SessionContext, event: RawPiSessionEvent, 
       lastUserGoalHash: state.lastUserGoalHash,
       lastCommandHash: state.lastCommandHash,
       lastErrorHash: state.lastErrorHash,
+      lastErrorFingerprintHash: state.lastErrorFingerprintHash,
       touchedFileHashes: [...state.touchedFileHashes].sort(),
+      diffFileHashes: state.diffStats.fileHashes,
     },
     sourceEvent: event.pointer,
   };
@@ -173,6 +191,7 @@ function initialBuildState(): BuildState {
     commandCount: 0,
     recentCommands: [],
     touchedFileHashes: new Set(),
+    diffStats: EMPTY_DIFF_STATS,
   };
 }
 
@@ -224,6 +243,46 @@ export async function* streamCheckpointsFromSessionPath(sessionPath: string): As
   }
 }
 
+function clampFeature(value: number): number {
+  return Math.max(0, Math.min(1, Number(value.toFixed(3))));
+}
+
+export function checkpointWithDiffStats(checkpoint: RouterCheckpoint, cwd?: string, excludePaths: string[] = []): RouterCheckpoint {
+  const stats = readGitDiffStats(cwd, { excludePaths });
+  if (stats.filesChanged === 0) return checkpoint;
+  const phaseWantsVerifier = checkpoint.phase === "implementation" || checkpoint.phase === "debug" || checkpoint.phase === "review";
+  const noVerifierUsed = checkpoint.features.noVerifierUsed
+    || (phaseWantsVerifier && !checkpoint.features.verifierUsed && checkpoint.features.toolCallsLast10Turns >= 4);
+  const loopScore = noVerifierUsed && !checkpoint.features.noVerifierUsed
+    ? clampFeature(checkpoint.features.loopScore + 0.2)
+    : checkpoint.features.loopScore;
+  const progressScore = noVerifierUsed && !checkpoint.features.noVerifierUsed
+    ? clampFeature(checkpoint.features.progressScore - 0.1)
+    : checkpoint.features.progressScore;
+  return {
+    ...checkpoint,
+    features: {
+      ...checkpoint.features,
+      diffLines: stats.totalLines,
+      diffFilesChanged: stats.filesChanged,
+      diffLinesAdded: stats.linesAdded,
+      diffLinesDeleted: stats.linesDeleted,
+      diffChurnScore: diffChurnScore(stats),
+      noVerifierUsed,
+      loopScore,
+      progressScore,
+    },
+    recent: { ...checkpoint.recent, diffFileHashes: stats.fileHashes },
+  };
+}
+
+function applyWorkspaceDiffToLatest(checkpoints: RouterCheckpoint[], cwd?: string, excludePaths: string[] = []): RouterCheckpoint[] {
+  if (checkpoints.length === 0) return checkpoints;
+  const next = [...checkpoints];
+  next[next.length - 1] = checkpointWithDiffStats(next[next.length - 1], cwd, excludePaths);
+  return next;
+}
+
 export function buildCheckpoints(session: PiSession): RouterCheckpoint[] {
   return [...iterateCheckpoints(session)];
 }
@@ -251,20 +310,42 @@ export interface SessionCheckpointWriteSummary {
   lastCheckpointId?: string;
 }
 
-export async function writeSessionCheckpointsJsonl(sessionPaths: string[], outputPath: string): Promise<SessionCheckpointWriteSummary> {
+export async function writeSessionCheckpointsJsonl(sessionPaths: string[], outputPath: string, options: { workspaceDiff?: boolean } = {}): Promise<SessionCheckpointWriteSummary> {
+  if (options.workspaceDiff && sessionPaths.length !== 1) {
+    throw new Error("--workspace-diff can only be used with exactly one current session");
+  }
+
   const resolved = resolve(outputPath);
+  // Compute live workspace diff before opening/truncating the output so the output artifact cannot count itself.
+  const workspaceDiffCheckpoints = options.workspaceDiff
+    ? (() => {
+      const session = readPiSession(sessionPaths[0]);
+      const routerDir = session.cwd ? resolve(session.cwd, ".pi", "router") : undefined;
+      const routerArtifacts = routerDir ? [resolve(routerDir, "config.json"), resolve(routerDir, "state.json"), resolve(routerDir, "events.jsonl")] : [];
+      return applyWorkspaceDiffToLatest(buildCheckpoints(session), session.cwd, [session.path, resolved, ...routerArtifacts]);
+    })()
+    : null;
   mkdirSync(dirname(resolved), { recursive: true });
   const fd = openSync(resolved, "w");
   let checkpoints = 0;
   let firstCheckpointId: string | undefined;
   let lastCheckpointId: string | undefined;
   try {
-    for (const sessionPath of sessionPaths) {
-      for await (const checkpoint of streamCheckpointsFromSessionPath(sessionPath)) {
+    if (workspaceDiffCheckpoints) {
+      for (const checkpoint of workspaceDiffCheckpoints) {
         firstCheckpointId ??= checkpoint.checkpointId;
         lastCheckpointId = checkpoint.checkpointId;
         checkpoints++;
         writeSync(fd, `${JSON.stringify(checkpoint)}\n`);
+      }
+    } else {
+      for (const sessionPath of sessionPaths) {
+        for await (const checkpoint of streamCheckpointsFromSessionPath(sessionPath)) {
+          firstCheckpointId ??= checkpoint.checkpointId;
+          lastCheckpointId = checkpoint.checkpointId;
+          checkpoints++;
+          writeSync(fd, `${JSON.stringify(checkpoint)}\n`);
+        }
       }
     }
   } finally {

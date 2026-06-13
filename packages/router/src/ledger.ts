@@ -32,6 +32,8 @@ export interface RouteEvent {
     sameCommandRepeatedCount: number;
     sameErrorRepeatedCount: number;
     verifierUsed: boolean;
+    diffLines: number;
+    diffFilesChanged: number;
   };
 }
 
@@ -60,6 +62,8 @@ export function buildRouteEvent(checkpoint: RouterCheckpoint, decision: RouteDec
       sameCommandRepeatedCount: checkpoint.features.sameCommandRepeatedCount,
       sameErrorRepeatedCount: checkpoint.features.sameErrorRepeatedCount,
       verifierUsed: checkpoint.features.verifierUsed,
+      diffLines: checkpoint.features.diffLines,
+      diffFilesChanged: checkpoint.features.diffFilesChanged,
     },
   };
 }

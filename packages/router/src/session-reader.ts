@@ -64,6 +64,33 @@ function isVerifierCommand(command: string): boolean {
   return /\b(npm|pnpm|yarn|bun)\s+(?:run\s+)?(?:test|check|lint|build)\b|\b(vitest|pytest|cargo\s+test|go\s+test|make\s+test|tsc\b)/i.test(command);
 }
 
+function normalizedErrorFingerprint(text: string): string {
+  return String(text ?? "")
+    .toLowerCase()
+    .replace(/\b[0-9a-f]{8}-[0-9a-f-]{27,}\b/g, " <uuid> ")
+    .replace(/0x[0-9a-f]+/g, " <addr> ")
+    .replace(/\b\d{4}-\d{2}-\d{2}t\d{2}:\d{2}:\d{2}(?:\.\d+)?z?\b/g, " <timestamp> ")
+    .replace(/\b[\w./-]+\.(?:test\.)?(?:ts|tsx|js|jsx|json|md|yaml|yml|py|rs|go|css|scss|html|sh)(?::\d+)*(?:\b|$)/g, " <file> ")
+    .replace(/(?:file:\/\/)?(?:\/[\w .-]+)+/g, " <path> ")
+    .replace(/\bline\s+\d+\b/g, " line <n> ")
+    .replace(/\bcolumn\s+\d+\b/g, " column <n> ")
+    .replace(/\b\d+ms\b/g, " <duration> ")
+    .replace(/\bport\s+\d+\b/g, " port <n> ")
+    .replace(/\b\d+\b/g, " <n> ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function exitCodeFromText(text: string): number | undefined {
+  const match = text.match(/\b(?:exit(?:ed)?(?: with)? code|code)\s+([1-9]\d*)\b/i);
+  return match ? Number(match[1]) : undefined;
+}
+
+function failingTestHashFromText(text: string): string | undefined {
+  const match = text.match(/(?:FAIL|FAILED)\s+([^\n\r]+)/i) ?? text.match(/(?:test|it)\(["']([^"']+)["']/i);
+  return match?.[1] ? hashText(normalizeText(match[1])) : undefined;
+}
+
 function commandEventsFromMessage(eventIndex: number, raw: Record<string, unknown>): SessionCommandEvent[] {
   const message = asRecord(raw.message);
   if (message?.role !== "assistant") return [];
@@ -89,6 +116,7 @@ function toolResultFromMessage(eventIndex: number, raw: Record<string, unknown>)
   if (message?.role !== "toolResult") return undefined;
   const text = textFromContent(message.content);
   const isError = Boolean(message.isError) || /\b(error|failed|failure|traceback|exception|not found|enoent|command exited with code [1-9])\b/i.test(text);
+  const fingerprint = isError && text ? normalizedErrorFingerprint(text) : "";
   return {
     eventIndex,
     toolCallId: typeof message.toolCallId === "string" ? message.toolCallId : undefined,
@@ -97,6 +125,9 @@ function toolResultFromMessage(eventIndex: number, raw: Record<string, unknown>)
     outputHash: text ? hashText(text) : undefined,
     normalizedOutputHash: text ? hashMaybe(text) : undefined,
     errorHash: isError && text ? hashMaybe(text) : undefined,
+    errorFingerprintHash: fingerprint ? hashText(fingerprint) : undefined,
+    exitCode: text ? exitCodeFromText(text) : undefined,
+    failingTestHash: text ? failingTestHashFromText(text) : undefined,
   };
 }
 

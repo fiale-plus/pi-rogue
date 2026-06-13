@@ -64,7 +64,7 @@ export function computeProgressSignals(events: RawPiSessionEvent[]): ProgressSig
   const commandRepeatPressure = clamp01((sameCommandRepeatedCount - 1) / 3);
   const errorRepeatPressure = clamp01((sameErrorRepeatedCount - 1) / 3);
   const toolThrashScore = recentCommands.length === 0 ? 0 : clamp01(1 - uniqueRecentCommands.size / recentCommands.length);
-  const noVerifierUsed = commandEvents.length >= 4 && !verifierUsed;
+  const noVerifierUsed = fileHashes.length > 0 && commandEvents.length >= 4 && !verifierUsed;
   const noVerifierPressure = noVerifierUsed ? 0.2 : 0;
   const loopScore = clamp01(commandRepeatPressure * 0.35 + errorRepeatPressure * 0.4 + toolThrashScore * 0.2 + noVerifierPressure);
   const progressScore = clamp01(1 - loopScore - (noVerifierUsed ? 0.1 : 0));
@@ -78,6 +78,9 @@ export function computeProgressSignals(events: RawPiSessionEvent[]): ProgressSig
     testsImproved: null,
     filesTouched: fileHashes.length,
     diffLines: 0,
+    diffFilesChanged: 0,
+    diffLinesAdded: 0,
+    diffLinesDeleted: 0,
     diffChurnScore: 0,
     toolThrashScore,
     goalDriftScore: 0,

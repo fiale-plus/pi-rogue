@@ -12,7 +12,15 @@ export type RouteAction =
   | "escalate_debug_diagnosis"
   | "escalate_diff_review"
   | "delegate_full_step"
+  | "spawn_subagent"
+  | "merge_subagent_result"
   | "stop_and_ask_user";
+
+export type SubagentRole = "explore" | "debug_diagnose" | "implement" | "review" | "verify";
+export type SubagentToolPolicy = "read_only" | "test_only" | "edit_in_worktree" | "edit_main";
+export type SubagentReturnContract = "evidence_summary_v1";
+export type TaskStatus = "success" | "partial" | "failed" | "abandoned" | "unknown";
+export type TaskType = "implementation" | "debug" | "review" | "research" | "ops" | "planning" | "unknown";
 
 export type AdviceShape =
   | "none"
@@ -68,6 +76,18 @@ export interface SessionToolResultEvent {
   outputHash?: string;
   normalizedOutputHash?: string;
   errorHash?: string;
+  errorFingerprintHash?: string;
+  exitCode?: number;
+  failingTestHash?: string;
+}
+
+export interface DiffStats {
+  filesChanged: number;
+  linesAdded: number;
+  linesDeleted: number;
+  totalLines: number;
+  fileHashes: string[];
+  shortStatHash?: string;
 }
 
 export interface ProgressSignals {
@@ -77,6 +97,9 @@ export interface ProgressSignals {
   testsImproved: boolean | null;
   filesTouched: number;
   diffLines: number;
+  diffFilesChanged: number;
+  diffLinesAdded: number;
+  diffLinesDeleted: number;
   diffChurnScore: number;
   toolThrashScore: number;
   goalDriftScore: number;
@@ -108,7 +131,9 @@ export interface RouterCheckpoint {
     lastUserGoalHash?: string;
     lastCommandHash?: string;
     lastErrorHash?: string;
+    lastErrorFingerprintHash?: string;
     touchedFileHashes: string[];
+    diffFileHashes?: string[];
   };
   sourceEvent: SessionEventPointer;
 }

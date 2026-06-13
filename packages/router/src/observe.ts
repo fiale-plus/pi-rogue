@@ -1,11 +1,13 @@
 import { appendRouteEvent, buildRouteEvent } from "./ledger.js";
 import { decideRoute } from "./decision.js";
-import { streamCheckpointsFromSessionPath } from "./checkpoints.js";
+import { checkpointWithDiffStats, streamCheckpointsFromSessionPath } from "./checkpoints.js";
 import {
   activeProfile,
   loadRouterConfig,
   loadRouterState,
+  routerConfigPath,
   routerEventsPath,
+  routerStatePath,
   saveRouterState,
   type RouterConfig,
   type RouterProfile,
@@ -40,6 +42,8 @@ export function actionRole(action: RouteAction): RouterObserveSummary["role"] {
     case "escalate_debug_diagnosis": return "smart";
     case "escalate_diff_review": return "reviewer";
     case "delegate_full_step": return "smart";
+    case "spawn_subagent": return "smart";
+    case "merge_subagent_result": return "current";
     case "stop_and_ask_user": return "none";
   }
 }
@@ -99,9 +103,10 @@ export async function observeRouterTurn(ctx: any): Promise<RouterObserveSummary 
   const state = loadRouterState(ctx);
   if (state.lastObservedCheckpointId === checkpoint.checkpointId) return null;
 
-  const decision = decideRoute(checkpoint);
-  const summary = summarizeRouterDecision(checkpoint, decision, config);
-  appendRouteEvent(routerEventsPath(ctx), buildRouteEvent(checkpoint, decision));
+  const liveCheckpoint = checkpointWithDiffStats(checkpoint, ctx?.cwd, [sessionPath, routerConfigPath(ctx), routerStatePath(ctx), routerEventsPath(ctx)]);
+  const decision = decideRoute(liveCheckpoint);
+  const summary = summarizeRouterDecision(liveCheckpoint, decision, config);
+  appendRouteEvent(routerEventsPath(ctx), buildRouteEvent(liveCheckpoint, decision));
   saveRouterState(ctx, {
     lastObservedCheckpointId: checkpoint.checkpointId,
     lastDecisionAction: decision.action,
