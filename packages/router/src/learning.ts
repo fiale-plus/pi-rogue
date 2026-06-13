@@ -3,6 +3,7 @@ import { dirname, resolve } from "node:path";
 import { decideRoute, readCheckpointJsonl } from "./decision.js";
 import { hashText } from "./hash.js";
 import { readRouteEvents, type RouteEvent } from "./ledger.js";
+import { readOutcomes, type RouterOutcome } from "./outcomes.js";
 import type { RouteAction, RouteDecision, RouterCheckpoint } from "./types.js";
 
 export const MODEL_CAPABILITY_CARD_SCHEMA = "pi-router.model-capability-card.v1" as const;
@@ -26,6 +27,15 @@ export interface ModelCapabilityCard {
     averageLoopScore: number;
     averageProgressScore: number;
     averageContextTokensApprox: number | null;
+    outcomes: {
+      linked: number;
+      success: number;
+      partial: number;
+      failed: number;
+      abandoned: number;
+      unknown: number;
+      averageReworkTurns: number | null;
+    };
   };
   promotion: {
     manualOnly: true;
@@ -45,6 +55,27 @@ export interface TeacherLabel {
   confidence: number;
   rationale: string;
   source: "local-rule" | "teacher-output";
+}
+
+export interface TeacherPromptRequest {
+  schema: "pi-router.teacher-prompt.v1";
+  requestId: string;
+  teacher: string;
+  checkpointId: string;
+  sessionId: string;
+  rawSessionRef: RouterCheckpoint["rawSessionRef"];
+  allowedActions: RouteAction[];
+  instruction: string;
+  features: Pick<RouterCheckpoint, "phase" | "activeModel" | "provider"> & {
+    loopScore: number;
+    progressScore: number;
+    sameCommandRepeatedCount: number;
+    sameErrorRepeatedCount: number;
+    verifierUsed: boolean;
+    noVerifierUsed: boolean;
+    diffLines: number;
+    diffFilesChanged: number;
+  };
 }
 
 export interface ReflectionResult {
@@ -84,7 +115,27 @@ function writeJsonl(path: string, rows: unknown[]): void {
   writeFileSync(resolved, rows.map((row) => JSON.stringify(row)).join("\n") + (rows.length ? "\n" : ""));
 }
 
-export function generateCapabilityCards(events: RouteEvent[], generatedAt = new Date().toISOString()): ModelCapabilityCard[] {
+function emptyOutcomeCounts(): ModelCapabilityCard["observed"]["outcomes"] {
+  return { linked: 0, success: 0, partial: 0, failed: 0, abandoned: 0, unknown: 0, averageReworkTurns: null };
+}
+
+function summarizeOutcomes(group: RouteEvent[], outcomes: RouterOutcome[]): ModelCapabilityCard["observed"]["outcomes"] {
+  const byRouteEvent = new Map(outcomes.flatMap((outcome) => outcome.routeEventId ? [[outcome.routeEventId, outcome] as const] : []));
+  const byCheckpoint = new Map(outcomes.flatMap((outcome) => outcome.checkpointId && !outcome.routeEventId ? [[outcome.checkpointId, outcome] as const] : []));
+  const linked = group.flatMap((event) => {
+    const outcome = byRouteEvent.get(event.eventId) ?? byCheckpoint.get(event.checkpointId);
+    return outcome ? [outcome] : [];
+  });
+  if (linked.length === 0) return emptyOutcomeCounts();
+  const counts = emptyOutcomeCounts();
+  counts.linked = linked.length;
+  for (const outcome of linked) counts[outcome.taskStatus]++;
+  const reworkValues = linked.map((outcome) => outcome.reworkTurns).filter((value): value is number => Number.isFinite(value));
+  counts.averageReworkTurns = reworkValues.length ? round(reworkValues.reduce((sum, value) => sum + value, 0) / reworkValues.length) : null;
+  return counts;
+}
+
+export function generateCapabilityCards(events: RouteEvent[], generatedAt = new Date().toISOString(), outcomes: RouterOutcome[] = []): ModelCapabilityCard[] {
   const groups = new Map<string, RouteEvent[]>();
   for (const event of events) {
     const modelId = event.runtime.activeModel ?? "unknown";
@@ -120,6 +171,7 @@ export function generateCapabilityCards(events: RouteEvent[], generatedAt = new 
         averageContextTokensApprox: contextValues.length
           ? round(contextValues.reduce((sum, value) => sum + value, 0) / contextValues.length)
           : null,
+        outcomes: summarizeOutcomes(group, outcomes),
       },
       promotion: {
         manualOnly: true,
@@ -134,8 +186,8 @@ function readRequiredRouteEvents(path: string): RouteEvent[] {
   return readRouteEvents(path);
 }
 
-export function writeCapabilityCards(eventsPath: string, outputPath: string): ModelCapabilityCard[] {
-  const cards = generateCapabilityCards(readRequiredRouteEvents(eventsPath));
+export function writeCapabilityCards(eventsPath: string, outputPath: string, outcomesPath?: string): ModelCapabilityCard[] {
+  const cards = generateCapabilityCards(readRequiredRouteEvents(eventsPath), new Date().toISOString(), readOutcomes(outcomesPath));
   writeJsonl(outputPath, cards);
   return cards;
 }
@@ -160,6 +212,13 @@ function labelFromDecision(
     rationale: decision.reason,
     source,
   };
+}
+
+export function readTeacherLabels(path: string): TeacherLabel[] {
+  return readFileSync(path, "utf8")
+    .split("\n")
+    .filter((line) => line.trim())
+    .map((line) => JSON.parse(line) as TeacherLabel);
 }
 
 function importedTeacherDecisions(path: string): Map<string, RouteDecision> {
@@ -210,14 +269,62 @@ export function generateTeacherReflection(
   return { labels, markdown };
 }
 
+export function generateTeacherPromptRequests(checkpoints: RouterCheckpoint[], teacher: string): TeacherPromptRequest[] {
+  const allowedActions: RouteAction[] = [
+    "continue_current",
+    "continue_local",
+    "summarize_context",
+    "run_verifier",
+    "ask_micro_hint",
+    "escalate_plan_critique",
+    "escalate_debug_diagnosis",
+    "escalate_diff_review",
+    "delegate_full_step",
+    "spawn_subagent",
+    "stop_and_ask_user",
+  ];
+  return checkpoints.map((checkpoint) => ({
+    schema: "pi-router.teacher-prompt.v1",
+    requestId: hashText("teacher-request", teacher, checkpoint.checkpointId, checkpoint.rawSessionRef.contentHash),
+    teacher,
+    checkpointId: checkpoint.checkpointId,
+    sessionId: checkpoint.sessionId,
+    rawSessionRef: checkpoint.rawSessionRef,
+    allowedActions,
+    instruction: "Inspect the raw session span by pointer if needed. Return one pi-router.decision.v1 JSON object with checkpointId, action, adviceShape, contextPolicy, confidence, reason, and policyVersion. Prefer intervention only when it likely improves trajectory outcome; do not mutate policy.",
+    features: {
+      phase: checkpoint.phase,
+      activeModel: checkpoint.activeModel,
+      provider: checkpoint.provider,
+      loopScore: checkpoint.features.loopScore,
+      progressScore: checkpoint.features.progressScore,
+      sameCommandRepeatedCount: checkpoint.features.sameCommandRepeatedCount,
+      sameErrorRepeatedCount: checkpoint.features.sameErrorRepeatedCount,
+      verifierUsed: checkpoint.features.verifierUsed,
+      noVerifierUsed: checkpoint.features.noVerifierUsed,
+      diffLines: checkpoint.features.diffLines,
+      diffFilesChanged: checkpoint.features.diffFilesChanged,
+    },
+  }));
+}
+
+export function writeTeacherPromptRequests(checkpointPath: string, outputPath: string, teacher: string): TeacherPromptRequest[] {
+  const requests = generateTeacherPromptRequests(readCheckpointJsonl(checkpointPath), teacher);
+  writeJsonl(outputPath, requests);
+  return requests;
+}
+
 export function writeTeacherReflection(options: {
   checkpointPath: string;
   labelsPath: string;
   reflectionPath: string;
   teacher: string;
   teacherOutputPath?: string;
+  teacherPromptPath?: string;
 }): ReflectionResult {
-  const reflection = generateTeacherReflection(readCheckpointJsonl(options.checkpointPath), {
+  const checkpoints = readCheckpointJsonl(options.checkpointPath);
+  if (options.teacherPromptPath) writeJsonl(options.teacherPromptPath, generateTeacherPromptRequests(checkpoints, options.teacher));
+  const reflection = generateTeacherReflection(checkpoints, {
     teacher: options.teacher,
     teacherOutputPath: options.teacherOutputPath,
   });

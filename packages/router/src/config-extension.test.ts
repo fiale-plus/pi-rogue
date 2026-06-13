@@ -54,6 +54,9 @@ function checkpoint(overrides: Partial<RouterCheckpoint> = {}): RouterCheckpoint
       testsImproved: null,
       filesTouched: 1,
       diffLines: 0,
+      diffFilesChanged: 0,
+      diffLinesAdded: 0,
+      diffLinesDeleted: 0,
       diffChurnScore: 0,
       toolThrashScore: 0.2,
       goalDriftScore: 0,
@@ -98,7 +101,7 @@ describe("router config profiles", () => {
 });
 
 describe("router extension", () => {
-  it("registers slash command, ctrl-p profile cycling, and observe hook", async () => {
+  it("registers slash command, ctrl-alt-p profile cycling, and observe hook", async () => {
     const { pi, commands, shortcuts, handlers } = piMock();
     const ctx = ctxMock();
 

@@ -7,12 +7,26 @@ This package intentionally does **not** change live advisor or orchestration beh
 ```bash
 npm run router:rebuild -- --session ~/.pi/agent/sessions/.../session.jsonl --output .pi/router/checkpoints.jsonl
 npm run router:rebuild -- --session-dir ~/.pi/agent/sessions/... --output .pi/router/checkpoints.jsonl
+npm run router:rebuild -- --session ./current-session.jsonl --workspace-diff --output .pi/router/checkpoints-with-live-diff.jsonl
 npm run router:decide -- --checkpoint-file .pi/router/checkpoints.jsonl --ledger .pi/router/events.jsonl
 npm run router:cards -- --events .pi/router/events.jsonl --output .pi/router/model-cards.jsonl
+npm run router:outcomes -- --checkpoint-file .pi/router/checkpoints.jsonl --events .pi/router/events.jsonl --output .pi/router/outcomes.jsonl
+npm run router:teacher-requests -- --checkpoint-file .pi/router/checkpoints.jsonl --output .pi/router/teacher-requests.jsonl --teacher openai-codex/gpt-5.5
 npm run router:reflect -- --checkpoint-file .pi/router/checkpoints.jsonl --labels .pi/router/labels/teacher-labels.jsonl --reflection .pi/router/reflections/session.md --teacher local-rule
+npm run router:dataset -- --checkpoint-file .pi/router/checkpoints.jsonl --events .pi/router/events.jsonl --outcomes .pi/router/outcomes.jsonl --labels .pi/router/labels/teacher-labels.jsonl --output .pi/router/training.jsonl
 npm run router:shadow -- --checkpoint-file .pi/router/checkpoints.jsonl --ledger .pi/router/events.jsonl --output .pi/router/shadow-report.json
 
 # Live observe-only extension commands:
 # /router on|off|status|profile|profiles|models|configure|cycle
 # ctrl+alt+p cycles router profiles (Ctrl-P is reserved by Pi model cycling).
 ```
+
+## V1 telemetry notes
+
+Router v1 is still observe-only. It adds outcome skeletons, stronger diff/error fingerprints, teacher-label request export, binary gate dataset export, and subagent-aware telemetry schemas. It does not switch models, spawn agents, or promote policies automatically.
+
+- Diff telemetry stores counts and hashes from `git diff`, not raw patches. Offline rebuilds remain deterministic by default; use `--workspace-diff` only with one current live session/worktree snapshot.
+- Error fingerprints normalize paths, line numbers, timestamps, UUIDs, ports, and object ids before hashing.
+- `router:teacher-requests` writes local JSONL requests for an explicit teacher model; imported teacher decisions are still required before labels become training truth.
+- `router:dataset` excludes `local-rule` labels by default so a future model does not merely imitate the current rules.
+- Subagent route/ledger schemas describe parent-child evidence flow, but live autonomous spawning remains out of scope.

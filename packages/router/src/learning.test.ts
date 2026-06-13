@@ -48,6 +48,9 @@ function checkpoint(overrides: CheckpointOverrides = {}): RouterCheckpoint {
       testsImproved: null,
       filesTouched: 1,
       diffLines: 12,
+      diffFilesChanged: 1,
+      diffLinesAdded: 8,
+      diffLinesDeleted: 4,
       diffChurnScore: 0,
       toolThrashScore: 0.25,
       goalDriftScore: 0,
@@ -90,10 +93,32 @@ describe("trajectory router local learning and eval", () => {
       phase: "implementation",
       features: { sameCommandRepeatedCount: 1, sameErrorRepeatedCount: 0, loopScore: 0.1, progressScore: 0.9, contextTokensApprox: 2000 },
     });
-    const cards = generateCapabilityCards([
+    const events = [
       buildRouteEvent(first, decideRoute(first), "2026-06-12T00:00:02.000Z"),
       buildRouteEvent(second, decideRoute(second), "2026-06-12T00:00:03.000Z"),
-    ], "2026-06-12T00:00:04.000Z");
+    ];
+    const cards = generateCapabilityCards(events, "2026-06-12T00:00:04.000Z", [{
+      schema: "pi-router.outcome.v1",
+      outcomeId: "outcome-1",
+      recordedAt: "2026-06-12T00:00:04.000Z",
+      sessionId: first.sessionId,
+      checkpointId: first.checkpointId,
+      taskType: "debug",
+      taskStatus: "partial",
+      testsPassedAfter: null,
+      verifierImproved: null,
+      acceptedDiff: null,
+      userInterrupted: false,
+      userOverrodeDecision: false,
+      finalFilesTouched: 1,
+      finalDiffLines: 12,
+      wallTimeMs: null,
+      cloudCostUsd: null,
+      frontierCalls: 0,
+      localTurns: 1,
+      reworkTurns: 1,
+      evidence: { source: "manual" },
+    }]);
 
     expect(cards).toHaveLength(1);
     expect(cards[0]).toMatchObject({
@@ -113,6 +138,7 @@ describe("trajectory router local learning and eval", () => {
     });
     expect(cards[0].observed.actions.escalate_debug_diagnosis).toBe(1);
     expect(cards[0].observed.actions.continue_current).toBe(1);
+    expect(cards[0].observed.outcomes).toMatchObject({ linked: 1, partial: 1, averageReworkTurns: 1 });
   });
 
   it("fails capability-card generation when required events input is missing", () => {
