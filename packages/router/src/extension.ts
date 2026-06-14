@@ -8,6 +8,7 @@ import {
   routerConfigPath,
   routerEventsPath,
   saveRouterConfig,
+  setRouterMode,
   setRouterProfile,
   type RouterConfig,
 } from "./config.js";
@@ -17,8 +18,8 @@ import { routerArgumentCompletions } from "./completions.js";
 function statusText(ctx: any, config: RouterConfig): string {
   const profile = activeProfile(config);
   return [
-    `router: ${config.enabled ? "observe on" : "off"}`,
-    `mode: ${config.mode}`,
+    `router: ${config.enabled ? "on" : "off"}`,
+    `model routing: ${config.mode === "auto_model" ? "auto_model (applies model switches only)" : "observe (recommendations only)"}`,
     `print: ${config.print}`,
     `profile: ${config.activeProfile}`,
     `worker: ${profile.worker}`,
@@ -39,7 +40,7 @@ function setEnabled(ctx: any, enabled: boolean): void {
   const config = ensureRouterConfig(ctx);
   const next = { ...config, enabled };
   saveRouterConfig(ctx, next);
-  ctx.ui.notify(enabled ? "router observe mode enabled" : "router disabled", "info");
+  ctx.ui.notify(enabled ? `router enabled: ${next.mode === "auto_model" ? "auto_model applies model switches only" : "observe recommendations only"}` : "router disabled", "info");
 }
 
 export function registerRouter(pi: ExtensionAPI): void {
@@ -48,7 +49,7 @@ export function registerRouter(pi: ExtensionAPI): void {
   p.__piRogueRouterRegistered = true;
 
   pi.registerCommand("router", {
-    description: "Observe-only trajectory router. Usage: /router on|off|status|profile|profiles|models|configure",
+    description: "Trajectory router. Default observe-only; explicit /router mode auto_model applies model switches only. Usage: /router on|off|status|mode|profile|profiles|models|configure",
     getArgumentCompletions: (prefix: string, ctx?: any) => routerArgumentCompletions(prefix, ctx),
     handler: async (args, ctx) => {
       const input = String(args ?? "").trim();
@@ -76,6 +77,21 @@ export function registerRouter(pi: ExtensionAPI): void {
       }
       if (cmd === "models") {
         notifyProfile(ctx, config, "router models");
+        return;
+      }
+      if (cmd === "mode") {
+        const mode = rest[0];
+        if (!mode) {
+          ctx.ui.notify(statusText(ctx, config), "info");
+          return;
+        }
+        const next = setRouterMode(config, mode);
+        if (!next) {
+          ctx.ui.notify("unknown router mode: use observe or auto_model", "error");
+          return;
+        }
+        saveRouterConfig(ctx, next);
+        ctx.ui.notify(`router model routing mode set: ${next.mode === "auto_model" ? "auto_model (model switches only)" : "observe (recommendations only)"}`, "info");
         return;
       }
       if (cmd === "profiles") {
@@ -108,7 +124,7 @@ export function registerRouter(pi: ExtensionAPI): void {
         return;
       }
 
-      ctx.ui.notify("Usage: /router on|off|status|profile [name]|profiles|models|configure|cycle", "error");
+      ctx.ui.notify("Usage: /router on|off|status|mode [observe|auto_model]|profile [name]|profiles|models|configure|cycle", "error");
     },
   });
 
@@ -127,7 +143,7 @@ export function registerRouter(pi: ExtensionAPI): void {
 
   pi.on("turn_end", async (_event: any, ctx: any) => {
     try {
-      await observeRouterTurn(ctx);
+      await observeRouterTurn(ctx, pi);
     } catch (error) {
       ctx.ui?.notify?.(`router observe failed: ${error instanceof Error ? error.message : String(error)}`, "warning");
     }

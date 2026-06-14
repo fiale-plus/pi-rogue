@@ -16,9 +16,10 @@ export function routerArgumentCompletions(prefix: string, ctx?: any): Completion
   const trimmed = prefix.trimStart();
   const [cmd, rest = ""] = trimmed.split(/\s+/, 2);
   const top = [
-    item("on", "enable observe-only router summaries"),
+    item("on", "enable router using the current explicit mode"),
     item("off", "disable router summaries"),
     item("status", "show router state and active profile"),
+    item("mode", "show or set model routing mode (observe|auto_model)"),
     item("profile", "show or set active router profile"),
     item("profiles", "list router profiles"),
     item("models", "show active role to model mapping"),
@@ -30,5 +31,6 @@ export function routerArgumentCompletions(prefix: string, ctx?: any): Completion
     const config = ctx ? loadRouterConfig(ctx) : DEFAULT_ROUTER_CONFIG;
     return filter(config.profileOrder.map((name) => item(`profile ${name}`, config.profiles[name]?.worker)), `profile ${rest}`);
   }
+  if (cmd === "mode") return filter([item("mode observe", "recommendations only"), item("mode auto_model", "apply model switches only")], `mode ${rest}`);
   return null;
 }

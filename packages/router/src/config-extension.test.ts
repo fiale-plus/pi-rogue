@@ -3,10 +3,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { routerArgumentCompletions } from "./completions.js";
-import { activeProfile, cycleRouterProfile, ensureRouterConfig, loadRouterConfig, routerConfigPath, routerEventsPath, routerSessionDir, routerStatePath, saveRouterConfig, setRouterProfile } from "./config.js";
+import { activeProfile, cycleRouterProfile, ensureRouterConfig, loadRouterConfig, routerConfigPath, routerEventsPath, routerSessionDir, routerStatePath, saveRouterConfig, setRouterMode, setRouterProfile } from "./config.js";
 import { registerRouter } from "./extension.js";
 import { decideRoute } from "./decision.js";
-import { observeRouterTurn, summarizeRouterDecision } from "./observe.js";
+import { applyModelRouting, modelsMatch, observeRouterTurn, summarizeRouterDecision } from "./observe.js";
 import type { RouterCheckpoint } from "./types.js";
 
 function ctxMock(sessionPath?: string) {
@@ -37,7 +37,10 @@ function piMock() {
   const commands = new Map<string, any>();
   const shortcuts = new Map<string, any>();
   const handlers = new Map<string, any[]>();
+  const selectedModels: any[] = [];
   const pi: any = {
+    selectedModels,
+    async setModel(model: any) { selectedModels.push(model); return true; },
     registerCommand(name: string, options: any) { commands.set(name, options); },
     registerShortcut(key: string, options: any) { shortcuts.set(key, options); },
     on(name: string, handler: any) { handlers.set(name, [...(handlers.get(name) ?? []), handler]); },
@@ -91,6 +94,7 @@ describe("router config profiles", () => {
 
     expect(config.activeProfile).toBe("all-smart");
     expect(config.profileOrder).toEqual(["all-smart", "spark-smart", "local-smart"]);
+    expect(config.mode).toBe("observe");
     expect(activeProfile(config).worker).toBe("openai-codex/gpt-5.5");
     expect(readFileSync(routerConfigPath(ctx), "utf8")).toContain("spark-smart");
   });
@@ -102,11 +106,15 @@ describe("router config profiles", () => {
     expect(spark?.activeProfile).toBe("spark-smart");
     expect(cycleRouterProfile(spark!, 1).activeProfile).toBe("local-smart");
     expect(setRouterProfile(config, "missing")).toBeNull();
+    expect(setRouterMode(config, "auto")?.mode).toBe("auto_model");
+    expect(setRouterMode(config, "auto_model")?.mode).toBe("auto_model");
+    expect(setRouterMode(config, "agent-auto")).toBeNull();
   });
 
   it("completes router commands and profile names", () => {
-    expect(routerArgumentCompletions("")?.map((item) => item.value)).toEqual(expect.arrayContaining(["on", "off", "status", "profile"]));
+    expect(routerArgumentCompletions("")?.map((item) => item.value)).toEqual(expect.arrayContaining(["on", "off", "status", "mode", "profile"]));
     expect(routerArgumentCompletions("profile s")?.map((item) => item.value)).toEqual(["profile spark-smart"]);
+    expect(routerArgumentCompletions("mode a")?.map((item) => item.value)).toEqual(["mode auto_model"]);
   });
 
   it("keeps config repo-global while state and live events are session-scoped", async () => {
@@ -149,6 +157,14 @@ describe("router extension", () => {
     await commands.get("router").handler("profile spark-smart", ctx);
     expect(loadRouterConfig(ctx).activeProfile).toBe("spark-smart");
 
+    await commands.get("router").handler("mode auto_model", ctx);
+    expect(loadRouterConfig(ctx).mode).toBe("auto_model");
+    await commands.get("router").handler("off", ctx);
+    await commands.get("router").handler("on", ctx);
+    expect(ctx.notifications.at(-1)?.text).toContain("auto_model applies model switches only");
+    await commands.get("router").handler("status", ctx);
+    expect(ctx.notifications.at(-1)?.text).toContain("model routing: auto_model");
+
     await shortcuts.get("ctrl+alt+p").handler(ctx);
     expect(loadRouterConfig(ctx).activeProfile).toBe("local-smart");
   });
@@ -161,5 +177,86 @@ describe("router extension", () => {
     expect(summary.text).toContain("MISMATCH");
     expect(summary.text).toContain("smart(openai-codex/gpt-5.5)");
     expect(summary.text).toContain("current=gpt-5.3-codex-spark");
+  });
+
+  it("auto_model applies only model switches for explicit target mismatches", async () => {
+    const { pi } = piMock();
+    const ctx = {
+      ...ctxMock(),
+      modelRegistry: {
+        find: (provider: string, id: string) => provider === "openai-codex" && id === "gpt-5.5" ? { provider, id } : undefined,
+      },
+    };
+    const config = { ...loadRouterConfig(ctx), enabled: true, mode: "auto_model" as const, activeProfile: "spark-smart" };
+    const item = checkpoint();
+    const summary = summarizeRouterDecision(item, decideRoute(item), config);
+
+    const applied = await applyModelRouting(pi, ctx, summary);
+
+    expect(applied).toMatchObject({ applied: true, fromModel: "gpt-5.3-codex-spark", toModel: "openai-codex/gpt-5.5" });
+    expect(pi.selectedModels).toEqual([{ provider: "openai-codex", id: "gpt-5.5" }]);
+
+    const none = await applyModelRouting(pi, ctx, { ...summary, role: "none", targetModel: undefined, match: null });
+    expect(none.applied).toBe(false);
+    expect(pi.selectedModels).toHaveLength(1);
+  });
+
+  it("does not treat provider-qualified target as matched when only leaf model id matches", async () => {
+    const { pi } = piMock();
+    const ctx = {
+      ...ctxMock(),
+      modelRegistry: {
+        find: (provider: string, id: string) => provider === "openai-codex" && id === "gpt-5.5" ? { provider, id } : undefined,
+      },
+    };
+    const config = { ...loadRouterConfig(ctx), enabled: true, mode: "auto_model" as const, activeProfile: "spark-smart" };
+    const item = checkpoint({ activeModel: "gpt-5.5", provider: "custom" });
+    const summary = summarizeRouterDecision(item, decideRoute(item), config);
+    const qualifiedWithoutProvider = summarizeRouterDecision(checkpoint({ activeModel: "custom/gpt-5.5", provider: undefined }), decideRoute(item), config);
+    const leafWithoutProvider = summarizeRouterDecision(checkpoint({ activeModel: "gpt-5.5", provider: undefined }), decideRoute(item), config);
+
+    expect(summary.match).toBe(false);
+    expect(qualifiedWithoutProvider.match).toBe(false);
+    expect(leafWithoutProvider.match).toBe(false);
+    expect(modelsMatch("zai/kimi-k2.6", "openrouter/moonshotai/kimi-k2.6", "openrouter")).toBe(false);
+    expect(modelsMatch("moonshotai/kimi-k2.6", "openrouter/moonshotai/kimi-k2.6", "openrouter")).toBe(true);
+    const applied = await applyModelRouting(pi, ctx, summary);
+
+    expect(applied.applied).toBe(true);
+    expect(pi.selectedModels).toEqual([{ provider: "openai-codex", id: "gpt-5.5" }]);
+  });
+
+  it("resolves bare slash-containing model ids from the registry", async () => {
+    const { pi } = piMock();
+    const ctx = {
+      ...ctxMock(),
+      modelRegistry: {
+        getAll: () => [{ provider: "openrouter", id: "moonshotai/kimi-k2.6" }],
+        find: (provider: string, id: string) => ({ provider, id }),
+      },
+    };
+
+    const applied = await applyModelRouting(pi, ctx, { checkpointId: "c", action: "ask_micro_hint", role: "smart", currentModel: "qwen", currentProvider: "openrouter", targetModel: "moonshotai/kimi-k2.6", match: false, confidence: 0.8, reason: "test", text: "test" });
+    const skipped = await applyModelRouting(pi, ctx, { checkpointId: "c", action: "ask_micro_hint", role: "smart", currentModel: "moonshotai/kimi-k2.6", currentProvider: "openrouter", targetModel: "moonshotai/kimi-k2.6", match: false, confidence: 0.8, reason: "test", text: "test" });
+    const duplicateProviderCtx = {
+      ...ctxMock(),
+      modelRegistry: {
+        getAll: () => [{ provider: "first", id: "same-model" }, { provider: "current", id: "same-model" }],
+      },
+    };
+    const duplicateSkipped = await applyModelRouting(pi, duplicateProviderCtx, { checkpointId: "c", action: "ask_micro_hint", role: "smart", currentModel: "same-model", currentProvider: "current", targetModel: "same-model", match: true, confidence: 0.8, reason: "test", text: "test" });
+
+    const ambiguousCtx = {
+      ...ctxMock(),
+      modelRegistry: { getAll: () => [{ provider: "first", id: "ambiguous" }, { provider: "second", id: "ambiguous" }] },
+    };
+    const ambiguous = await applyModelRouting(pi, ambiguousCtx, { checkpointId: "c", action: "ask_micro_hint", role: "smart", currentModel: "other", targetModel: "ambiguous", match: false, confidence: 0.8, reason: "test", text: "test" });
+
+    expect(applied.applied).toBe(true);
+    expect(skipped.applied).toBe(false);
+    expect(duplicateSkipped.applied).toBe(false);
+    expect(ambiguous.applied).toBe(false);
+    expect(ambiguous.reason).toContain("target model not configured");
+    expect(pi.selectedModels).toEqual([{ provider: "openrouter", id: "moonshotai/kimi-k2.6" }]);
   });
 });
