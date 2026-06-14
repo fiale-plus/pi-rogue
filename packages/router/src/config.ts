@@ -197,6 +197,11 @@ export function setRouterMode(config: RouterConfig, mode: string): RouterConfig 
   return null;
 }
 
+export function setRouterPrint(config: RouterConfig, print: string): RouterConfig | null {
+  if (print === "all" || print === "mismatch_only" || print === "off") return { ...config, print };
+  return null;
+}
+
 export function formatProfile(name: string, profile: RouterProfile): string {
   const subagents = [`explore=${profile.explore ?? profile.worker}`, `debug=${profile.debug_diagnose ?? profile.smart}`, `review=${profile.review ?? profile.reviewer}`, `verify=${profile.verify ?? profile.worker}`].join(" ");
   return `${name}: worker=${profile.worker} smart=${profile.smart} teacher=${profile.teacher} reviewer=${profile.reviewer} ${subagents}`;

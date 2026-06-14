@@ -21,9 +21,11 @@ npm run router:report -- --events .pi/router/events.jsonl --outcomes .pi/router/
 npm run router:shadow -- --checkpoint-file .pi/router/checkpoints.jsonl --ledger .pi/router/events.jsonl --output .pi/router/shadow-report.json
 
 # Live router extension commands:
-# /router on|off|status|mode|profile|profiles|models|configure|cycle
+# /router status|help|on|off|mode|profile|print|profiles|models|configure|cycle
 # /router mode observe      # default: recommendations only
-# /router mode auto_model  # explicit: apply model switches only
+# /router mode auto_model   # explicit: apply model switches only
+# /router profile spark-smart
+# /router print mismatch_only|all|off
 # ctrl+alt+p cycles router profiles (Ctrl-P is reserved by Pi model cycling).
 ```
 
