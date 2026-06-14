@@ -132,6 +132,7 @@ describe("router sharpening hints", () => {
       schema: "pi-router.sharpening-hints.v1",
       generatedAt: "2026-06-14T00:02:00.000Z",
       totals: { events: 10, outcomes: 10, sessions: 2, models: 2 },
+      learningPolicy: { scope: "repo-local", ignoresRawTranscript: true, fallback: "baseline-router" },
       manualPromotionRequired: true,
     });
     const prefer = artifact.hints.find((hint) => hint.kind === "prefer_model_for_action");
@@ -140,7 +141,7 @@ describe("router sharpening hints", () => {
       modelId: "qwen3.6-35b-a3b-128k",
       provider: "local",
       confidence: "medium",
-      guardrails: { manualPromotionOnly: true, sparse: false },
+      guardrails: { manualPromotionOnly: true, sparse: true, autoUse: { eligible: false } },
     });
     expect(prefer?.provenance.comparedWith?.[0]).toMatchObject({ modelId: "gpt-5.5", provider: "openai-codex", events: 5 });
     expect(JSON.stringify(artifact)).not.toContain("SECRET_TOKEN");
@@ -155,7 +156,28 @@ describe("router sharpening hints", () => {
     const hint = artifact.hints.find((item) => item.kind === "prefer_model_for_action");
 
     expect(hint?.confidence).toBe("low");
-    expect(hint?.guardrails).toMatchObject({ sparse: true, sampleSizeCapped: true, manualPromotionOnly: true });
+    expect(hint?.guardrails).toMatchObject({ sparse: true, sampleSizeCapped: true, manualPromotionOnly: true, autoUse: { eligible: false } });
+  });
+
+  it("requires cross-session outcome-backed evidence before future auto bias eligibility", () => {
+    const strongLocal = [
+      ...Array.from({ length: 10 }, (_, index) => event(`8${index}`, "run_verifier", "qwen3.6-35b-a3b-128k", "local", 0.9, 0.04)),
+      ...Array.from({ length: 10 }, (_, index) => event(`9${index}`, "run_verifier", "qwen3.6-35b-a3b-128k", "local", 0.88, 0.06)),
+    ];
+    const weakerCloud = [
+      ...Array.from({ length: 10 }, (_, index) => event(`a${index}`, "run_verifier", "gpt-5.5", "openai-codex", 0.58, 0.4)),
+      ...Array.from({ length: 10 }, (_, index) => event(`b${index}`, "run_verifier", "gpt-5.5", "openai-codex", 0.6, 0.38)),
+    ];
+
+    const artifact = generateSharpeningHints({
+      events: [...strongLocal, ...weakerCloud],
+      outcomes: [...strongLocal.map((item) => outcomeFor(item, "success")), ...weakerCloud.map((item) => outcomeFor(item, "partial"))],
+      generatedAt: "2026-06-14T00:03:30.000Z",
+    });
+    const hint = artifact.hints.find((item) => item.kind === "prefer_model_for_action" && item.modelId === "qwen3.6-35b-a3b-128k");
+
+    expect(hint?.confidence).toBe("high");
+    expect(hint?.guardrails).toMatchObject({ sparse: false, sampleSizeCapped: false, autoUse: { eligible: true } });
   });
 
   it("emits local savings candidates only as manual hints", () => {

@@ -24,6 +24,10 @@ export interface RouterSharpeningHint {
     manualPromotionOnly: true;
     sampleSizeCapped: boolean;
     sparse: boolean;
+    autoUse: {
+      eligible: boolean;
+      reason: string;
+    };
   };
   provenance: {
     events: number;
@@ -42,6 +46,14 @@ export interface RouterSharpeningArtifact {
   generatedAt: string;
   inputs: { events: string; outcomes?: string; cards?: string };
   totals: { events: number; outcomes: number; cards: number; sessions: number; models: number };
+  learningPolicy: {
+    scope: "repo-local";
+    ignoresRawTranscript: true;
+    fallback: "baseline-router";
+    minSessionsForAutoBias: number;
+    minLinkedOutcomesForAutoBias: number;
+    staleHintDecayRecommended: true;
+  };
   hints: RouterSharpeningHint[];
   manualPromotionRequired: true;
 }
@@ -160,20 +172,36 @@ function groupedByModel(events: RouteEvent[], outcomes: RouterOutcome[]): GroupS
   });
 }
 
+function hasPoorLinkedOutcomes(stats: GroupStats): boolean {
+  const negative = stats.outcomeStatus.failed + stats.outcomeStatus.abandoned;
+  const positive = stats.outcomeStatus.success + stats.outcomeStatus.partial;
+  return stats.linkedOutcomes.length > 0 && negative > 0 && positive === 0;
+}
+
+function autoUse(kind: RouterSharpeningHintKind, stats: GroupStats, hintConfidence: RouterSharpeningConfidence): RouterSharpeningHint["guardrails"]["autoUse"] {
+  if (kind === "mismatch_followup") return { eligible: false, reason: "mismatch follow-up hints are diagnostic only" };
+  if (hintConfidence !== "high") return { eligible: false, reason: "requires high confidence before any future automatic bias" };
+  if (stats.sessions.size < 2) return { eligible: false, reason: "requires evidence from at least two sessions" };
+  if (stats.linkedOutcomes.length < 5) return { eligible: false, reason: "requires at least five linked outcomes" };
+  if (hasPoorLinkedOutcomes(stats)) return { eligible: false, reason: "poor linked outcomes suppress automatic bias" };
+  return { eligible: true, reason: "eligible only for future bounded bias; baseline router remains fallback" };
+}
+
 function baseHint(kind: RouterSharpeningHintKind, stats: GroupStats, rationale: string, comparedWith?: RouterSharpeningHint["provenance"]["comparedWith"], cardEvents?: number): RouterSharpeningHint {
   const eventIds = stableSample([...new Set(stats.events.map((event) => event.eventId))].sort());
   const checkpointIds = stableSample([...new Set(stats.events.map((event) => event.checkpointId))].sort());
-  const sparse = stats.events.length < 5 || stats.linkedOutcomes.length === 0;
+  const sparse = stats.events.length < 5 || stats.linkedOutcomes.length === 0 || stats.sessions.size < 2;
+  const hintConfidence = confidence(stats.events.length, stats.linkedOutcomes.length, stats.score);
   return {
     hintId: hashText("sharpen", kind, stats.action ?? "any", stats.provider ?? "unknown", stats.modelId, String(stats.events.length), String(stats.score)),
     kind,
     action: stats.action,
     modelId: stats.modelId,
     provider: stats.provider,
-    confidence: confidence(stats.events.length, stats.linkedOutcomes.length, stats.score),
+    confidence: hintConfidence,
     score: stats.score,
     rationale,
-    guardrails: { manualPromotionOnly: true, sampleSizeCapped: sparse, sparse },
+    guardrails: { manualPromotionOnly: true, sampleSizeCapped: sparse, sparse, autoUse: autoUse(kind, stats, hintConfidence) },
     provenance: {
       events: stats.events.length,
       sessions: stats.sessions.size,
@@ -185,12 +213,6 @@ function baseHint(kind: RouterSharpeningHintKind, stats: GroupStats, rationale: 
       ...(comparedWith?.length ? { comparedWith } : {}),
     },
   };
-}
-
-function hasPoorLinkedOutcomes(stats: GroupStats): boolean {
-  const negative = stats.outcomeStatus.failed + stats.outcomeStatus.abandoned;
-  const positive = stats.outcomeStatus.success + stats.outcomeStatus.partial;
-  return stats.linkedOutcomes.length > 0 && negative > 0 && positive === 0;
 }
 
 function readCapabilityCards(path?: string): ModelCapabilityCard[] {
@@ -289,6 +311,14 @@ export function generateSharpeningHints(options: { events: RouteEvent[]; outcome
       cards: cards.length,
       sessions: new Set(events.map((event) => event.sessionId)).size,
       models: new Set(events.map((event) => modelKey(event.runtime.provider, event.runtime.activeModel ?? "unknown"))).size,
+    },
+    learningPolicy: {
+      scope: "repo-local",
+      ignoresRawTranscript: true,
+      fallback: "baseline-router",
+      minSessionsForAutoBias: 2,
+      minLinkedOutcomesForAutoBias: 5,
+      staleHintDecayRecommended: true,
     },
     hints: sortedHints,
     manualPromotionRequired: true,

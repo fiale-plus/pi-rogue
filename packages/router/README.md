@@ -43,5 +43,5 @@ Live config is repo-global at `.pi/router/config.json`, while mutable live state
 - `router:dataset` excludes `local-rule` labels by default so a future model does not merely imitate the current rules.
 - `router:gate-train` trains a local binary continue-vs-intervene gate and evaluates it on a distinct labeled eval dataset; local-rule labels are rejected as training/eval truth and promotion remains manual/eval-gated.
 - `router:report` writes JSON plus optional Markdown summaries across route ledgers, enriched outcomes, dataset labels, and gate evaluation reports.
-- `router:sharpen` writes local-only `pi-router.sharpening-hints.v1` recommendations from route ledgers, optional outcomes, and optional capability cards. Hints include sample-size/confidence guardrails and provenance, but never mutate config or promote policy automatically.
+- `router:sharpen` writes local-only `pi-router.sharpening-hints.v1` recommendations from route ledgers, optional outcomes, and optional capability cards. Hints include sample-size/confidence/auto-use guardrails, repo-local learning policy, and provenance, but never mutate config or promote policy automatically.
 - Subagent route/ledger schemas describe parent-child evidence flow, but live autonomous spawning remains out of scope.
