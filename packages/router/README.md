@@ -44,4 +44,30 @@ Live config is repo-global at `.pi/router/config.json`, while mutable live state
 - `router:gate-train` trains a local binary continue-vs-intervene gate and evaluates it on a distinct labeled eval dataset; local-rule labels are rejected as training/eval truth and promotion remains manual/eval-gated.
 - `router:report` writes JSON plus optional Markdown summaries across route ledgers, enriched outcomes, dataset labels, and gate evaluation reports.
 - `router:sharpen` writes local-only `pi-router.sharpening-hints.v1` recommendations from route ledgers, optional outcomes, and optional capability cards. Hints include sample-size/confidence/auto-use guardrails, repo-local learning policy, and provenance, but never mutate config or promote policy automatically.
+
+### Automated, upgrade-safe sharpening persistence
+
+Use this one-shot command for cron/background automation:
+
+```bash
+npm run router:sharpen:auto -- --workspace .
+```
+
+By default it stores artifacts at:
+
+- Linux/BSD: `<XDG_DATA_HOME || ~/.local/share>/pi-rogue-router/learning/<repo-name>-<hash>/`
+- macOS: `~/Library/Application Support/pi-rogue-router/learning/<repo-name>-<hash>/`
+
+The script:
+- writes `latest.json` and `history/*.json` artifacts;
+- writes `manifest.json` with source fingerprints for change detection;
+- skips re-computation if inputs are unchanged (unless `--force`);
+- migrates legacy `.pi/router/sharpening-hints.json` into the stable learning directory when present.
+
+Cron example:
+
+```bash
+*/30 * * * * cd /path/to/pi-rogue && npm run router:sharpen:auto -- --workspace /path/to/pi-rogue
+```
+
 - Subagent route/ledger schemas describe parent-child evidence flow, but live autonomous spawning remains out of scope.
