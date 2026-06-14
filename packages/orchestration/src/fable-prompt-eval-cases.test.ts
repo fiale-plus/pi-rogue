@@ -16,6 +16,7 @@ interface PromptEvalSuite {
   source: string;
   issue: number;
   purpose: string;
+  promptCandidate?: string;
   modelFamilies: string[];
   cases: PromptEvalCase[];
 }
@@ -33,6 +34,7 @@ describe("Fable prompt portability eval cases", () => {
     expect(suite.schemaVersion).toBe(1);
     expect(suite.issue).toBe(139);
     expect(suite.source).toContain("CLAUDE-FABLE-5.md");
+    expect(suite.promptCandidate).toBe("packages/core/src/prompt-policy.ts#buildPiRogueSystemPromptV1");
     expect(suite.modelFamilies).toEqual(expect.arrayContaining(["gpt", "qwen_oss", "open_weight_sota"]));
     expect(suite.cases.length).toBeGreaterThanOrEqual(8);
   });

@@ -16,7 +16,7 @@ The referenced Fable 5 prompt is useful as a **prompt architecture specimen**, n
 6. **Safety and uncertainty handling**: explicitly classify unsafe, stale, or uncertain requests; search or ask for clarification rather than inventing product facts.
 7. **Model-family overlays**: keep a shared core prompt, then apply small overlays for GPT APIs, Qwen/OSS/local models, and future large open-weight models.
 
-Recommended first implementation slice: keep production defaults unchanged, add this research artifact plus portable eval cases (`docs/prompt-evals/fable5-portability-cases.json`) that can be run manually or wired into future model runners.
+Implementation slice in this PR: keep production defaults unchanged, add this research artifact, portable eval cases (`docs/prompt-evals/fable5-portability-cases.json`), and one opt-in prompt-policy candidate in `packages/core/src/prompt-policy.ts`. The candidate provides a compact universal core, model-family overlays, and a conservative model-family detector without wiring it into runtime defaults.
 
 ## Current pi-rogue surfaces affected
 
@@ -33,7 +33,7 @@ This repo does not currently have one global Fable-style prompt. Instead, it mod
 | Model routing profiles | `packages/router/src/config.ts`, `observe.ts`, `outcomes.ts`, `subagents.ts` | Profiles already distinguish GPT/frontier-style models from local Qwen-style workers (`local-smart` uses `qwen3.6-35b-a3b-128k`). This is the natural future home for model-family overlays/capability flags. |
 | Published command surface | `README.md`, package READMEs, skill files | Commands are explicit (`/advisor`, `/goal`, `/loop`, `/autoresearch`, `/autoresearch-lab`). Repo instructions say to avoid expanding command surfaces without request. |
 
-Implication: pi-rogue should not import a monolithic system prompt. The natural fit is a **prompt policy document + eval suite first**, then narrowly factored helpers if/when prompt variants are introduced.
+Implication: pi-rogue should not import a monolithic system prompt. The natural fit is a **prompt policy document + eval suite + opt-in prompt candidate first**, then runtime wiring only after cross-model evidence exists.
 
 ## What the Fable 5 prompt contains
 
@@ -235,13 +235,17 @@ Pass criteria per case:
 
 ## Implementation guidance
 
-Recommended next steps after this research PR:
+This PR now includes the first two implementation steps as opt-in, non-runtime-default scaffolding:
 
-1. Add a `promptPolicy` helper only when a caller needs it; start with pure strings or data, not runtime behavior changes.
-2. Add a model-family resolver that maps provider/model IDs to coarse families (`gpt`, `qwen_oss`, `open_weight_sota`, `unknown`) using explicit configuration and conservative defaults.
-3. Add a prompt-preview/dev command before changing live prompt injection.
-4. Run the eval cases across the configured models and commit outputs under `docs/benchmark-evidence/` only when they are reproducible and reviewed.
-5. Only then consider updating `ADVISOR_SYSTEM`, `REVIEW_SYSTEM`, router prompts, or goal-loop prompts.
+1. `packages/core/src/prompt-policy.ts` exports `buildPiRogueSystemPromptV1`, a compact universal prompt candidate plus model-family overlays.
+2. `detectPiRoguePromptFamily` maps provider/model IDs to coarse families (`gpt`, `qwen_oss`, `open_weight_sota`, `unknown`) using conservative pattern matching.
+3. `packages/core/src/prompt-policy.test.ts` guards the current GPT, Qwen/OSS, future open-weight, and unknown-family behavior and checks that the candidate does not leak Claude/Fable vendor persona text.
+
+Recommended next steps after this PR:
+
+1. Add a prompt-preview/dev command before changing live prompt injection.
+2. Run the eval cases across the configured models and commit outputs under `docs/benchmark-evidence/` only when they are reproducible and reviewed.
+3. Only then consider updating `ADVISOR_SYSTEM`, `REVIEW_SYSTEM`, router prompts, or goal-loop prompts to consume `buildPiRogueSystemPromptV1` or a successor.
 
 ## Decision
 
@@ -250,4 +254,5 @@ For issue #139, the safe universal extraction is **not** “make pi-rogue speak 
 - document the portable design principles,
 - avoid vendor/runtime-specific text,
 - add model-family eval cases,
-- defer production prompt changes until GPT and Qwen/OSS evidence exists.
+- provide one opt-in universal prompt candidate and family overlay helper,
+- defer production default prompt changes until GPT and Qwen/OSS evidence exists.
