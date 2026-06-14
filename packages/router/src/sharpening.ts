@@ -96,7 +96,7 @@ function isLocalOrCheap(modelId: string, provider?: string): boolean {
 }
 
 function confidence(events: number, linkedOutcomes: number, score: number): RouterSharpeningConfidence {
-  if (events < 5 || linkedOutcomes === 0) return "low";
+  if (events < 5 || linkedOutcomes === 0 || score < 0.65) return "low";
   if (events >= 20 && linkedOutcomes >= 5 && score >= 0.75) return "high";
   return "medium";
 }
@@ -187,6 +187,12 @@ function baseHint(kind: RouterSharpeningHintKind, stats: GroupStats, rationale: 
   };
 }
 
+function hasPoorLinkedOutcomes(stats: GroupStats): boolean {
+  const negative = stats.outcomeStatus.failed + stats.outcomeStatus.abandoned;
+  const positive = stats.outcomeStatus.success + stats.outcomeStatus.partial;
+  return stats.linkedOutcomes.length > 0 && negative > 0 && positive === 0;
+}
+
 function readCapabilityCards(path?: string): ModelCapabilityCard[] {
   if (!path) return [];
   const resolved = resolve(path);
@@ -238,7 +244,7 @@ export function generateSharpeningHints(options: { events: RouteEvent[]; outcome
   for (const stats of groupedByModel(events, outcomes).sort((a, b) => b.score - a.score || modelDisplay(a.provider, a.modelId).localeCompare(modelDisplay(b.provider, b.modelId)))) {
     const card = byCard.get(modelKey(stats.provider, stats.modelId));
     const cardProgressOk = card ? card.observed.averageProgressScore >= 0.65 && card.observed.averageLoopScore <= 0.35 : true;
-    if (!isLocalOrCheap(stats.modelId, stats.provider) || stats.events.length < 3 || stats.averageProgressScore < 0.65 || stats.averageLoopScore > 0.35 || !cardProgressOk) continue;
+    if (!isLocalOrCheap(stats.modelId, stats.provider) || stats.events.length < 3 || stats.averageProgressScore < 0.65 || stats.averageLoopScore > 0.35 || stats.score < 0.65 || hasPoorLinkedOutcomes(stats) || !cardProgressOk) continue;
     hints.push(baseHint(
       "savings_candidate",
       stats,

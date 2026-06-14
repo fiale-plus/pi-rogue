@@ -172,6 +172,20 @@ describe("router sharpening hints", () => {
     expect(savings?.rationale).toContain("manual hint, not an automatic promotion");
   });
 
+  it("suppresses savings candidates when linked outcomes are all poor", () => {
+    const events = [
+      event("71", "continue_current", "qwen3.6-35b-a3b-128k", "local", 0.95, 0.02),
+      event("72", "run_verifier", "qwen3.6-35b-a3b-128k", "local", 0.93, 0.03),
+      event("73", "summarize_context", "qwen3.6-35b-a3b-128k", "local", 0.91, 0.04),
+      event("74", "continue_current", "qwen3.6-35b-a3b-128k", "local", 0.92, 0.03),
+      event("75", "run_verifier", "qwen3.6-35b-a3b-128k", "local", 0.94, 0.02),
+    ];
+
+    const artifact = generateSharpeningHints({ events, outcomes: events.map((item) => outcomeFor(item, "failed")), generatedAt: "2026-06-14T00:04:30.000Z" });
+
+    expect(artifact.hints.find((hint) => hint.kind === "savings_candidate")).toBeUndefined();
+  });
+
   it("writes sharpening hints and fails clearly for missing event inputs", () => {
     const eventPath = tempFile("events.jsonl");
     const outputPath = tempFile("hints.json");
