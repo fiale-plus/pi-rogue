@@ -160,6 +160,13 @@ export function extractBinaryGateFeatureCounts(text: string): Map<string, number
     }
   }
 
+  const stuckWords = ["stuck", "looping", "spinning", "no progress", "no concrete progress", "same failure", "repeated failure", "repeated planning", "self talk", "forever thinking", "alternative action", "blocked"];
+  for (const stuckWord of stuckWords) {
+    if (lower.includes(stuckWord)) {
+      inc(counts, `stuck:${replaceSpaces(stuckWord)}`);
+    }
+  }
+
   const contextWords = ["need more context", "missing context", "clarify", "not enough info", "unspecified", "unknown", "ambiguous"];
   for (const contextWord of contextWords) {
     if (lower.includes(contextWord)) {

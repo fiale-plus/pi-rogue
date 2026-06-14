@@ -36,6 +36,32 @@ describe("advisor router heuristics", () => {
     expect(routeNote(route)).toMatch(/^\[advisor:rules: review, reason: [a-z0-9 ,.'-]+\]$/);
   });
 
+  it("escalates material stuck/no-progress prompts", () => {
+    const input: AdvisorRouteInput = { phase: "preflight", text: "the goal loop is stuck with repeated planning and no concrete progress after several turns" };
+    const route = heuristicRoute(input);
+
+    expect(route.label).toBe("escalate_to_advisor");
+    expect(route.escalate).toBe(true);
+    expect(route.reason).toContain("no-progress");
+  });
+
+  it("escalates stuck evidence even when low-risk edit cues are present", () => {
+    const input: AdvisorRouteInput = { phase: "preflight", text: "small README edit is stuck with no concrete progress after several turns" };
+    const route = heuristicRoute(input);
+
+    expect(route.label).toBe("escalate_to_advisor");
+    expect(route.reason).toContain("no-progress");
+  });
+
+  it("keeps routine docs cleanup out of advisor escalation", () => {
+    const input: AdvisorRouteInput = { phase: "preflight", text: "routine docs and formatting cleanup in README" };
+    const route = heuristicRoute(input);
+
+    expect(route.label).toBe("continue");
+    expect(route.escalate).toBe(false);
+    expect(route.review).toBe("off");
+  });
+
   it("flags safety-sensitive prompts", () => {
     const input: AdvisorRouteInput = { phase: "preflight", text: "run rm -rf on prod" };
     const route = heuristicRoute(input);

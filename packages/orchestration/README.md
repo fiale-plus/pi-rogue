@@ -47,10 +47,10 @@ npm install --workspace packages/orchestration
 ## Behavior notes
 
 - `loop` supports minimum interval `1m`.
-- `goal` checks are done through assistant loop ticks; `GOAL_DONE` / `GOAL_CONTINUE` are preserved.
+- Active goals can be completed with the model-callable `goal_complete` tool, which requires a summary and verification evidence; `GOAL_DONE` / `GOAL_CONTINUE` sentinel loop checks are preserved for compatibility.
 - `autoresearch` and `autoresearch-lab` are thin facades over `/goal + /loop`.
 - A goal or loop activation enables scheduled advisor check-ins; stopping or clearing the active goal/loop disables them again.
 - Check-ins are part of orchestration lifecycle, not a standalone advisor command. They use the advisor interval, higher/advanced advisor models first, and regular model fallback by default.
-- A small repetition guard detects repeated assistant output and nudges the next turn to inspect current state before retrying.
-- There are no hidden flow budgets. Long loops run until `/loop off`, `/goal clear`, or a `GOAL_DONE` response clears the active goal and loop.
+- A bounded no-progress guard detects repeated assistant output or repeated planning-only turns during active orchestration, then nudges one concrete alternative action and eventually stops retry churn instead of stacking recovery prompts.
+- There are no hidden flow budgets. Long loops run until `/loop off`, `/goal clear`, `goal_complete`, or a `GOAL_DONE` response clears the active goal and loop.
 - Stale research state is cleared when `goal` or `loop` are cleared.

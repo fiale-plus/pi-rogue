@@ -1,18 +1,33 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { Type } from "typebox";
 import { appendText, contentText, featureFile, readText, sessionFile, truncate, writeText } from "./internal.js";
 import { clearResearchStateForGoal, readResearchState, writeResearchState, type ResearchState } from "./autoresearch-state.js";
 import { beginGoalCheck, buildGoalCheckPrompt, endGoalCheck, goalCheckResult, hasGoalCheckPending } from "./goal-resolution.js";
 import { clearLoop, triggerLoopTick } from "./loop.js";
+import { clearNoProgressRecovery } from "./novelty-guard.js";
 import { resetAdvisorSessionContext, setAdvisorCheckinsEnabled } from "./advisor-checkins.js";
 import { goalArgumentCompletions } from "./completions.js";
 
 const FEATURE = "orchestration";
 const CURRENT_FILE = "goal.md";
 const HISTORY_FILE = featureFile(FEATURE, "goal-history.jsonl");
+const COMPLETION_HISTORY_FILE = featureFile(FEATURE, "goal-completions.jsonl");
 
 type GoalHistoryEntry = {
   at: string;
   goal: string;
+};
+
+export type GoalCompletionInput = {
+  summary: string;
+  verification: string;
+  source?: "tool" | "sentinel";
+};
+
+export type GoalCompletionResult = {
+  completed: boolean;
+  goal?: string;
+  reason?: string;
 };
 
 export type GoalSetResult = "updated" | "duplicate";
@@ -53,6 +68,7 @@ export function setGoal(ctx: any, goal: string, options: { restartDuplicate?: bo
     clearResearchStateForGoal(ctx, previous);
   }
   clearLoop(ctx, { clearResearch: true, preserveCheckins: true });
+  clearNoProgressRecovery(ctx);
   writeText(sessionFile(FEATURE, ctx, CURRENT_FILE), note ? `${note}\n` : "");
   resetAdvisorSessionContext(ctx);
   if (note) {
@@ -68,14 +84,47 @@ export function setGoal(ctx: any, goal: string, options: { restartDuplicate?: bo
 
 export function clearGoal(ctx: any): void {
   writeText(sessionFile(FEATURE, ctx, CURRENT_FILE), "");
+  clearNoProgressRecovery(ctx);
   resetAdvisorSessionContext(ctx);
+}
+
+function completionLine(goal: string, input: GoalCompletionInput): string {
+  return `${JSON.stringify({
+    at: new Date().toISOString(),
+    goal,
+    summary: input.summary.trim(),
+    verification: input.verification.trim(),
+    source: input.source ?? "tool",
+  })}\n`;
+}
+
+export function completeActiveGoal(ctx: any, input: GoalCompletionInput): GoalCompletionResult {
+  const goal = activeGoal(ctx);
+  if (!goal) return { completed: false, reason: "No active goal." };
+
+  const summary = input.summary.trim();
+  const verification = input.verification.trim();
+  if (!summary) return { completed: false, goal, reason: "Goal completion requires a summary." };
+  if (!verification) return { completed: false, goal, reason: "Goal completion requires verification evidence or an explicit not-verified statement." };
+
+  appendText(COMPLETION_HISTORY_FILE, completionLine(goal, { ...input, summary, verification }));
+
+  const research = researchForGoal(ctx, goal);
+  if (research) recordResearchResult(ctx, research, "done");
+
+  endGoalCheck(ctx);
+  clearGoal(ctx);
+  setGoalStatus(ctx, null);
+  clearLoop(ctx, { clearResearch: true });
+  return { completed: true, goal };
 }
 
 function goalBlock(goal: string): string {
   return [
     "## Pi-Rogue Goal",
     `Current goal: ${goal}`,
-    "When a loop tick asks whether the goal is done, answer exactly with `GOAL_DONE: ...` or `GOAL_CONTINUE: ...`.",
+    "When the goal is complete, prefer the `goal_complete` tool with a summary and verification evidence. If that tool is unavailable during a loop tick, answer exactly with `GOAL_DONE: ...`.",
+    "When the goal is not complete during a loop tick, answer exactly with `GOAL_CONTINUE: ...` and then take one concrete next action.",
   ].join("\n");
 }
 
@@ -154,9 +203,13 @@ export function registerGoal(pi: ExtensionAPI): void {
     if (research) recordResearchResult(ctx, research, result);
 
     if (result === "done") {
-      clearGoal(ctx);
-      setGoalStatus(ctx, null);
-      clearLoop(ctx, { clearResearch: true });
+      const text = assistantText(event);
+      const summary = text.replace(/^GOAL_DONE:\s*/i, "").trim() || "Goal marked done by sentinel response.";
+      completeActiveGoal(ctx, {
+        summary: truncate(summary, 1200),
+        verification: "GOAL_DONE sentinel response; see assistant message for final state and evidence.",
+        source: "sentinel",
+      });
       ctx.ui.notify(`🎯 Goal completed: ${truncate(goal, 160)}`, "info");
     }
   });
@@ -167,6 +220,33 @@ export function registerGoal(pi: ExtensionAPI): void {
     if (!goal) return { systemPrompt: event.systemPrompt };
 
     return { systemPrompt: `${event.systemPrompt}\n\n${goalBlock(goal)}` };
+  });
+
+  const registerTool = (pi as any).registerTool;
+  if (typeof registerTool === "function") registerTool.call(pi, {
+    name: "goal_complete",
+    label: "Goal Complete",
+    description: "Mark the active Pi-Rogue goal complete. Requires a completion summary and verification evidence.",
+    parameters: Type.Object({
+      summary: Type.String({ description: "What was completed for the active goal" }),
+      verification: Type.String({ description: "How completion was verified, or an explicit not-verified statement with reason" }),
+    }),
+    async execute(_id: unknown, params: { summary?: unknown; verification?: unknown }, _signal: unknown, onUpdate: ((update: unknown) => void) | undefined, ctx: any) {
+      const result = completeActiveGoal(ctx, {
+        summary: String(params.summary ?? ""),
+        verification: String(params.verification ?? ""),
+        source: "tool",
+      });
+      if (!result.completed) {
+        const message = result.reason || "Goal completion failed.";
+        onUpdate?.({ content: [{ type: "text", text: message }], details: { completed: false } });
+        return { content: [{ type: "text", text: message }], details: { completed: false } };
+      }
+
+      const message = `Goal completed: ${truncate(result.goal || "", 160)}`;
+      ctx.ui.notify(`🎯 ${message}`, "info");
+      return { content: [{ type: "text", text: message }], details: { completed: true, goal: result.goal } };
+    },
   });
 
   pi.registerCommand("goal", {

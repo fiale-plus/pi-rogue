@@ -8,6 +8,7 @@ Strategic advisor for Pi sessions with low-overhead preflight/post-review routin
 
 - SOTA-first model fallback: `gpt-5.5`/`claude-opus-4-6`/`claude-sonnet-4-6` where available.
 - Keeps command-level behavior simple and explicit.
+- Router/binary-gate policy escalates architecture/refactor/tradeoff/security/high-uncertainty and material stuck/no-progress work, while tiny edits, direct answers, docs/formatting cleanup, and other low-risk reactive tasks continue without advisor noise.
 
 ## Install
 
