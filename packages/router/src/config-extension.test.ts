@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { routerArgumentCompletions } from "./completions.js";
-import { activeProfile, cycleRouterProfile, ensureRouterConfig, loadRouterConfig, routerConfigPath, routerEventsPath, routerSessionDir, routerStatePath, saveRouterConfig, setRouterMode, setRouterProfile } from "./config.js";
+import { activeProfile, cycleRouterProfile, ensureRouterConfig, loadRouterConfig, routerConfigPath, routerEventsPath, routerSessionDir, routerStatePath, saveRouterConfig, setRouterMode, setRouterPrint, setRouterProfile } from "./config.js";
 import { registerRouter } from "./extension.js";
 import { decideRoute } from "./decision.js";
 import { applyModelRouting, modelsMatch, observeRouterTurn, summarizeRouterDecision } from "./observe.js";
@@ -109,12 +109,18 @@ describe("router config profiles", () => {
     expect(setRouterMode(config, "auto")?.mode).toBe("auto_model");
     expect(setRouterMode(config, "auto_model")?.mode).toBe("auto_model");
     expect(setRouterMode(config, "agent-auto")).toBeNull();
+    expect(setRouterPrint(config, "all")?.print).toBe("all");
+    expect(setRouterPrint(config, "noisy")).toBeNull();
   });
 
-  it("completes router commands and profile names", () => {
-    expect(routerArgumentCompletions("")?.map((item) => item.value)).toEqual(expect.arrayContaining(["on", "off", "status", "mode", "profile"]));
+  it("completes router commands as a nested slash-menu tree", () => {
+    const top = routerArgumentCompletions("") ?? [];
+
+    expect(top.map((item) => item.value)).toEqual(["status", "help", "on", "off", "mode ", "profile ", "print ", "models", "profiles", "cycle", "configure"]);
+    expect(top.find((item) => item.value === "mode ")?.label).toBe("mode …");
     expect(routerArgumentCompletions("profile s")?.map((item) => item.value)).toEqual(["profile spark-smart"]);
     expect(routerArgumentCompletions("mode a")?.map((item) => item.value)).toEqual(["mode auto_model"]);
+    expect(routerArgumentCompletions("print ")?.map((item) => item.value)).toEqual(["print mismatch_only", "print all", "print off"]);
   });
 
   it("keeps config repo-global while state and live events are session-scoped", async () => {
@@ -159,6 +165,10 @@ describe("router extension", () => {
 
     await commands.get("router").handler("mode auto_model", ctx);
     expect(loadRouterConfig(ctx).mode).toBe("auto_model");
+    await commands.get("router").handler("print all", ctx);
+    expect(loadRouterConfig(ctx).print).toBe("all");
+    await commands.get("router").handler("help", ctx);
+    expect(ctx.notifications.at(-1)?.text).toContain("router command tree:");
     await commands.get("router").handler("off", ctx);
     await commands.get("router").handler("on", ctx);
     expect(ctx.notifications.at(-1)?.text).toContain("auto_model applies model switches only");

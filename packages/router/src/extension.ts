@@ -9,6 +9,7 @@ import {
   routerEventsPath,
   saveRouterConfig,
   setRouterMode,
+  setRouterPrint,
   setRouterProfile,
   type RouterConfig,
 } from "./config.js";
@@ -36,6 +37,30 @@ function notifyProfile(ctx: any, config: RouterConfig, prefix = "router profile"
   ctx.ui.notify(`${prefix}: ${config.activeProfile}\nworker: ${profile.worker}\nsmart: ${profile.smart}\nteacher: ${profile.teacher}\nreviewer: ${profile.reviewer}`, "info");
 }
 
+function helpText(ctx: any, config: RouterConfig): string {
+  return [
+    "router command tree:",
+    "  /router status                 show current router state",
+    "  /router help                   show this help",
+    "  /router on                     enable router using current explicit mode",
+    "  /router off                    disable router",
+    "  /router mode observe           recommendations only",
+    "  /router mode auto_model        apply model switches only",
+    "  /router profile <name>         choose active profile",
+    "  /router print mismatch_only    notify only mismatches",
+    "  /router print all              notify every router decision",
+    "  /router print off              suppress observe notifications",
+    "  /router models                 show active role → model mapping",
+    "  /router profiles               list configured profiles",
+    "  /router cycle                  cycle to next profile",
+    "  /router configure              create/show config",
+    "",
+    "safety: observe is recommendations only; auto_model applies model switches only, never agent/subagent/tool routing.",
+    "",
+    statusText(ctx, config),
+  ].join("\n");
+}
+
 function setEnabled(ctx: any, enabled: boolean): void {
   const config = ensureRouterConfig(ctx);
   const next = { ...config, enabled };
@@ -49,7 +74,7 @@ export function registerRouter(pi: ExtensionAPI): void {
   p.__piRogueRouterRegistered = true;
 
   pi.registerCommand("router", {
-    description: "Trajectory router. Default observe-only; explicit /router mode auto_model applies model switches only. Usage: /router on|off|status|mode|profile|profiles|models|configure",
+    description: "Trajectory router. Usage: /router status|help|on|off|mode|profile|print|profiles|models|configure|cycle. Default observe-only; auto_model applies model switches only.",
     getArgumentCompletions: (prefix: string, ctx?: any) => routerArgumentCompletions(prefix, ctx),
     handler: async (args, ctx) => {
       const input = String(args ?? "").trim();
@@ -66,11 +91,15 @@ export function registerRouter(pi: ExtensionAPI): void {
       }
       if (cmd === "configure" || cmd === "config") {
         const config = ensureRouterConfig(ctx);
-        ctx.ui.notify(["router config ready", "", statusText(ctx, config)].join("\n"), "info");
+        ctx.ui.notify(["router config ready", "", "next: /router mode …, /router profile …, /router print …", "", statusText(ctx, config)].join("\n"), "info");
         return;
       }
 
       const config = ensureRouterConfig(ctx);
+      if (cmd === "help") {
+        ctx.ui.notify(helpText(ctx, config), "info");
+        return;
+      }
       if (cmd === "status" || cmd === "show") {
         ctx.ui.notify(statusText(ctx, config), "info");
         return;
@@ -92,6 +121,21 @@ export function registerRouter(pi: ExtensionAPI): void {
         }
         saveRouterConfig(ctx, next);
         ctx.ui.notify(`router model routing mode set: ${next.mode === "auto_model" ? "auto_model (model switches only)" : "observe (recommendations only)"}`, "info");
+        return;
+      }
+      if (cmd === "print") {
+        const print = rest[0];
+        if (!print) {
+          ctx.ui.notify(statusText(ctx, config), "info");
+          return;
+        }
+        const next = setRouterPrint(config, print);
+        if (!next) {
+          ctx.ui.notify("unknown router print mode: use mismatch_only, all, or off", "error");
+          return;
+        }
+        saveRouterConfig(ctx, next);
+        ctx.ui.notify(`router print mode set: ${next.print}`, "info");
         return;
       }
       if (cmd === "profiles") {
@@ -124,7 +168,7 @@ export function registerRouter(pi: ExtensionAPI): void {
         return;
       }
 
-      ctx.ui.notify("Usage: /router on|off|status|mode [observe|auto_model]|profile [name]|profiles|models|configure|cycle", "error");
+      ctx.ui.notify("Usage: /router status|help|on|off|mode [observe|auto_model]|profile [name]|print [mismatch_only|all|off]|profiles|models|configure|cycle", "error");
     },
   });
 
