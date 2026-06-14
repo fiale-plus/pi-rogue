@@ -125,6 +125,7 @@ const QUICK_EDIT_RE = /\b(quick edit|small edit|tiny edit|rename|format(?:ting)?
 const ROUTINE_CLEANUP_RE = /\b(routine docs?|docs? and formatting|formatting cleanup|generated changes|large diff|docs?\/formatting)\b/i;
 const COMPLEX_RE = /\b(architecture|architectural|refactor|design|trade[- ]?off|concurrency|security|auth|migration|performance|scale|scalability|framework|system design|schema|data model|protocol|advisor routing|advisor flow|router logic|call vs skip|skip vs call|compare|recommend|benchmark|evaluate|experiment|train|strategy|choose|make sense|worth(?: it)?|kpi|kpis|how it works|where it comes from|what would you choose|what do you think|next step|pick between|buy|usage|sustained speed|available models|running model kpis)\b/i;
 const DEBUG_RE = /\b(debug|bug|error|stack trace|traceback|fail(?:ed|ure)?|broken|investigate|why is|cannot|can't|crash|regression)\b/i;
+const STUCK_RE = /\b(stuck|looping|spinning|no[- ]?progress|no concrete progress|same failure|repeated failure|repeated planning|self[- ]?talk|forever thinking|strategy change|alternative action|blocked)\b/i;
 const CONTEXT_RE = /\b(need more context|missing context|clarify|not enough info|unspecified|unknown|ambiguous)\b/i;
 const SAFETY_RE = /\b(rm\s+-rf|sudo\b|shutdown\b|reboot\b|mkfs(?:\.[\w-]+)?\b|chmod\s+-R\b|chown\b|git\s+push\b[\s\S]*--force(?:-with-lease)?|curl\b[\s\S]*\|\s*(?:sh|bash)\b|wget\b[\s\S]*\|\s*(?:sh|bash)\b|drop\s+table\b|delete\s+database\b|credential\b|password\b|secret\b)\b/i;
 const COMPACTION_RE = /\b(compact(?:ed|ion)?|missing history|history might flip|prior constraint|resume(?:d)? after compaction)\b/i;
@@ -293,6 +294,11 @@ function hasComplexSignal(text: string): boolean {
   return COMPLEX_RE.test(text) || DEBUG_RE.test(text);
 }
 
+function hasMaterialStuckSignal(text: string): boolean {
+  if (!STUCK_RE.test(text)) return false;
+  return /\b(goal|loop|autoresearch|tool|test|command|failure|failed|turns?|again|same|repeated|concrete|progress|blocked|alternative|recovery)\b/i.test(text);
+}
+
 function hasCompactionLowRiskSignal(text: string): boolean {
   return COMPACTION_RE.test(text) && /\blow[- ]?risk\b/i.test(text);
 }
@@ -341,6 +347,9 @@ function preflightSignals(input: AdvisorRouteInput): { label: PreflightLabel; co
   const text = `${input.text}\n${input.brief ?? ""}`.trim();
   if (isSafetySensitive(text)) {
     return { label: "escalate_to_advisor", confidence: 0.98, reason: "Safety-sensitive keywords detected.", safety: true };
+  }
+  if (hasMaterialStuckSignal(text)) {
+    return { label: "escalate_to_advisor", confidence: 0.86, reason: "Material stuck/no-progress signal detected.", safety: false };
   }
   if (hasRoutineCleanupSignal(text) || (hasQuickEditSignal(text) && !hasComplexSignal(text))) {
     return { label: "continue", confidence: 0.9, reason: "Small-edit or routine-cleanup signal detected.", safety: false };
@@ -424,7 +433,7 @@ export function buildRouterPrompt(input: AdvisorRouteInput): string {
     input.failed !== undefined ? `Failed: ${String(input.failed)}` : "",
     phase === "preflight"
       ? [
-        "Guidance: continue for tiny edits and direct answers; escalate_to_advisor for architecture, design, tradeoffs, security, or high uncertainty; need_more_context when underspecified; low_confidence when mixed signals.",
+        "Guidance: continue for tiny edits, direct answers, docs/formatting cleanup, and other low-risk reactive tasks; escalate_to_advisor for architecture, refactors, design, tradeoffs, security, irreversible actions, high uncertainty, or material stuck/no-progress evidence; need_more_context when underspecified; low_confidence when mixed signals. If advisor guidance conflicts with local evidence, the working model must reconcile explicitly rather than blindly follow it.",
       ].join(" ")
       : [
         "Guidance: on_track for clearly complete work; course_correct for partial work that needs changes; not_done when incomplete or failing; abstain when there is not enough signal.",

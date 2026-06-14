@@ -66,7 +66,7 @@ All command surfaces below are provided by the single `@fiale-plus/pi-rogue` art
 - `/advisor config`
 - `/advisor <question>` — get immediate advice
 - `/pi-rogue` — shared cockpit view over advisor + orchestration pointers
-- `/goal set|show|clear|list` — set or update the active goal (check-ins enabled via loop)
+- `/goal set|show|clear|list` — set or update the active goal (check-ins enabled via loop); models can close active goals with `goal_complete` when summary + verification are available
 - `/loop status|off|clear|stop|<interval> <instruction>`
 - `/autoresearch status|clear|<instruction>` — goal+loop-driven solo research flow
 - `/autoresearch-lab status|clear|<instruction>` — goal+loop-driven parallel research flow

@@ -3,6 +3,7 @@ import { appendText, featureFile, readText, sessionFile, sessionKey, truncate } 
 import { clearResearchState, hasActiveResearch } from "./autoresearch-state.js";
 import { setAdvisorCheckinsEnabled } from "./advisor-checkins.js";
 import { buildGoalCheckPrompt, beginGoalCheck, hasGoalCheckPending } from "./goal-resolution.js";
+import { clearNoProgressRecovery } from "./novelty-guard.js";
 import { readSessionJson, writeSessionJson } from "./state.js";
 import { loopArgumentCompletions } from "./completions.js";
 
@@ -60,6 +61,7 @@ export function clearLoop(ctx: any, options: { clearResearch?: boolean; preserve
   const current = readLoopState(ctx);
   archiveLoopState(ctx, current);
   const next = clearLoopState(ctx);
+  clearNoProgressRecovery(ctx);
   stopLoopTimer(sessionKey(ctx));
   setLoopStatus(ctx, next);
   if (!options.preserveCheckins) {
@@ -202,6 +204,7 @@ export function startLoop(pi: ExtensionAPI, ctx: any, interval: string, instruct
     return null;
   }
 
+  clearNoProgressRecovery(ctx);
   const next = writeLoopState(ctx, {
     enabled: true,
     interval,

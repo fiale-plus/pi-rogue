@@ -2,8 +2,8 @@ import { randomUUID } from "node:crypto";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { resetAdvisorSessionContext, setAdvisorCheckinsEnabled } from "./advisor-checkins.js";
 import { endGoalCheck } from "./goal-resolution.js";
-import { activeGoal, clearGoal, registerGoal, setGoal, startGoalProcessing } from "./goal.js";
-import { featureFile, readText } from "./internal.js";
+import { activeGoal, clearGoal, completeActiveGoal, registerGoal, setGoal, startGoalProcessing } from "./goal.js";
+import { featureFile, readText, sessionFile, writeText } from "./internal.js";
 
 vi.mock("./advisor-checkins.js", () => ({
   resetAdvisorSessionContext: vi.fn(),
@@ -111,6 +111,20 @@ describe("goal processing", () => {
     endGoalCheck(ctx);
   });
 
+  it("clears stale no-progress recovery state when goal lifecycle changes", () => {
+    const ctx = fakeCtx();
+    const guardFile = sessionFile("orchestration", ctx, "repetition-guard.json");
+    writeText(guardFile, `${JSON.stringify({
+      recentAssistantTurns: [],
+      noProgress: { at: new Date().toISOString(), count: 3, text: "I will plan next.", reason: "test" },
+    })}\n`);
+
+    setGoal(ctx, "fresh goal after stale recovery");
+
+    expect(JSON.parse(readText(guardFile)).noProgress).toBeUndefined();
+    clearGoal(ctx);
+  });
+
   it("resets advisor context when a goal is cleared", () => {
     const ctx = fakeCtx();
 
@@ -156,6 +170,55 @@ describe("goal processing", () => {
     await handler?.("clear", ctx);
 
     expect(setAdvisorCheckinsEnabledMock).toHaveBeenCalledWith(false);
+  });
+
+  it("completes an active goal through the explicit completion signal", () => {
+    const ctx = fakeCtx();
+    const goal = `complete with tool ${randomUUID()}`;
+
+    setGoal(ctx, goal);
+    const result = completeActiveGoal(ctx, {
+      summary: "Implemented the requested behavior.",
+      verification: "Ran focused unit tests.",
+      source: "tool",
+    });
+
+    expect(result.completed).toBe(true);
+    expect(activeGoal(ctx)).toBe("");
+    expect(readText(featureFile("orchestration", "goal-completions.jsonl"))).toContain(goal);
+  });
+
+  it("rejects explicit goal completion without verification", () => {
+    const ctx = fakeCtx();
+    setGoal(ctx, "needs verification");
+
+    const result = completeActiveGoal(ctx, { summary: "Done", verification: "" });
+
+    expect(result.completed).toBe(false);
+    expect(activeGoal(ctx)).toBe("needs verification");
+    clearGoal(ctx);
+  });
+
+  it("registers a goal completion tool", async () => {
+    let tool: any;
+    const pi = {
+      on: () => undefined,
+      registerCommand: () => undefined,
+      registerTool: (definition: any) => { tool = definition; },
+      sendUserMessage: () => undefined,
+    } as any;
+    const ctx = fakeCtx();
+
+    registerGoal(pi);
+    setGoal(ctx, "finish explicit tool path");
+    const response = await tool.execute("call", {
+      summary: "Finished explicit path.",
+      verification: "Verified with a fake focused check.",
+    }, undefined, undefined, ctx);
+
+    expect(tool.name).toBe("goal_complete");
+    expect(response.details.completed).toBe(true);
+    expect(activeGoal(ctx)).toBe("");
   });
 
   it("clears the active goal immediately when a pending check returns GOAL_DONE", async () => {

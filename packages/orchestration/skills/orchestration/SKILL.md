@@ -28,12 +28,13 @@ Use this skill to run measurable, bounded workflow loops inside a Pi session.
 ## Behavior rules
 
 - `loop` is the primitive; `goal` is the execution intent.
-- Goal completion is explicit through `GOAL_DONE` / `GOAL_CONTINUE` in loop checks.
+- Goal completion should use the `goal_complete` tool when available, with a summary and verification evidence; `GOAL_DONE` / `GOAL_CONTINUE` remain valid loop-check sentinels for compatibility.
 - `autoresearch` / `autoresearch-lab` are facades over goal+loop.
 - Goal or loop activation enables scheduled advisor check-ins; stopping or clearing either disables them.
 - Check-ins belong to orchestration lifecycle, not the advisor command surface, and use higher/advanced advisor models first, with regular model fallback enabled by default.
 - `autoresearch` enforces multi-cycle + evidence-aware completion.
-- Clearing goal/loop clears stale autoresearch state.
+- Clearing goal/loop or completing a goal clears stale autoresearch state.
+- Bounded no-progress recovery may steer one concrete alternative action after repeated self-talk/repetition, then stops retry churn instead of stacking prompts.
 
 ## Safety and agentic flow
 
