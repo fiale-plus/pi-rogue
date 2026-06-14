@@ -12,6 +12,7 @@ export * from "./observe.js";
 export * from "./outcomes.js";
 export * from "./progress.js";
 export * from "./reports.js";
+export * from "./sharpening.js";
 export * from "./session-reader.js";
 export * from "./subagents.js";
 export * from "./teacher-runner.js";

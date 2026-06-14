@@ -35,8 +35,9 @@
     "router:dataset": "tsx packages/router/src/cli.ts dataset",
     "router:gate-train": "tsx packages/router/src/cli.ts gate-train",
     "router:report": "tsx packages/router/src/cli.ts report",
-    "router:shadow": "tsx packages/router/src/cli.ts shadow"
-  },
+    "router:sharpen": "tsx packages/router/src/cli.ts sharpen",
+    "router:sharpen:auto": "tsx scripts/router-auto-sharpen.ts",
+    "router:shadow": "tsx packages/router/src/cli.ts shadow"  },
   "engines": {
     "node": ">=22.5.0"
   },

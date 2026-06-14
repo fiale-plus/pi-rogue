@@ -9,6 +9,7 @@ import { writeCapabilityCards, writeShadowEval, writeTeacherPromptRequests, writ
 import { writeTrainingRows } from "./dataset.js";
 import { writeEnrichedOutcomes, writeInferredOutcomes } from "./outcomes.js";
 import { writeRouterReport } from "./reports.js";
+import { writeSharpeningHints } from "./sharpening.js";
 import { runTeacherLabeling } from "./teacher-runner.js";
 
 interface Args {
@@ -34,6 +35,7 @@ interface Args {
   requests?: string;
   decisionsOutput?: string;
   outcomes?: string;
+  cards?: string;
   includeLocalRuleLabels?: boolean;
   workspaceDiff?: boolean;
   dryRun?: boolean;
@@ -54,6 +56,7 @@ function usage(): never {
   npm run router:dataset -- --checkpoint-file <checkpoints.jsonl> --output <training.jsonl> [--events <events.jsonl>] [--outcomes <outcomes.jsonl>] [--labels <labels.jsonl>] [--include-local-rule-labels] [--pretty]
   npm run router:gate-train -- --dataset <training.jsonl> --eval-dataset <eval.jsonl> --artifact <gate.json> --report <gate-report.json> [--pretty]
   npm run router:report -- --output <report.json> [--markdown <report.md>] [--events <events.jsonl>] [--outcomes <outcomes.jsonl>] [--dataset <training.jsonl>] [--gate-report <gate-report.json>] [--pretty]
+  npm run router:sharpen -- --events <events.jsonl> --output <hints.json> [--outcomes <outcomes.jsonl>] [--cards <model-cards.jsonl>] [--pretty]
   npm run router:shadow -- --checkpoint-file <checkpoints.jsonl> --output <report.json> [--ledger <events.jsonl>] [--pretty]
 
 Commands:
@@ -68,6 +71,7 @@ Commands:
   dataset    Export trainable rows for a conservative continue-vs-intervene gate.
   gate-train Train/evaluate a local binary continue-vs-intervene gate artifact.
   report     Summarize route events, outcomes, labels, and gate eval metrics.
+  sharpen    Generate local, provenance-backed router sharpening hints without mutating policy.
   shadow     Shadow-evaluate the current rule policy over historical checkpoints.
 `);
   process.exit(2);
@@ -181,6 +185,11 @@ function parseArgs(argv: string[]): Args {
     }
     if (arg === "--outcomes" && next) {
       args.outcomes = next;
+      index++;
+      continue;
+    }
+    if (arg === "--cards" && next) {
+      args.cards = next;
       index++;
       continue;
     }
@@ -334,6 +343,11 @@ function report(args: Args): unknown {
   return writeRouterReport({ outputPath: args.output, markdownPath: args.markdown, eventsPath: args.events, outcomesPath: args.outcomes, trainingRowsPath: args.dataset, gateReportPath: args.gateReport });
 }
 
+function sharpen(args: Args): unknown {
+  if (!args.events || !args.output) usage();
+  return writeSharpeningHints({ eventsPath: args.events, outputPath: args.output, outcomesPath: args.outcomes, cardsPath: args.cards });
+}
+
 function shadow(args: Args): unknown {
   if (!args.checkpointFile || !args.output) usage();
   return writeShadowEval(args.checkpointFile, args.output, args.ledger);
@@ -363,9 +377,11 @@ async function main(): Promise<void> {
                       ? gateTrain(args)
                       : args.command === "report"
                         ? report(args)
-                        : args.command === "shadow"
-                        ? shadow(args)
-                        : usage();
+                        : args.command === "sharpen"
+                          ? sharpen(args)
+                          : args.command === "shadow"
+                          ? shadow(args)
+                          : usage();
   console.log(args.pretty ? JSON.stringify(result, null, 2) : JSON.stringify(result));
 }
 
