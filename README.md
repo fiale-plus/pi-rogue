@@ -77,7 +77,7 @@ All command surfaces below are provided by the single `@fiale-plus/pi-rogue` art
 ### What changed in 0.3.0
 
 - Added local trajectory-router persistence and sharpening workflows (offline, local-only, and upgrade-safe).
-- Added `router:sharpen` / `router:sharpen:auto` automation to generate and persist route-learning hints.
+- Added local route-learning and sharpening workflows (`router:sharpen` and, in repo worktrees, `router:sharpen:auto`) to generate and persist sharpening hints.
 - Added repo-scoped / shared-scope learning storage and safe re-generation behavior for background refreshes.
 - Kept a strict safety boundary: no automatic policy mutation, and no raw transcript leakage in learn artifacts.
 

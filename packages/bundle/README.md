@@ -50,10 +50,18 @@ The `/router` surface remains offline and repo-local unless you explicitly enabl
 - `/router mode auto_model`: explicit future-model switching only
 - `/router profile <name>` and `print mismatch_only|all|off`
 
-For local artifact generation and sharpening:
+For local artifact generation and sharpening in a workspace checkout:
 
 - `npm run router:sharpen -- ...`
 - `npm run router:sharpen:auto -- ...`
+
+For users of the installed `@fiale-plus/pi-rogue` package (not a workspace checkout), use the packaged router CLI directly:
+
+```bash
+~/.pi/agent/npm/node_modules/.bin/tsx \
+  ~/.pi/agent/npm/node_modules/@fiale-plus/pi-rogue/node_modules/@fiale-plus/pi-rogue-router/src/cli.ts \
+  sharpen --events <path> --output <path>
+```
 
 See `packages/router/README.md` for full usage, safety policy, schema, and autosharpen location.
 

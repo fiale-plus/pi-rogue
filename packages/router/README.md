@@ -30,6 +30,8 @@ npm run router:shadow -- --checkpoint-file .pi/router/checkpoints.jsonl --ledger
 # ctrl+alt+p cycles router profiles (Ctrl-P is reserved by Pi model cycling).
 ```
 
+> Note: the `npm run router:*` commands below are available in repository worktrees where this package is part of the workspace scripts. If you are using the installed `@fiale-plus/pi-rogue` bundle directly, invoke the packaged CLI with `~/.pi/agent/npm/node_modules/.bin/tsx ~/.pi/agent/npm/node_modules/@fiale-plus/pi-rogue/node_modules/@fiale-plus/pi-rogue-router/src/cli.ts <subcommand> ...`.
+
 ## V1 telemetry notes
 
 Router v1 defaults to observe-only. It adds outcome skeletons, stronger diff/error fingerprints, teacher-label request export, binary gate dataset export, and subagent-aware telemetry schemas. It does not spawn agents/subagents or promote policies automatically. The explicit `auto_model` mode may only switch the active model for future turns.
@@ -47,11 +49,13 @@ Live config is repo-global at `.pi/router/config.json`, while mutable live state
 
 ### Automated, upgrade-safe sharpening persistence
 
-Use this one-shot command for cron/background automation:
+Use this one-shot command for cron/background automation (workspace checkout):
 
 ```bash
 npm run router:sharpen:auto -- --workspace .
 ```
+
+For installed-bundle environments, automatic background refresh is currently available only through a local repo checkout that still exposes `npm run router:sharpen:auto` or `tsx scripts/router-auto-sharpen.ts`. The packaged router CLI does provide one-shot `sharpen` generation via `src/cli.ts`.
 
 By default it stores artifacts at:
 
