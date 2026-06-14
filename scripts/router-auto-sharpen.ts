@@ -16,7 +16,9 @@ interface Args {
   workspace: string;
   events: string;
   outcomes?: string;
+  outcomesProvided: boolean;
   cards?: string;
+  cardsProvided: boolean;
   output?: string;
   force: boolean;
   maxHistory: number;
@@ -83,6 +85,8 @@ function parseArgs(argv: string[]): Args {
   const args: Args = {
     workspace: expandHome(process.cwd()),
     events: "",
+    outcomesProvided: false,
+    cardsProvided: false,
     force: false,
     maxHistory: 24,
     disableHistory: false,
@@ -108,12 +112,14 @@ function parseArgs(argv: string[]): Args {
 
     if (arg === "--outcomes" && next) {
       args.outcomes = resolve(expandHome(next));
+      args.outcomesProvided = true;
       index++;
       continue;
     }
 
     if (arg === "--cards" && next) {
       args.cards = resolve(expandHome(next));
+      args.cardsProvided = true;
       index++;
       continue;
     }
@@ -159,11 +165,25 @@ function parseArgs(argv: string[]): Args {
   }
 
   args.workspace = resolve(expandHome(args.workspace));
-  args.events ||= resolve(join(args.workspace, ".pi", "router", "events.jsonl"));
+  args.events = resolve(args.events || join(args.workspace, ".pi", "router", "events.jsonl"));
   if (args.output) args.output = resolve(args.output);
-  if (args.events) args.events = resolve(args.events);
-  if (args.outcomes) args.outcomes = resolve(args.outcomes);
-  if (args.cards) args.cards = resolve(args.cards);
+
+  if (args.outcomesProvided) {
+    if (!args.outcomes || !existsSync(args.outcomes)) {
+      console.error(`--outcomes file not found: ${args.outcomes}`);
+      process.exit(1);
+    }
+    args.outcomes = resolve(args.outcomes);
+  }
+
+  if (args.cardsProvided) {
+    if (!args.cards || !existsSync(args.cards)) {
+      console.error(`--cards file not found: ${args.cards}`);
+      process.exit(1);
+    }
+    args.cards = resolve(args.cards);
+  }
+
   if (args.scope === "shared" && !args.sharedCorpus && args.workspace) {
     args.sharedCorpus = basename(args.workspace);
   }
@@ -186,10 +206,6 @@ function fileFingerprint(path: string): InputFingerprint {
     size: stat.size,
     modifiedAt: new Date(stat.mtimeMs).toISOString(),
   };
-}
-
-function fileExists(path: string | undefined): path is string {
-  return typeof path === "string" && path.length > 0 && existsSync(path);
 }
 
 function stableRepoKey(workspace: string): string {
@@ -269,8 +285,8 @@ function main(): void {
   const historyDir = join(baseDir, "history");
   const manifestPath = join(baseDir, "manifest.json");
 
-  const outcomes = fileExists(args.outcomes) ? args.outcomes : undefined;
-  const cards = fileExists(args.cards) ? args.cards : undefined;
+  const outcomes = args.outcomesProvided ? args.outcomes : undefined;
+  const cards = args.cardsProvided ? args.cards : undefined;
 
   const currentInputs: InputManifest = {
     events: fileFingerprint(args.events),
@@ -279,11 +295,20 @@ function main(): void {
   };
 
   const previous = readJson<LearnedManifest>(manifestPath);
+  const latestHashCurrent = (() => {
+    if (!existsSync(latestPath)) return undefined;
+    try {
+      return createHash("sha256").update(readFileSync(latestPath)).digest("hex");
+    } catch {
+      return undefined;
+    }
+  })();
+  const outputIntact = previous?.latest.path === latestPath && previous?.latest.hash === latestHashCurrent;
   const unchanged = Boolean(previous) &&
+    outputIntact &&
     sameFingerprint(previous!.inputs.events, currentInputs.events) &&
     sameFingerprint(previous!.inputs.outcomes, currentInputs.outcomes) &&
     sameFingerprint(previous!.inputs.cards, currentInputs.cards);
-
   const legacy = args.scope === "repo" ? legacyShaken(args.workspace) : { path: "", exists: false };
   const migratedFromLegacy = !existsSync(latestPath) && legacy.exists;
   if (migratedFromLegacy) {
