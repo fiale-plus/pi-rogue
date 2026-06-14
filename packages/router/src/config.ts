@@ -2,7 +2,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
 import { hashText } from "./hash.js";
 
-export type RouterMode = "observe";
+export type RouterMode = "observe" | "auto_model";
 export type RouterPrintMode = "all" | "mismatch_only" | "off";
 
 export interface RouterProfile {
@@ -124,6 +124,10 @@ function readJson<T>(path: string, fallback: T): T {
   }
 }
 
+function normalizeRouterMode(value: unknown): RouterMode {
+  return value === "auto_model" || value === "auto" ? "auto_model" : "observe";
+}
+
 export function normalizeRouterConfig(raw: Partial<RouterConfig> | null | undefined): RouterConfig {
   const mergedProfiles = { ...DEFAULT_ROUTER_CONFIG.profiles, ...(raw?.profiles ?? {}) };
   const profileOrder = Array.isArray(raw?.profileOrder) && raw.profileOrder.length > 0
@@ -135,7 +139,7 @@ export function normalizeRouterConfig(raw: Partial<RouterConfig> | null | undefi
   const print = raw?.print === "all" || raw?.print === "off" || raw?.print === "mismatch_only" ? raw.print : DEFAULT_ROUTER_CONFIG.print;
   return {
     enabled: Boolean(raw?.enabled ?? DEFAULT_ROUTER_CONFIG.enabled),
-    mode: "observe",
+    mode: normalizeRouterMode(raw?.mode),
     print,
     activeProfile,
     profileOrder,
@@ -185,6 +189,12 @@ export function cycleRouterProfile(config: RouterConfig, direction: 1 | -1 = 1):
 export function setRouterProfile(config: RouterConfig, name: string): RouterConfig | null {
   if (!config.profiles[name]) return null;
   return { ...config, activeProfile: name, profileOrder: config.profileOrder.includes(name) ? config.profileOrder : [...config.profileOrder, name] };
+}
+
+export function setRouterMode(config: RouterConfig, mode: string): RouterConfig | null {
+  if (mode === "observe") return { ...config, mode: "observe" };
+  if (mode === "auto" || mode === "auto_model") return { ...config, mode: "auto_model" };
+  return null;
 }
 
 export function formatProfile(name: string, profile: RouterProfile): string {

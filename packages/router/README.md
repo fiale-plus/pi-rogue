@@ -20,16 +20,18 @@ npm run router:gate-train -- --dataset .pi/router/training.train.jsonl --eval-da
 npm run router:report -- --events .pi/router/events.jsonl --outcomes .pi/router/outcomes.jsonl --dataset .pi/router/training.eval.jsonl --gate-report .pi/router/binary-gate-report.json --output .pi/router/report.json --markdown .pi/router/report.md
 npm run router:shadow -- --checkpoint-file .pi/router/checkpoints.jsonl --ledger .pi/router/events.jsonl --output .pi/router/shadow-report.json
 
-# Live observe-only extension commands:
-# /router on|off|status|profile|profiles|models|configure|cycle
+# Live router extension commands:
+# /router on|off|status|mode|profile|profiles|models|configure|cycle
+# /router mode observe      # default: recommendations only
+# /router mode auto_model  # explicit: apply model switches only
 # ctrl+alt+p cycles router profiles (Ctrl-P is reserved by Pi model cycling).
 ```
 
 ## V1 telemetry notes
 
-Router v1 is still observe-only. It adds outcome skeletons, stronger diff/error fingerprints, teacher-label request export, binary gate dataset export, and subagent-aware telemetry schemas. It does not switch models, spawn agents, or promote policies automatically.
+Router v1 defaults to observe-only. It adds outcome skeletons, stronger diff/error fingerprints, teacher-label request export, binary gate dataset export, and subagent-aware telemetry schemas. It does not spawn agents/subagents or promote policies automatically. The explicit `auto_model` mode may only switch the active model for future turns.
 
-Live config is repo-global at `.pi/router/config.json`, while mutable live state and route ledgers are isolated per Pi session under `.pi/router/sessions/<session-key>/state.json` and `events.jsonl`.
+Live config is repo-global at `.pi/router/config.json`, while mutable live state and route ledgers are isolated per Pi session under `.pi/router/sessions/<session-key>/state.json` and `events.jsonl`. The default `mode` is `observe`; `auto_model` must be explicitly selected and does not alter agents, subagents, tools, or execution paths.
 
 - Diff telemetry stores counts and hashes from `git diff`, not raw patches. Offline rebuilds remain deterministic by default; use `--workspace-diff` only with one current live session/worktree snapshot.
 - `router:outcome-enrich` upgrades conservative outcome skeletons with checkpoint/event-derived verifier, rework, interruption, override, and accepted-diff signals.
