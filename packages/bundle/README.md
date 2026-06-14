@@ -34,12 +34,28 @@ npm install
 - Set `PI_CONTEXT_BROKER_ENABLED=false` before starting Pi to disable the `/context` command surface and prompt-load rewriting.
 - Optional durable broker storage can be enabled with `PI_CONTEXT_BROKER_DURABLE=true` or `PI_CONTEXT_BROKER_STORE_DIR=/path/to/store`; it defaults to SQLite/FTS and supports `PI_CONTEXT_BROKER_BACKEND=jsonl` for the legacy JSONL/blob backend.
 - `@fiale-plus/pi-rogue` is the only published surface for the logic.
-- Internal helper packages (`@fiale-plus/pi-rogue-guardrails`, `@fiale-plus/pi-rogue-brain`, `@fiale-plus/pi-rogue-repo-arch`) are maintained separately in the lab section and not published.
+- Internal helper packages (`@fiale-plus/pi-rogue-guardrails`, `@fiale-plus/pi-rogue-brain`, `@fiale-plus/pi-rogue-repo-arch`) are maintained separately in the lab section and are not published.
 
 ## Command surface
 
 - Default: `/advisor`, `/goal`, `/loop`, `/autoresearch`, `/autoresearch-lab`, `/router` plus status/config/command paths (all provided via the bundle).
 - Context broker: enabled by default; `PI_CONTEXT_BROKER_ENABLED=false` disables `/context status`, `/context brief`, `/context lookup <handle|text>`, `/context pin <handle>`, `/context export <handle>`, and `/context prune` with autocomplete.
+
+### Router (offline)
+
+The `/router` surface remains offline and repo-local unless you explicitly enable routing behavior:
+
+- `/router status|help|on|off|mode|profile|models|configure|cycle`
+- `/router mode observe` (default): recommendations only, no policy mutation
+- `/router mode auto_model`: explicit future-model switching only
+- `/router profile <name>` and `print mismatch_only|all|off`
+
+For local artifact generation and sharpening:
+
+- `npm run router:sharpen -- ...`
+- `npm run router:sharpen:auto -- ...`
+
+See `packages/router/README.md` for full usage, safety policy, schema, and autosharpen location.
 
 ## Status
 

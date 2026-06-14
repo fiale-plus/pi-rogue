@@ -66,15 +66,26 @@ All command surfaces below are provided by the single `@fiale-plus/pi-rogue` art
 - `/advisor config`
 - `/advisor <question>` — get immediate advice
 - `/pi-rogue` — shared cockpit view over advisor + orchestration pointers
-- `/goal set|show|clear|list` — set or update the active goal (check-ins enabled via loop); models can close active goals with `goal_complete` when summary + verification are available
+- `/goal set|show|clear|list` — set or update the active goal (check-ins enabled via loop)
 - `/loop status|off|clear|stop|<interval> <instruction>`
 - `/autoresearch status|clear|<instruction>` — goal+loop-driven solo research flow
 - `/autoresearch-lab status|clear|<instruction>` — goal+loop-driven parallel research flow
+- `/router status|help|on|off|mode|profile|models|configure|cycle` — local route telemetry controls
+- `/router` mode `observe` (default) keeps routing as recommendations only and does not auto-switch policy
+- `/router` mode `auto_model` explicitly applies only model routing; this still requires clear user-level intent and explicit opt-in
+
+### What changed in 0.3.0
+
+- Added local trajectory-router persistence and sharpening workflows (offline, local-only, and upgrade-safe).
+- Added `router:sharpen` / `router:sharpen:auto` automation to generate and persist route-learning hints.
+- Added repo-scoped / shared-scope learning storage and safe re-generation behavior for background refreshes.
+- Kept a strict safety boundary: no automatic policy mutation, and no raw transcript leakage in learn artifacts.
 
 ## Documentation
 
 - `packages/advisor/README.md` (Advisor package)
 - `packages/orchestration/README.md` (Orchestration package)
+- `packages/router/README.md` (Router package, offline workflow + sharpening)
 - `packages/bundle/README.md` (Canonical published package)
 - `packages/advisor/skills/advisor/SKILL.md` (Pi skill surface)
 - `packages/orchestration/skills/orchestration/SKILL.md` (Pi skill surface)
