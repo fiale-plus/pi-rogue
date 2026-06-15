@@ -75,10 +75,15 @@ describe("router teacher label runner", () => {
       reason: "missing fields",
     }))).toThrow(/adviceShape invalid/);
 
+    const wrapped = parseTeacherDecision(request(), JSON.stringify({ decision: JSON.parse(decisionJson()) }));
+    expect(wrapped).toMatchObject({ schema: "pi-router.decision.v1", checkpointId: "session-1:event-1", action: "run_verifier" });
+
     const withExtras = parseTeacherDecision(request(), JSON.stringify({
       ...JSON.parse(decisionJson()),
       reason: "The transcript says \"this is a very long raw transcript quote that should not be stored in labels\" and token=secret",
       transcriptExcerpt: "do not persist me",
+      label: { schema: "wrong" },
+      content: JSON.stringify({ schema: "wrong" }),
       policyVersion: "model-supplied",
     }));
     expect(withExtras.policyVersion).toBe("teacher/openai-codex/gpt-5.5/request/request-1");
@@ -109,6 +114,92 @@ describe("router teacher label runner", () => {
     expect(readFileSync(decisionsPath, "utf8")).toContain("pi-router.decision.v1");
     const label = JSON.parse(readFileSync(labelsPath, "utf8").trim());
     expect(label).toMatchObject({ schema: "pi-router.teacher-label.v1", source: "teacher-output", suggestedAction: "run_verifier" });
+  });
+
+  it("retries invalid teacher responses before recording a label", async () => {
+    const requestsPath = tempFile("requests.jsonl");
+    const decisionsPath = tempFile("teacher-decisions.jsonl");
+    const labelsPath = tempFile("teacher-labels.jsonl");
+    const failuresPath = tempFile("teacher-failures.jsonl");
+    writeFileSync(requestsPath, `${JSON.stringify(request())}\n`);
+    let calls = 0;
+    const executor: TeacherModelExecutor = () => {
+      calls++;
+      return calls === 1 ? JSON.stringify({ schema: "wrong" }) : decisionJson();
+    };
+
+    const summary = await runTeacherLabeling({
+      requestsPath,
+      decisionsOutputPath: decisionsPath,
+      labelsOutputPath: labelsPath,
+      failuresOutputPath: failuresPath,
+      executor,
+      maxAttempts: 2,
+      generatedAt: "2026-06-14T00:00:00.000Z",
+    });
+
+    expect(summary).toMatchObject({ requests: 1, decisions: 1, labels: 1, failures: 0, maxAttempts: 2 });
+    expect(calls).toBe(2);
+    expect(readFileSync(failuresPath, "utf8")).toBe("");
+  });
+
+  it("continues after per-request teacher failures and writes a sanitized failure report", async () => {
+    const requestsPath = tempFile("requests.jsonl");
+    const decisionsPath = tempFile("teacher-decisions.jsonl");
+    const labelsPath = tempFile("teacher-labels.jsonl");
+    const failuresPath = tempFile("teacher-failures.jsonl");
+    const failing = request({ requestId: "request-fail", checkpointId: "session-1:event-fail" });
+    const passing = request({ requestId: "request-pass" });
+    writeFileSync(requestsPath, `${JSON.stringify(failing)}\n${JSON.stringify(passing)}\n`);
+    const rawLeak = "bounded-span-secret-tail";
+    const executor: TeacherModelExecutor = ({ request: input }) => input.requestId === "request-fail"
+      ? JSON.stringify({ ...JSON.parse(decisionJson()), checkpointId: "session-1:event-fail", action: rawLeak })
+      : decisionJson();
+
+    const summary = await runTeacherLabeling({
+      requestsPath,
+      decisionsOutputPath: decisionsPath,
+      labelsOutputPath: labelsPath,
+      failuresOutputPath: failuresPath,
+      executor,
+      generatedAt: "2026-06-14T00:00:00.000Z",
+    });
+
+    expect(summary).toMatchObject({ requests: 2, decisions: 1, labels: 1, failures: 1 });
+    expect(readFileSync(decisionsPath, "utf8").trim().split("\n")).toHaveLength(1);
+    expect(readFileSync(labelsPath, "utf8").trim().split("\n")).toHaveLength(1);
+    const failure = JSON.parse(readFileSync(failuresPath, "utf8").trim());
+    expect(failure).toMatchObject({ schema: "pi-router.teacher-label-failure.v1", requestId: "request-fail", checkpointId: "session-1:event-fail", attempts: 1 });
+    expect(failure.error).toContain("teacher decision action not allowed");
+    expect(failure.error).toContain("errorHash=");
+    expect(JSON.stringify(failure)).not.toContain(rawLeak);
+    expect(JSON.stringify(summary.failureSamples)).not.toContain(rawLeak);
+  });
+
+  it("throws on executor failures instead of recording them as per-request label failures", async () => {
+    const requestsPath = tempFile("requests.jsonl");
+    const decisionsPath = tempFile("teacher-decisions.jsonl");
+    const labelsPath = tempFile("teacher-labels.jsonl");
+    const failuresPath = tempFile("teacher-failures.jsonl");
+    writeFileSync(requestsPath, `${JSON.stringify(request())}\n`);
+    const executor: TeacherModelExecutor = () => {
+      throw new Error("pi auth failed with secret=do-not-persist");
+    };
+
+    await expect(runTeacherLabeling({
+      requestsPath,
+      decisionsOutputPath: decisionsPath,
+      labelsOutputPath: labelsPath,
+      failuresOutputPath: failuresPath,
+      executor,
+    })).rejects.toThrow(/teacher executor failed.*errorHash=/);
+    await expect(runTeacherLabeling({
+      requestsPath,
+      decisionsOutputPath: decisionsPath,
+      labelsOutputPath: labelsPath,
+      failuresOutputPath: failuresPath,
+      executor,
+    })).rejects.not.toThrow(/do-not-persist/);
   });
 
   it("supports dry-run without model calls", async () => {

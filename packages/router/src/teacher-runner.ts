@@ -25,6 +25,17 @@ const CONTEXT_POLICIES = new Set<ContextPolicy>(["none", "minimal", "recent_even
 
 export const TEACHER_RUN_SUMMARY_SCHEMA = "pi-router.teacher-run-summary.v1" as const;
 
+export interface TeacherLabelFailure {
+  schema: "pi-router.teacher-label-failure.v1";
+  requestId: string;
+  checkpointId: string;
+  sessionId: string;
+  teacher: string;
+  generatedAt: string;
+  attempts: number;
+  error: string;
+}
+
 export interface TeacherRunSummary {
   schema: typeof TEACHER_RUN_SUMMARY_SCHEMA;
   teacher: string;
@@ -32,8 +43,12 @@ export interface TeacherRunSummary {
   requests: number;
   decisions: number;
   labels: number;
+  failures: number;
+  maxAttempts: number;
   decisionsOutput: string;
   labelsOutput: string;
+  failuresOutput?: string;
+  failureSamples: TeacherLabelFailure[];
   dryRun: boolean;
 }
 
@@ -108,6 +123,41 @@ function extractJsonObject(text: string): unknown {
   throw new Error("teacher response did not contain a JSON object");
 }
 
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : null;
+}
+
+function decisionCandidate(value: unknown): Partial<RouteDecision> {
+  if (Array.isArray(value)) {
+    const firstObject = value.find((item) => asRecord(item));
+    if (firstObject) return decisionCandidate(firstObject);
+  }
+  const record = asRecord(value);
+  if (!record) return {};
+  if (record.schema === "pi-router.decision.v1") return record as Partial<RouteDecision>;
+  if (typeof record.content === "string") {
+    try {
+      return decisionCandidate(extractJsonObject(record.content));
+    } catch {
+      // Continue with the current object below.
+    }
+  }
+  for (const key of ["decision", "routeDecision", "teacherDecision", "label", "output"]) {
+    const nested = record[key];
+    if (asRecord(nested) || Array.isArray(nested) || typeof nested === "string") {
+      if (typeof nested === "string") {
+        try {
+          return decisionCandidate(extractJsonObject(nested));
+        } catch {
+          continue;
+        }
+      }
+      return decisionCandidate(nested);
+    }
+  }
+  return record as Partial<RouteDecision>;
+}
+
 function teacherPolicyVersion(request: TeacherPromptRequest): string {
   return `teacher/${request.teacher}/request/${request.requestId}`.replace(/\s+/g, "-");
 }
@@ -118,8 +168,20 @@ function sanitizeRationale(text: string): string {
   return `teacher rationale redacted; rationaleHash=${hashText(text)}`;
 }
 
+function sanitizeFailureError(error: Error): string {
+  const message = error.message.replace(/\s+/g, " ").trim();
+  if (message.startsWith("teacher decision has invalid schema")) return `teacher decision has invalid schema; errorHash=${hashText(message)}`;
+  if (message.startsWith("teacher decision checkpoint mismatch")) return `teacher decision checkpoint mismatch; errorHash=${hashText(message)}`;
+  if (message.startsWith("teacher decision action not allowed")) return `teacher decision action not allowed; errorHash=${hashText(message)}`;
+  if (message.startsWith("teacher decision adviceShape invalid")) return `teacher decision adviceShape invalid; errorHash=${hashText(message)}`;
+  if (message.startsWith("teacher decision contextPolicy invalid")) return `teacher decision contextPolicy invalid; errorHash=${hashText(message)}`;
+  if (message.startsWith("teacher decision confidence invalid")) return `teacher decision confidence invalid; errorHash=${hashText(message)}`;
+  if (message.startsWith("teacher decision missing reason")) return `teacher decision missing reason; errorHash=${hashText(message)}`;
+  return `teacher labeling failed; errorHash=${hashText(message)}`;
+}
+
 export function parseTeacherDecision(request: TeacherPromptRequest, text: string): RouteDecision {
-  const value = extractJsonObject(text) as Partial<RouteDecision>;
+  const value = decisionCandidate(extractJsonObject(text));
   if (value.schema !== "pi-router.decision.v1") throw new Error(`teacher decision has invalid schema for ${request.checkpointId}`);
   if (value.checkpointId !== request.checkpointId) throw new Error(`teacher decision checkpoint mismatch for ${request.checkpointId}`);
   const allowedActions = request.allowedActions.filter((action): action is RouteAction => ROUTE_ACTIONS.has(action));
@@ -190,16 +252,21 @@ export async function runTeacherLabeling(options: {
   dryRun?: boolean;
   generatedAt?: string;
   executor?: TeacherModelExecutor;
+  maxAttempts?: number;
+  failuresOutputPath?: string;
 }): Promise<TeacherRunSummary> {
   const requests = readTeacherPromptRequests(options.requestsPath).map((request) => options.teacher ? { ...request, teacher: options.teacher } : request);
   const teachers = [...new Set(requests.map((request) => request.teacher))].sort();
   const teacher = teachers.length === 1 ? teachers[0] : teachers.length > 1 ? "mixed" : options.teacher ?? "openai-codex/gpt-5.5";
   const executor = options.executor ?? defaultPiTeacherExecutor;
   const generatedAt = options.generatedAt ?? new Date().toISOString();
+  const maxAttempts = Math.max(1, Math.floor(options.maxAttempts ?? 1));
+  const failuresOutput = options.failuresOutputPath ? resolve(options.failuresOutputPath) : undefined;
 
   if (options.dryRun) {
     writeJsonl(options.decisionsOutputPath, []);
     writeJsonl(options.labelsOutputPath, []);
+    if (options.failuresOutputPath) writeJsonl(options.failuresOutputPath, []);
     return {
       schema: TEACHER_RUN_SUMMARY_SCHEMA,
       teacher,
@@ -207,23 +274,64 @@ export async function runTeacherLabeling(options: {
       requests: requests.length,
       decisions: 0,
       labels: 0,
+      failures: 0,
+      maxAttempts,
       decisionsOutput: resolve(options.decisionsOutputPath),
       labelsOutput: resolve(options.labelsOutputPath),
+      failuresOutput,
+      failureSamples: [],
       dryRun: true,
     };
   }
 
   const decisions: RouteDecision[] = [];
   const labels: TeacherLabel[] = [];
+  const failures: TeacherLabelFailure[] = [];
   for (const request of requests) {
-    const prompt = teacherPromptText(request);
-    const response = await executor({ request, prompt, teacher: request.teacher });
-    const decision = parseTeacherDecision(request, response);
-    decisions.push(decision);
-    labels.push(labelFromTeacherDecision(request, decision, generatedAt));
+    const basePrompt = teacherPromptText(request);
+    let lastError: Error | undefined;
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      const prompt = attempt === 1
+        ? basePrompt
+        : [
+          basePrompt,
+          "Previous response failed validation.",
+          `Validation error: ${lastError ? sanitizeFailureError(lastError) : "unknown error"}`,
+          "Retry by returning exactly one valid pi-router.decision.v1 JSON object and no markdown.",
+        ].join("\n\n");
+      let response: string;
+      try {
+        response = await executor({ request, prompt, teacher: request.teacher });
+      } catch (error) {
+        const executorError = error instanceof Error ? error : new Error(String(error));
+        throw new Error(`teacher executor failed for ${request.checkpointId}; ${sanitizeFailureError(executorError)}`);
+      }
+      try {
+        const decision = parseTeacherDecision(request, response);
+        decisions.push(decision);
+        labels.push(labelFromTeacherDecision(request, decision, generatedAt));
+        lastError = undefined;
+        break;
+      } catch (error) {
+        lastError = error instanceof Error ? error : new Error(String(error));
+      }
+    }
+    if (lastError) {
+      failures.push({
+        schema: "pi-router.teacher-label-failure.v1",
+        requestId: request.requestId,
+        checkpointId: request.checkpointId,
+        sessionId: request.sessionId,
+        teacher: request.teacher,
+        generatedAt,
+        attempts: maxAttempts,
+        error: sanitizeFailureError(lastError),
+      });
+    }
   }
   writeJsonl(options.decisionsOutputPath, decisions);
   writeJsonl(options.labelsOutputPath, labels);
+  if (options.failuresOutputPath) writeJsonl(options.failuresOutputPath, failures);
   return {
     schema: TEACHER_RUN_SUMMARY_SCHEMA,
     teacher,
@@ -231,8 +339,12 @@ export async function runTeacherLabeling(options: {
     requests: requests.length,
     decisions: decisions.length,
     labels: labels.length,
+    failures: failures.length,
+    maxAttempts,
     decisionsOutput: resolve(options.decisionsOutputPath),
     labelsOutput: resolve(options.labelsOutputPath),
+    failuresOutput,
+    failureSamples: failures.slice(0, 20),
     dryRun: false,
   };
 }

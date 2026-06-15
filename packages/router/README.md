@@ -13,7 +13,7 @@ npm run router:cards -- --events .pi/router/events.jsonl --output .pi/router/mod
 npm run router:outcomes -- --checkpoint-file .pi/router/checkpoints.jsonl --events .pi/router/events.jsonl --output .pi/router/outcomes.jsonl
 npm run router:outcome-enrich -- --outcomes .pi/router/outcomes.jsonl --checkpoint-file .pi/router/checkpoints.jsonl --events .pi/router/events.jsonl --output .pi/router/outcomes.enriched.jsonl
 npm run router:teacher-requests -- --checkpoint-file .pi/router/checkpoints.jsonl --output .pi/router/teacher-requests.jsonl --teacher openai-codex/gpt-5.5
-npm run router:teacher-label -- --requests .pi/router/teacher-requests.jsonl --teacher-output .pi/router/teacher-decisions.jsonl --labels .pi/router/labels/teacher-labels.jsonl --teacher openai-codex/gpt-5.5
+npm run router:teacher-label -- --requests .pi/router/teacher-requests.jsonl --teacher-output .pi/router/teacher-decisions.jsonl --labels .pi/router/labels/teacher-labels.jsonl --failures .pi/router/teacher-failures.jsonl --teacher openai-codex/gpt-5.5 --max-attempts 2
 npm run router:reflect -- --checkpoint-file .pi/router/checkpoints.jsonl --labels .pi/router/labels/teacher-labels.jsonl --reflection .pi/router/reflections/session.md --teacher openai-codex/gpt-5.5 --teacher-output .pi/router/teacher-decisions.jsonl
 npm run router:dataset -- --checkpoint-file .pi/router/checkpoints.jsonl --events .pi/router/events.jsonl --outcomes .pi/router/outcomes.jsonl --labels .pi/router/labels/teacher-labels.jsonl --output .pi/router/training.jsonl
 npm run router:gate-train -- --dataset .pi/router/training.train.jsonl --eval-dataset .pi/router/training.eval.jsonl --artifact .pi/router/binary-gate.json --report .pi/router/binary-gate-report.json
@@ -39,7 +39,7 @@ Live config is repo-global at `.pi/router/config.json`, while mutable live state
 - Diff telemetry stores counts and hashes from `git diff`, not raw patches. Offline rebuilds remain deterministic by default; use `--workspace-diff` only with one current live session/worktree snapshot.
 - `router:outcome-enrich` upgrades conservative outcome skeletons with checkpoint/event-derived verifier, rework, interruption, override, and accepted-diff signals.
 - Error fingerprints normalize paths, line numbers, timestamps, UUIDs, ports, and object ids before hashing.
-- `router:teacher-requests` writes local JSONL requests for an explicit teacher model; `router:teacher-label` calls the explicitly configured teacher and writes decision/label JSONL artifacts.
+- `router:teacher-requests` writes local JSONL requests for an explicit teacher model; `router:teacher-label` calls the explicitly configured teacher and writes decision/label JSONL artifacts. Invalid teacher responses are isolated per request, can be retried with `--max-attempts`, and can be written to `--failures` without persisting raw model output.
 - `router:dataset` excludes `local-rule` labels by default so a future model does not merely imitate the current rules.
 - `router:gate-train` trains a local binary continue-vs-intervene gate and evaluates it on a distinct labeled eval dataset; local-rule labels are rejected as training/eval truth and promotion remains manual/eval-gated.
 - `router:report` writes JSON plus optional Markdown summaries across route ledgers, enriched outcomes, dataset labels, and gate evaluation reports.
