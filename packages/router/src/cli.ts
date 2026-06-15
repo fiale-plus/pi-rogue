@@ -34,8 +34,10 @@ interface Args {
   teacherPrompts?: string;
   requests?: string;
   decisionsOutput?: string;
+  failures?: string;
   outcomes?: string;
   cards?: string;
+  maxAttempts?: number;
   includeLocalRuleLabels?: boolean;
   workspaceDiff?: boolean;
   dryRun?: boolean;
@@ -51,7 +53,7 @@ function usage(): never {
   npm run router:outcomes -- --checkpoint-file <checkpoints.jsonl> --events <events.jsonl> --output <outcomes.jsonl> [--pretty]
   npm run router:outcome-enrich -- --outcomes <outcomes.jsonl> --output <enriched-outcomes.jsonl> [--checkpoint-file <checkpoints.jsonl>] [--events <events.jsonl>] [--pretty]
   npm run router:teacher-requests -- --checkpoint-file <checkpoints.jsonl> --output <requests.jsonl> [--teacher openai-codex/gpt-5.5] [--pretty]
-  npm run router:teacher-label -- --requests <requests.jsonl> --teacher-output <decisions.jsonl> --labels <labels.jsonl> [--teacher openai-codex/gpt-5.5] [--dry-run] [--pretty]
+  npm run router:teacher-label -- --requests <requests.jsonl> --teacher-output <decisions.jsonl> --labels <labels.jsonl> [--failures <failures.jsonl>] [--teacher openai-codex/gpt-5.5] [--max-attempts 2] [--dry-run] [--pretty]
   npm run router:reflect -- --checkpoint-file <checkpoints.jsonl> --labels <labels.jsonl> --reflection <reflection.md> [--teacher local-rule] [--teacher-output <decisions.jsonl>] [--teacher-prompts <requests.jsonl>] [--pretty]
   npm run router:dataset -- --checkpoint-file <checkpoints.jsonl> --output <training.jsonl> [--events <events.jsonl>] [--outcomes <outcomes.jsonl>] [--labels <labels.jsonl>] [--include-local-rule-labels] [--pretty]
   npm run router:gate-train -- --dataset <training.jsonl> --eval-dataset <eval.jsonl> --artifact <gate.json> --report <gate-report.json> [--pretty]
@@ -178,6 +180,18 @@ function parseArgs(argv: string[]): Args {
       index++;
       continue;
     }
+    if (arg === "--failures" && next) {
+      args.failures = next;
+      index++;
+      continue;
+    }
+    if (arg === "--max-attempts" && next) {
+      const maxAttempts = Number(next);
+      if (!Number.isInteger(maxAttempts) || maxAttempts < 1) usage();
+      args.maxAttempts = maxAttempts;
+      index++;
+      continue;
+    }
     if (arg === "--decisions-output" && next) {
       args.decisionsOutput = next;
       index++;
@@ -299,6 +313,8 @@ async function teacherLabel(args: Args): Promise<unknown> {
     labelsOutputPath: args.labels,
     teacher: args.teacher,
     dryRun: args.dryRun,
+    maxAttempts: args.maxAttempts,
+    failuresOutputPath: args.failures,
   });
 }
 
