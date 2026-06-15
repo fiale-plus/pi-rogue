@@ -127,19 +127,46 @@ function asRecord(value: unknown): Record<string, unknown> | null {
   return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : null;
 }
 
+function maybeDecision(value: Partial<RouteDecision>): boolean {
+  return value.schema === "pi-router.decision.v1" || Boolean(value.checkpointId || value.action);
+}
+
 function decisionCandidate(value: unknown): Partial<RouteDecision> {
   if (Array.isArray(value)) {
-    const firstObject = value.find((item) => asRecord(item));
-    if (firstObject) return decisionCandidate(firstObject);
+    for (const item of value) {
+      const candidate = typeof item === "string"
+        ? (() => {
+          try {
+            return decisionCandidate(extractJsonObject(item));
+          } catch {
+            return {} as Partial<RouteDecision>;
+          }
+        })()
+        : decisionCandidate(item);
+      if (maybeDecision(candidate)) return candidate;
+    }
+    return {};
   }
   const record = asRecord(value);
   if (!record) return {};
   if (record.schema === "pi-router.decision.v1") return record as Partial<RouteDecision>;
   if (typeof record.content === "string") {
     try {
-      return decisionCandidate(extractJsonObject(record.content));
+      const candidate = decisionCandidate(extractJsonObject(record.content));
+      if (maybeDecision(candidate)) return candidate;
     } catch {
       // Continue with the current object below.
+    }
+  } else if (Array.isArray(record.content)) {
+    const candidate = decisionCandidate(record.content);
+    if (maybeDecision(candidate)) return candidate;
+  }
+  if (typeof record.text === "string") {
+    try {
+      const candidate = decisionCandidate(extractJsonObject(record.text));
+      if (maybeDecision(candidate)) return candidate;
+    } catch {
+      // Continue with wrapper keys below.
     }
   }
   for (const key of ["decision", "routeDecision", "teacherDecision", "label", "output"]) {
@@ -147,12 +174,15 @@ function decisionCandidate(value: unknown): Partial<RouteDecision> {
     if (asRecord(nested) || Array.isArray(nested) || typeof nested === "string") {
       if (typeof nested === "string") {
         try {
-          return decisionCandidate(extractJsonObject(nested));
+          const candidate = decisionCandidate(extractJsonObject(nested));
+          if (maybeDecision(candidate)) return candidate;
         } catch {
           continue;
         }
+      } else {
+        const candidate = decisionCandidate(nested);
+        if (maybeDecision(candidate)) return candidate;
       }
-      return decisionCandidate(nested);
     }
   }
   return record as Partial<RouteDecision>;
@@ -260,7 +290,9 @@ export async function runTeacherLabeling(options: {
   const teacher = teachers.length === 1 ? teachers[0] : teachers.length > 1 ? "mixed" : options.teacher ?? "openai-codex/gpt-5.5";
   const executor = options.executor ?? defaultPiTeacherExecutor;
   const generatedAt = options.generatedAt ?? new Date().toISOString();
-  const maxAttempts = Math.max(1, Math.floor(options.maxAttempts ?? 1));
+  const rawMaxAttempts = options.maxAttempts ?? 1;
+  if (!Number.isFinite(rawMaxAttempts)) throw new Error("teacher maxAttempts must be finite");
+  const maxAttempts = Math.max(1, Math.floor(rawMaxAttempts));
   const failuresOutput = options.failuresOutputPath ? resolve(options.failuresOutputPath) : undefined;
 
   if (options.dryRun) {

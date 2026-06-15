@@ -78,6 +78,11 @@ describe("router teacher label runner", () => {
     const wrapped = parseTeacherDecision(request(), JSON.stringify({ decision: JSON.parse(decisionJson()) }));
     expect(wrapped).toMatchObject({ schema: "pi-router.decision.v1", checkpointId: "session-1:event-1", action: "run_verifier" });
 
+    const contentArrayWrapped = parseTeacherDecision(request(), JSON.stringify({
+      output: [{ content: [{ type: "output_text", text: decisionJson() }] }],
+    }));
+    expect(contentArrayWrapped).toMatchObject({ schema: "pi-router.decision.v1", checkpointId: "session-1:event-1", action: "run_verifier" });
+
     const withExtras = parseTeacherDecision(request(), JSON.stringify({
       ...JSON.parse(decisionJson()),
       reason: "The transcript says \"this is a very long raw transcript quote that should not be stored in labels\" and token=secret",
@@ -174,6 +179,20 @@ describe("router teacher label runner", () => {
     expect(failure.error).toContain("errorHash=");
     expect(JSON.stringify(failure)).not.toContain(rawLeak);
     expect(JSON.stringify(summary.failureSamples)).not.toContain(rawLeak);
+  });
+
+  it("rejects non-finite retry counts", async () => {
+    const requestsPath = tempFile("requests.jsonl");
+    const decisionsPath = tempFile("teacher-decisions.jsonl");
+    const labelsPath = tempFile("teacher-labels.jsonl");
+    writeFileSync(requestsPath, `${JSON.stringify(request())}\n`);
+
+    await expect(runTeacherLabeling({
+      requestsPath,
+      decisionsOutputPath: decisionsPath,
+      labelsOutputPath: labelsPath,
+      maxAttempts: Number.NaN,
+    })).rejects.toThrow(/maxAttempts must be finite/);
   });
 
   it("throws on executor failures instead of recording them as per-request label failures", async () => {
