@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.3.2
+
+### Summary
+
+Fixes the `0.3.1` runtime packaging regression by vendoring `@fiale-plus/pi-rogue-fusion` in the canonical publish workflow, so npm-installed `@fiale-plus/pi-rogue` can resolve Fusion extensions at runtime.
+
+### Changes
+
+- Vendor `@fiale-plus/pi-rogue-fusion` into bundled dependencies during publish-time packaging.
+- Keep publish behavior scoped to the canonical workflow (`npm-publish-bundle.yml`) with unchanged version/policy boundaries.
+- Preserve existing checks and tests for unchanged packages.
+
+### Validation
+
+- `npm run check`
+- `npm test`
+- local publish-pack smoke test with vendored `pi-rogue-fusion` and import smoke test success
+
 ## 0.3.1
 
 ### Summary
