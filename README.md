@@ -10,7 +10,7 @@ Pi-Rogue is a modular Pi extension stack for **agentic session guidance** and **
 
 | Package | NPM Version | NPM Downloads | What it is |
 |---|---|---|---|
-| `@fiale-plus/pi-rogue` | [![version](https://img.shields.io/npm/v/%40fiale-plus%2Fpi-rogue?style=flat-square)](https://www.npmjs.com/package/@fiale-plus/pi-rogue) | [![downloads](https://img.shields.io/npm/dm/%40fiale-plus%2Fpi-rogue?style=flat-square)](https://www.npmjs.com/package/@fiale-plus/pi-rogue) | **Single consolidated artefact** for advisor, orchestration, router, context broker, and opt-in Fusion (recommended) |
+| `@fiale-plus/pi-rogue` | [![version](https://img.shields.io/npm/v/%40fiale-plus%2Fpi-rogue?style=flat-square)](https://www.npmjs.com/package/@fiale-plus/pi-rogue) | [![downloads](https://img.shields.io/npm/dm/%40fiale-plus%2Fpi-rogue?style=flat-square)](https://www.npmjs.com/package/@fiale-plus/pi-rogue) | **Single consolidated artefact** for advisor, orchestration, router, context broker, and Fusion (recommended) |
 
 Legacy/paused packages remain available for compatibility but are deprecated:
 
@@ -27,7 +27,7 @@ Legacy/paused packages remain available for compatibility but are deprecated:
 pi install npm:@fiale-plus/pi-rogue
 ```
 
-This is the single consolidated artefact. It includes advisor, orchestration, router, context broker, and opt-in Fusion logic (bundled through package dependencies for one-install behavior).
+This is the single consolidated artefact. It includes advisor, orchestration, router, context broker, and Fusion logic (bundled through package dependencies for one-install behavior).
 
 ### Legacy package users
 
@@ -72,12 +72,12 @@ All command surfaces below are provided by the single `@fiale-plus/pi-rogue` art
 - `/router status|help|on|off|mode|profile|models|configure|cycle` — local route telemetry controls
 - `/router` mode `observe` (default) keeps routing as recommendations only and does not auto-switch policy
 - `/router` mode `auto_model` explicitly applies only model routing; this still requires clear user-level intent and explicit opt-in
-- `/fusion status|reload` — opt-in OpenRouter-style comparable-panel Fusion provider controls (`PI_ROGUE_FUSION_ENABLED=1` for auto-registration)
+- `/fusion status|reload|configure` — OpenRouter-style comparable-panel Fusion provider controls (models register when recipes exist)
 - `/context config threshold <bytes>` — tune context-broker prompt rewrite threshold (default 8192 bytes)
 
-### Fusion lab (opt-in)
+### Fusion
 
-Fusion recipes register `fusion/<recipe-id>` as normal models when enabled. The v1 recipe shape is OpenRouter-style and roleless: `analysis_models` are comparable independent attempts, then a judge produces structured analysis, then the synthesis model writes the final answer. Role-based critic/researcher/verifier passes are intentionally not part of the Fusion schema.
+Fusion recipes register `fusion/<recipe-id>` as normal models when recipes exist. The v1 recipe shape is OpenRouter-style and roleless: `analysis_models` are comparable independent analysis-only attempts, then a judge produces structured analysis, then the synthesis model writes the final answer. Role-based critic/researcher/verifier passes are intentionally not part of the Fusion schema.
 
 A future agentic panel can use pi-agents/subagents plus pi-intercom under a separate `agent_fusion` family (`analysis_agents`), preserving the same judge-and-synthesis language without overloading model refs.
 
@@ -95,7 +95,7 @@ See `packages/fusion/README.md`.
 - `packages/advisor/README.md` (Advisor package)
 - `packages/orchestration/README.md` (Orchestration package)
 - `packages/router/README.md` (Router package, offline workflow + sharpening)
-- `packages/fusion/README.md` (Opt-in Fusion composite model provider lab)
+- `packages/fusion/README.md` (Fusion composite model provider lab)
 - `packages/bundle/README.md` (Canonical published package)
 - `packages/advisor/skills/advisor/SKILL.md` (Pi skill surface)
 - `packages/orchestration/skills/orchestration/SKILL.md` (Pi skill surface)

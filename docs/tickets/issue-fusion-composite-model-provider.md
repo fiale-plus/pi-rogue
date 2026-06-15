@@ -3,11 +3,11 @@
 **Type:** Feature / research spike
 **Area:** `packages/bundle`, new `packages/fusion` or bundle-local provider, `packages/core`, `packages/context-broker`, local AI lab
 **Date:** 2026-06-15
-**Priority:** High-impact experiment, gated/opt-in for v1
+**Priority:** High-impact experiment, active command surface with recipe-driven model registration
 
 ## Summary
 
-Add an opt-in Pi-Rogue `fusion/*` composite model surface inspired by OpenRouter Fusion: run multiple comparable model attempts in parallel, judge the responses, and return one final assistant answer plus trace metadata.
+Add a Pi-Rogue `fusion/*` composite model surface inspired by OpenRouter Fusion: run multiple comparable model attempts in parallel, judge the responses, and return one final assistant answer plus trace metadata.
 
 The key product rule for v1:
 
@@ -64,7 +64,7 @@ type FusionRecipe = {
   // Judge/final synthesis model.
   model: string;
 
-  // Comparable independent attempts. Same task, no role prompts.
+  // Comparable independent analysis-only attempts. Same task, no role prompts, no tool calls, no writes.
   analysis_models: string[];
 
   max_tool_calls?: number; // v1 may accept but ignore unless tool forwarding exists.
@@ -138,13 +138,7 @@ or repo/dev override:
 .pi-rogue/fusion/recipes.json
 ```
 
-The provider registration should be gated initially:
-
-```bash
-PI_ROGUE_FUSION_ENABLED=1
-```
-
-so default Pi-Rogue behavior and command surfaces remain unchanged.
+The `/fusion` command is part of Pi-Rogue by default. The provider registers `fusion/<recipe-id>` models when recipes exist; when no recipes are present, no Fusion models are added.
 
 ### Runtime behavior
 
@@ -287,14 +281,16 @@ Same-model local Fusion needs `panel_similarity`; if repeated local passes are >
 
 ## Acceptance criteria
 
-- `PI_ROGUE_FUSION_ENABLED=1` exposes configured `fusion/<recipe-id>` models without changing default behavior when the flag is absent.
+- `/fusion` is available by default, and configured `fusion/<recipe-id>` models register when recipes exist.
+- If no recipes exist, no Fusion models are registered.
+- `/fusion configure` can create at least one roleless recipe from scoped session-visible text models.
 - A roleless recipe with two local or configured models can complete a prompt and return a final assistant answer.
 - Partial panel failure succeeds when at least one panel model succeeds and records `failed_models`.
 - Judge failure is non-fatal and produces a clearly marked degraded result.
 - Recursive `fusion/*` model refs are rejected by default with a clear error.
 - Full trace is written to disk; context broker stores only compact `fusion_result` summary plus trace reference.
-- Tests cover recipe validation, model-ref parsing, partial failures, judge JSON repair/failure, recursion rejection, and context artifact kind support.
-- Docs explain cost/latency multiplication and the distinction between Fusion and role-based deliberation.
+- Tests cover recipe validation, model-ref parsing, default command/provider behavior, configure add/remove basics, partial failures, judge JSON repair/failure, recursion rejection, and context artifact kind support.
+- Docs explain cost/latency multiplication, analysis-only/no-side-effect panel semantics, and the distinction between Fusion and role-based deliberation.
 
 ## Open questions
 
@@ -302,7 +298,7 @@ Same-model local Fusion needs `panel_similarity`; if repeated local passes are >
 - What is the best user config location for recipes: `~/.pi/agent/pi-rogue/fusion/recipes.json`, `~/.pi/agent/fiale-plus/fusion/recipes.json`, or `.pi-rogue/fusion/recipes.json` for repo-local experiments?
 - Can provider metadata include `fusion_run_id`, `recipe_id`, and `analysis_models` without placing them in the assistant body?
 - Is there a stable way to pass per-call temperature through Pi `completeSimple()` for arbitrary providers, or should v1 record requested temperature but accept provider-dependent behavior?
-- Should web/search/tool fanout be deferred entirely to normal Pi tool use, or is there a safe subset to make available to panel models later?
+- Should web/search/tool fanout stay entirely outside panel models, with write-capable work reserved for explicit Pi tools/agents after synthesis?
 
 ## Suggested first PR scope
 

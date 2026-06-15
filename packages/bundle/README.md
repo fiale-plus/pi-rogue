@@ -7,11 +7,11 @@ It stitches together (and bundles for a true single-package install):
 - `@fiale-plus/pi-core` (shared contracts/helpers)
 - `@fiale-plus/pi-rogue-advisor` (logic; direct releases paused)
 - `@fiale-plus/pi-rogue-context-broker` (context-broker runtime; registered by default with an env kill switch)
-- `@fiale-plus/pi-rogue-fusion` (opt-in OpenRouter-style composite model provider shipped in this package)
+- `@fiale-plus/pi-rogue-fusion` (OpenRouter-style composite model provider shipped in this package)
 - `@fiale-plus/pi-rogue-orchestration` (logic; direct releases paused)
 - `@fiale-plus/pi-rogue-router` (observe-only trajectory-router lab; direct releases paused)
 
-Direct installs of advisor/orchestration remain paused (marked private). Fusion ships through this published artefact as an opt-in provider. See `docs/release.md` and root `AGENTS.md` / `README.md` for the release policy.
+Direct installs of advisor/orchestration remain paused (marked private). Fusion ships through this published artefact. See `docs/release.md` and root `AGENTS.md` / `README.md` for the release policy.
 
 ## Install (recommended)
 
@@ -38,7 +38,7 @@ npm install
 
 - Default: `/advisor`, `/goal`, `/loop`, `/autoresearch`, `/autoresearch-lab`, `/router`, `/fusion` plus status/config/command paths (all provided via the bundle).
 - Context broker: enabled by default; `PI_CONTEXT_BROKER_ENABLED=false` disables `/context status`, `/context brief`, `/context lookup <handle|text>`, `/context pin <handle>`, `/context export <handle>`, `/context config threshold <bytes>`, and `/context prune` with autocomplete.
-- Fusion provider: disabled by default; `PI_ROGUE_FUSION_ENABLED=1` auto-registers configured `fusion/<recipe-id>` models, or use `/fusion reload` explicitly in a session.
+- Fusion provider: `/fusion` is available by default; configured `fusion/<recipe-id>` models register when recipes exist, or use `/fusion configure` then `/fusion reload` explicitly in a session.
 
 ### Router (offline)
 
@@ -56,11 +56,11 @@ For local artifact generation and sharpening:
 
 See `packages/router/README.md` for full usage, safety policy, schema, and autosharpen location.
 
-### Fusion (opt-in)
+### Fusion
 
 The `/fusion` surface loads OpenRouter-style comparable-panel recipes. It keeps the language explicit:
 
-- panel: `analysis_models` answer the same task independently;
+- panel: `analysis_models` answer the same task independently as analysis-only/no-side-effect attempts;
 - judge: structured comparison (`consensus`, `contradictions`, `partial_coverage`, `unique_insights`, `blind_spots`);
 - synthesis: final answer from judge analysis plus panel responses.
 

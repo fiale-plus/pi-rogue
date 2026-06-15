@@ -75,7 +75,7 @@ export function validateFusionRecipe(raw: unknown): { ok: true; recipe: FusionRe
       errors.push(error instanceof Error ? error.message : String(error));
     }
   }
-  if (allRefs.some((ref) => isFusionModelRef(ref))) errors.push("fusion/* model refs are recursive and disabled by default");
+  if (allRefs.some((ref) => isFusionModelRef(ref))) errors.push("fusion/* model refs are recursive and not allowed in recipes");
 
   const max_tool_calls = cleanNonNegativeInt(raw.max_tool_calls, "max_tool_calls", 64, errors);
   const max_completion_tokens = cleanNonNegativeInt(raw.max_completion_tokens, "max_completion_tokens", MAX_COMPLETION_TOKENS, errors);
@@ -173,6 +173,13 @@ export function fusionRecipePaths(cwd: string, env: NodeJS.ProcessEnv = process.
     resolve(cwd, ".pi/fusion/recipes.json"),
     join(process.env.HOME ?? "", ".pi", "agent", "pi-rogue", "fusion", "recipes.json"),
   ].filter(Boolean);
+}
+
+export function defaultFusionRecipeWritePath(cwd: string, env: NodeJS.ProcessEnv = process.env): string {
+  const configured = cleanString(env.PI_ROGUE_FUSION_RECIPES);
+  if (configured) return resolve(configured);
+  const paths = fusionRecipePaths(cwd, env);
+  return paths.find((path) => existsSync(path)) ?? paths[0] ?? resolve(cwd, ".pi-rogue/fusion/recipes.json");
 }
 
 export function loadFusionRecipes(cwd: string, env: NodeJS.ProcessEnv = process.env): { recipes: FusionRecipe[]; path?: string; errors: string[] } {

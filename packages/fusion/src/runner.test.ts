@@ -19,11 +19,13 @@ const recipe: FusionRecipe = {
 describe("fusion runner", () => {
   it("runs panel, judge, and synthesis", async () => {
     const calls: string[] = [];
+    const panelSystemPrompts: string[] = [];
     const result = await runFusionCompletion(recipe, context, {
       runId: "run-1",
       completer: {
         async complete(request) {
           calls.push(request.model);
+          if (request.model.startsWith("panel/")) panelSystemPrompts.push(request.context.systemPrompt ?? "");
           if (request.model === "judge/model" && request.context.systemPrompt?.includes("Return ONLY valid JSON")) {
             return JSON.stringify({
               consensus: ["Fusion helps expensive architecture decisions"],
@@ -46,6 +48,8 @@ describe("fusion runner", () => {
     expect(result.final_text).toBe("Final synthesized answer");
     expect(calls).toEqual(expect.arrayContaining(["panel/a", "panel/b", "judge/model"]));
     expect(calls.filter((call) => call === "judge/model")).toHaveLength(2);
+    expect(panelSystemPrompts).toHaveLength(2);
+    expect(panelSystemPrompts.every((prompt) => prompt.includes("Do not call tools, edit files, write state, run commands"))).toBe(true);
   });
 
   it("keeps partial panel failures recoverable", async () => {

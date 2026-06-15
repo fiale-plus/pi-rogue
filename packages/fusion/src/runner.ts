@@ -117,7 +117,15 @@ export function parseJudgeAnalysis(text: string): FusionJudgeAnalysis | null {
 }
 
 function panelPrompt(context: Context): Context {
-  return context;
+  return {
+    ...context,
+    systemPrompt: [
+      context.systemPrompt,
+      "Fusion panel mode: provide an independent analysis-only answer.",
+      "Do not call tools, edit files, write state, run commands, or take side-effecting actions. If the task asks for changes, describe the recommended changes and risks rather than attempting to apply them.",
+      "The judge and synthesis stages will compare this advice with other panel answers before a final response is produced.",
+    ].filter(Boolean).join("\n"),
+  };
 }
 
 function buildJudgeContext(original: Context, responses: FusionPanelResponse[], failed: FusionFailedModel[]): Context {
@@ -132,6 +140,7 @@ function buildJudgeContext(original: Context, responses: FusionPanelResponse[], 
     systemPrompt: [
       "You are the judge in an OpenRouter-style Fusion pipeline.",
       "Compare independent panel responses. Do not synthesize the final answer here.",
+      "Panel responses are non-mutating advice only: they were instructed not to call tools, edit files, write state, run commands, or take side-effecting actions.",
       "Return ONLY valid JSON with keys: consensus, contradictions, partial_coverage, unique_insights, blind_spots, unsupported_claims, confidence.",
       "Each list value must be a short, evidence-oriented string. confidence must be low, medium, or high.",
     ].join("\n"),
@@ -158,6 +167,7 @@ function buildSynthesisContext(original: Context, responses: FusionPanelResponse
     systemPrompt: [
       "You are the synthesis model in an OpenRouter-style Fusion pipeline.",
       "Write the final user-facing answer from the judge analysis and panel responses.",
+      "Treat panel responses as analysis-only advice. If changes are needed, recommend concrete next steps unless the surrounding Pi session explicitly asks a write-capable agent/tool to apply them.",
       "Prefer consensus, surface important contradictions/uncertainty when relevant, preserve unique high-value insights, and avoid unsupported claims.",
     ].join("\n"),
     messages: [{
