@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.3.3
+
+### Summary
+
+This release makes Fusion always discoverable via `/fusion` while keeping Fusion models opt-in by recipe presence, adds configure-first recipe management, and enforces analysis-only panel behavior so panel runs avoid side-effecting tool usage.
+
+### Changes
+
+- Make `/fusion` slash command available in all sessions without an enable flag.
+- Keep fusion model registration conditional on recipe availability (`fusion/<recipe-id>` providers register only when recipes load).
+- Add `/fusion configure add|edit|remove` with validation, persistence, and session-scoped model suggestions.
+- Update fusion docs and benchmark guidance to reflect always-on command + recipe-based model activation.
+- Enforce explicit no-tool/no-write/no-command/no-side-effect constraints in panel prompts, with judge/synthesis consuming panel outputs as advisory analysis.
+
+### Validation
+
+- `npm run check`
+- `npm test`
+- `npm test --workspace @fiale-plus/pi-rogue-fusion`
+- `npm run check --workspace @fiale-plus/pi-rogue-fusion`
+- PR `#152` review and clean merge check completed.
+
 ## 0.3.2
 
 ### Summary
