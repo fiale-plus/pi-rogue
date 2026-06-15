@@ -1,6 +1,6 @@
 {
   "name": "@fiale-plus/pi-rogue",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "Public Pi-Rogue package for bundled advisor, orchestration, and context broker logic.",
   "type": "module",
   "license": "MIT",
@@ -37,6 +37,7 @@
     "@fiale-plus/pi-core": "^0.1.0",
     "@fiale-plus/pi-rogue-advisor": "^0.1.0",
     "@fiale-plus/pi-rogue-context-broker": "^0.1.0",
+    "@fiale-plus/pi-rogue-fusion": "^0.1.0",
     "@fiale-plus/pi-rogue-orchestration": "^0.1.0",
     "@fiale-plus/pi-rogue-router": "^0.1.0"
   },
@@ -44,6 +45,7 @@
     "@fiale-plus/pi-core",
     "@fiale-plus/pi-rogue-advisor",
     "@fiale-plus/pi-rogue-context-broker",
+    "@fiale-plus/pi-rogue-fusion",
     "@fiale-plus/pi-rogue-orchestration",
     "@fiale-plus/pi-rogue-router"
   ],

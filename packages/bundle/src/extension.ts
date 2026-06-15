@@ -2,6 +2,7 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { registerAdvisor } from "@fiale-plus/pi-rogue-advisor";
 import { registerOrchestration } from "@fiale-plus/pi-rogue-orchestration";
 import { registerRouter } from "@fiale-plus/pi-rogue-router/extension";
+import { registerFusion } from "@fiale-plus/pi-rogue-fusion/extension";
 
 const DISABLED_VALUES = new Set(["0", "false", "no", "off"]);
 
@@ -22,6 +23,7 @@ export async function registerBundle(pi: ExtensionAPI): Promise<void> {
   registerAdvisor(pi);
   registerOrchestration(pi);
   registerRouter(pi);
+  registerFusion(pi);
 }
 
 export default function bundleExtension(pi: ExtensionAPI): Promise<void> {

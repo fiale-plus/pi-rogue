@@ -6,6 +6,7 @@ This package contains the executable in-memory bounded broker implementation:
 
 - `createInMemoryContextBroker()` stores artifacts behind stable `ctx://...` handles.
 - Lookups support handle, session, kind, tag, path, command prefix, branch, tier, and text filters.
+- Supported artifact kinds include tool outputs, diffs, file snapshots, subagent results, advisor briefs, memory notes, and compact `fusion_result` summaries.
 - Omitted summaries become metadata-only placeholders, keeping raw payloads out of prompt briefs by default.
 - Artifacts are classified as hot/warm/cold on publish; prompt briefs render hot first, warm second, and exclude cold unless explicitly queried.
 - Aging cools unpinned artifacts from hot to warm and from warm to cold; compaction remains cleanup/removal, not a separate cooling trigger.
@@ -65,6 +66,7 @@ For more aggressive prompt reduction, set `PI_CONTEXT_BROKER_REWRITE_THRESHOLD_B
 - Current-turn `context_lookup` results are left visible so the model can consume requested exact evidence once. Historical `context_lookup` results that already have a later assistant response are omitted from later prompt assembly to avoid recursive prompt growth.
 - Pi `excludeFromContext` bash entries are not backfilled or rewritten into broker prompts.
 - Basic secret redaction runs before broker storage and display for common token/password/API-key patterns.
+- Prompt rewrite threshold defaults to 8192 bytes. Configure it with `/context config threshold <bytes>` (autocomplete includes common presets), or set `PI_CONTEXT_BROKER_REWRITE_THRESHOLD_BYTES` before startup for an env override.
 - Optional global caps can be configured via env vars:
   - `PI_CONTEXT_BROKER_GLOBAL_MAX_RECORDS`
   - `PI_CONTEXT_BROKER_GLOBAL_MAX_BYTES`

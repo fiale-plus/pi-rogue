@@ -51,6 +51,22 @@ describe("createInMemoryContextBroker", () => {
     expect(broker.lookup({ sessionId: "s2", kind: "tool_output" })).toEqual([]);
   });
 
+  it("supports compact fusion_result artifacts", () => {
+    const broker = createInMemoryContextBroker({ briefBytes: 500 });
+    const artifact = broker.publish({
+      sessionId: "s",
+      kind: "fusion_result",
+      payload: JSON.stringify({ responses: ["raw panel output omitted from brief"] }),
+      summary: "Fusion local-self2 ok | consensus: use judge-and-synthesis | trace: .pi/fusion/runs/run.json",
+      tags: ["fusion", "ok"],
+      paths: [".pi/fusion/runs/run.json"],
+      tier: "warm",
+    });
+
+    expect(broker.lookup({ sessionId: "s", kind: "fusion_result", tag: "fusion" })).toEqual([artifact]);
+    expect(broker.renderBrief({ sessionId: "s" })).toContain("Fusion local-self2 ok");
+  });
+
   it("uses a metadata-only summary when callers omit summaries", () => {
     const broker = createInMemoryContextBroker({ briefBytes: 500 });
     const artifact = broker.publish({

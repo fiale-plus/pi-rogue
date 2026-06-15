@@ -4,7 +4,8 @@ export type ContextArtifactKind =
   | "file_snapshot"
   | "subagent_result"
   | "advisor_brief"
-  | "memory_note";
+  | "memory_note"
+  | "fusion_result";
 
 export type ContextArtifactTier = "hot" | "warm" | "cold";
 
