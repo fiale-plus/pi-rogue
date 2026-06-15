@@ -7,10 +7,11 @@ It stitches together (and bundles for a true single-package install):
 - `@fiale-plus/pi-core` (shared contracts/helpers)
 - `@fiale-plus/pi-rogue-advisor` (logic; direct releases paused)
 - `@fiale-plus/pi-rogue-context-broker` (context-broker runtime; registered by default with an env kill switch)
+- `@fiale-plus/pi-rogue-fusion` (opt-in OpenRouter-style composite model provider shipped in this package)
 - `@fiale-plus/pi-rogue-orchestration` (logic; direct releases paused)
 - `@fiale-plus/pi-rogue-router` (observe-only trajectory-router lab; direct releases paused)
 
-Direct installs of the advisor/orchestration packages are paused (marked private). All users and future releases go through the bundle. See `docs/release.md` and root `AGENTS.md` / `README.md` for the release policy.
+Direct installs of advisor/orchestration remain paused (marked private). Fusion ships through this published artefact as an opt-in provider. See `docs/release.md` and root `AGENTS.md` / `README.md` for the release policy.
 
 ## Install (recommended)
 
@@ -28,18 +29,16 @@ npm install
 
 ## Scope boundaries
 
-- **Lab / internal helpers are excluded from this bundle.**
 - The context-broker runtime is bundled and registered by default in the bundle.
 - Consumers can import the runtime through the bundle subpath: `@fiale-plus/pi-rogue/context-broker`.
 - Set `PI_CONTEXT_BROKER_ENABLED=false` before starting Pi to disable the `/context` command surface and prompt-load rewriting.
 - Optional durable broker storage can be enabled with `PI_CONTEXT_BROKER_DURABLE=true` or `PI_CONTEXT_BROKER_STORE_DIR=/path/to/store`; it defaults to SQLite/FTS and supports `PI_CONTEXT_BROKER_BACKEND=jsonl` for the legacy JSONL/blob backend.
-- `@fiale-plus/pi-rogue` is the only published surface for the logic.
-- Internal helper packages (`@fiale-plus/pi-rogue-guardrails`, `@fiale-plus/pi-rogue-brain`, `@fiale-plus/pi-rogue-repo-arch`) are maintained separately in the lab section and are not published.
 
 ## Command surface
 
-- Default: `/advisor`, `/goal`, `/loop`, `/autoresearch`, `/autoresearch-lab`, `/router` plus status/config/command paths (all provided via the bundle).
-- Context broker: enabled by default; `PI_CONTEXT_BROKER_ENABLED=false` disables `/context status`, `/context brief`, `/context lookup <handle|text>`, `/context pin <handle>`, `/context export <handle>`, and `/context prune` with autocomplete.
+- Default: `/advisor`, `/goal`, `/loop`, `/autoresearch`, `/autoresearch-lab`, `/router`, `/fusion` plus status/config/command paths (all provided via the bundle).
+- Context broker: enabled by default; `PI_CONTEXT_BROKER_ENABLED=false` disables `/context status`, `/context brief`, `/context lookup <handle|text>`, `/context pin <handle>`, `/context export <handle>`, `/context config threshold <bytes>`, and `/context prune` with autocomplete.
+- Fusion provider: disabled by default; `PI_ROGUE_FUSION_ENABLED=1` auto-registers configured `fusion/<recipe-id>` models, or use `/fusion reload` explicitly in a session.
 
 ### Router (offline)
 
@@ -57,10 +56,22 @@ For local artifact generation and sharpening:
 
 See `packages/router/README.md` for full usage, safety policy, schema, and autosharpen location.
 
+### Fusion (opt-in)
+
+The `/fusion` surface loads OpenRouter-style comparable-panel recipes. It keeps the language explicit:
+
+- panel: `analysis_models` answer the same task independently;
+- judge: structured comparison (`consensus`, `contradictions`, `partial_coverage`, `unique_insights`, `blind_spots`);
+- synthesis: final answer from judge analysis plus panel responses.
+
+Pi-agents/subagents and pi-intercom are reserved for a future `agent_fusion` recipe family (`analysis_agents`) rather than overloaded into `analysis_models`.
+
+See `packages/fusion/README.md`.
+
 ## Status
 
 - **Published:** yes (single artefact)
-- The advisor and orchestration packages continue to receive code changes in this repo; they ship inside bundle releases via `bundledDependencies`.
+- Advisor, orchestration, router, context broker, and Fusion code ship inside bundle releases via `bundledDependencies`.
 
 ## Release notes
 

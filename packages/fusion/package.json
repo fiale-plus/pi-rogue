@@ -1,0 +1,30 @@
+{
+  "name": "@fiale-plus/pi-rogue-fusion",
+  "version": "0.1.0",
+  "description": "Opt-in OpenRouter-style Fusion composite model provider for Pi-Rogue.",
+  "private": true,
+  "type": "module",
+  "license": "MIT",
+  "scripts": {
+    "check": "tsc -p ../../tsconfig.json --noEmit",
+    "test": "cd ../.. && vitest run packages/fusion/src/*.test.ts"
+  },
+  "main": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts",
+    "./extension": "./src/extension.ts"
+  },
+  "pi": {
+    "extensions": [
+      "./src/extension.ts"
+    ]
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "^0.74.0"
+  },
+  "files": [
+    "src",
+    "README.md",
+    "package.json"
+  ]
+}

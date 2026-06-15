@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import type { AgentToolResult } from "@earendil-works/pi-coding-agent";
 import type { AutocompleteItem } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
@@ -33,6 +33,8 @@ const DEFAULT_BRIEF_BYTES = 1_800;
 const DEFAULT_LOOKUP_BYTES = 12_000;
 const DEFAULT_SEARCH_BYTES = 2_000;
 const DEFAULT_REWRITE_THRESHOLD_BYTES = 8 * 1024;
+const REWRITE_THRESHOLD_ENV = "PI_CONTEXT_BROKER_REWRITE_THRESHOLD_BYTES";
+const REWRITE_THRESHOLD_PRESETS = [4 * 1024, 8 * 1024, 16 * 1024, 32 * 1024];
 const DEFAULT_TTL_MS = 24 * 60 * 60 * 1000;
 const DEFAULT_HOT_TO_WARM_MS = 2 * 60 * 60 * 1000;
 const DEFAULT_WARM_TO_COLD_MS = 12 * 60 * 60 * 1000;
@@ -44,12 +46,37 @@ function envFlag(name: string): boolean {
   return ENABLED_VALUES.has(String(process.env[name] ?? "").trim().toLowerCase());
 }
 
+function parseNonNegativeInt(value: unknown): number | undefined {
+  if (typeof value === "number") return Number.isInteger(value) && value >= 0 ? value : undefined;
+  if (typeof value !== "string" || !/^\d+$/.test(value.trim())) return undefined;
+  const parsed = Number.parseInt(value.trim(), 10);
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : undefined;
+}
+
 function envNonNegativeInt(name: string): number | undefined {
-  const raw = process.env[name];
-  if (!raw) return undefined;
-  const value = Number.parseInt(raw, 10);
-  if (!Number.isFinite(value) || value < 0) return undefined;
-  return value;
+  return parseNonNegativeInt(process.env[name]);
+}
+
+function contextBrokerConfigPath(ctx: Pick<ExtensionContext, "cwd"> | { cwd?: unknown }): string {
+  return join(String(ctx.cwd ?? process.cwd()), ".pi", "context-broker", "config.json");
+}
+
+function loadConfiguredRewriteThresholdBytes(ctx: Pick<ExtensionContext, "cwd"> | { cwd?: unknown }): number | undefined {
+  const path = contextBrokerConfigPath(ctx);
+  if (!existsSync(path)) return undefined;
+  try {
+    const parsed = JSON.parse(readFileSync(path, "utf8")) as { rewriteThresholdBytes?: unknown; rewrite_threshold_bytes?: unknown };
+    return parseNonNegativeInt(parsed.rewriteThresholdBytes ?? parsed.rewrite_threshold_bytes);
+  } catch {
+    return undefined;
+  }
+}
+
+function saveConfiguredRewriteThresholdBytes(ctx: Pick<ExtensionContext, "cwd"> | { cwd?: unknown }, value: number): string {
+  const path = contextBrokerConfigPath(ctx);
+  mkdirSync(dirname(path), { recursive: true });
+  writeFileSync(path, `${JSON.stringify({ rewriteThresholdBytes: value }, null, 2)}\n`);
+  return path;
 }
 
 function isEnvEnabled(): boolean {
@@ -339,10 +366,20 @@ export async function registerContextBrokerBeta(pi: ExtensionAPI, options: Conte
   const briefBytes = options.briefBytes ?? DEFAULT_BRIEF_BYTES;
   const lookupBytes = options.lookupBytes ?? DEFAULT_LOOKUP_BYTES;
   const searchBytes = options.searchBytes ?? DEFAULT_SEARCH_BYTES;
-  const rewriteThresholdBytes =
-    options.rewriteThresholdBytes
-    ?? envNonNegativeInt("PI_CONTEXT_BROKER_REWRITE_THRESHOLD_BYTES")
+  const rewriteThresholdOption = options.rewriteThresholdBytes;
+  const rewriteThresholdEnv = envNonNegativeInt(REWRITE_THRESHOLD_ENV);
+  let rewriteThresholdBytes =
+    rewriteThresholdOption
+    ?? rewriteThresholdEnv
+    ?? loadConfiguredRewriteThresholdBytes({ cwd: process.cwd() })
     ?? DEFAULT_REWRITE_THRESHOLD_BYTES;
+  let rewriteThresholdSource = rewriteThresholdOption !== undefined
+    ? "option"
+    : rewriteThresholdEnv !== undefined
+      ? "env"
+      : loadConfiguredRewriteThresholdBytes({ cwd: process.cwd() }) !== undefined
+        ? "config"
+        : "default";
   const durable = options.durable ?? (envFlag("PI_CONTEXT_BROKER_DURABLE") || Boolean(options.storeDir ?? process.env.PI_CONTEXT_BROKER_STORE_DIR));
   const brokerOptions = {
     maxRecords: options.maxRecords ?? 64,
@@ -397,6 +434,21 @@ export async function registerContextBrokerBeta(pi: ExtensionAPI, options: Conte
     statusCalls: 0,
     pruneCalls: 0,
   };
+
+  function refreshRewriteThresholdFromConfig(ctx: Pick<ExtensionContext, "cwd"> | { cwd?: unknown }): void {
+    if (rewriteThresholdOption !== undefined || rewriteThresholdEnv !== undefined) return;
+    const configured = loadConfiguredRewriteThresholdBytes(ctx);
+    rewriteThresholdBytes = configured ?? DEFAULT_REWRITE_THRESHOLD_BYTES;
+    rewriteThresholdSource = configured !== undefined ? "config" : "default";
+  }
+
+  function formatContextBrokerConfig(ctx: Pick<ExtensionContext, "cwd"> | { cwd?: unknown }): string {
+    return [
+      `Context broker config: rewriteThresholdBytes=${rewriteThresholdBytes} (source=${rewriteThresholdSource})`,
+      `config: ${contextBrokerConfigPath(ctx)}`,
+      `env override: ${REWRITE_THRESHOLD_ENV}`,
+    ].join("\n");
+  }
 
   function recordContextRewrite(rawBytes: number, replacementBytes: number): void {
     routingTelemetry.contextHookRewriteRawBytes += Math.max(0, rawBytes);
@@ -577,6 +629,10 @@ export async function registerContextBrokerBeta(pi: ExtensionAPI, options: Conte
     renderBrief: currentBrief,
     lookup: broker.lookup,
     status: broker.status,
+    publish: (input: Omit<Parameters<typeof broker.publish>[0], "sessionId"> & { sessionId?: string }) => broker.publish({
+      ...input,
+      sessionId: input.sessionId ?? activeSessionId,
+    }),
   };
 
   const contextActions: AutocompleteItem[] = [
@@ -585,6 +641,7 @@ export async function registerContextBrokerBeta(pi: ExtensionAPI, options: Conte
     { value: "lookup ", label: "lookup", description: "Lookup by ctx:// handle or current-session text" },
     { value: "pin ", label: "pin", description: "Pin an artifact by ctx:// handle or id" },
     { value: "export ", label: "export", description: "Export full payload for a ctx:// handle or id" },
+    { value: "config ", label: "config", description: "Show or set context broker config" },
     { value: "prune", label: "prune", description: "Run TTL/cap pruning now" },
   ];
 
@@ -621,10 +678,31 @@ export async function registerContextBrokerBeta(pi: ExtensionAPI, options: Conte
       return items.length ? items : null;
     }
 
+    if (action === "config") {
+      const rest = restParts.join(" ");
+      if (!rest || !rest.includes(" ")) {
+        const items = [
+          { value: "config", label: "config", description: "Show context broker config" },
+          { value: "config threshold ", label: "threshold", description: "Set rewrite threshold in bytes" },
+        ].filter((item) => item.value.trim().startsWith(`config ${rest}`.trimEnd()));
+        return items.length ? items : null;
+      }
+      if (restParts[0] === "threshold") {
+        const query = `config threshold ${restParts.slice(1).join(" ")}`.trimEnd();
+        const items = REWRITE_THRESHOLD_PRESETS.map((value) => ({
+          value: `config threshold ${value}`,
+          label: `${value}`,
+          description: value === DEFAULT_REWRITE_THRESHOLD_BYTES ? "default 8 KiB" : `set rewrite threshold to ${value} bytes`,
+        })).filter((item) => item.value.startsWith(query));
+        return items.length ? items : null;
+      }
+    }
+
     return null;
   }
 
   pi.on("session_start", async (_event, ctx) => {
+    refreshRewriteThresholdFromConfig(ctx);
     const { added, scanned, errors } = backfillSessionArtifacts(ctx);
     ctx.ui.setStatus?.("context-broker", "ctx:on");
     ctx.ui.notify(
@@ -650,6 +728,7 @@ export async function registerContextBrokerBeta(pi: ExtensionAPI, options: Conte
   });
 
   pi.on("context", async (event, ctx) => {
+    refreshRewriteThresholdFromConfig(ctx);
     activeSessionId = sessionIdFor(ctx);
     routingTelemetry.contextHookCalls += 1;
     const toolInputs = collectToolInputs(event.messages);
@@ -796,7 +875,7 @@ export async function registerContextBrokerBeta(pi: ExtensionAPI, options: Conte
       text: Type.Optional(Type.String({ description: "Current-session text search over broker summaries and indexed payload text" })),
       path: Type.Optional(Type.String({ description: "File or directory path filter" })),
       tag: Type.Optional(Type.String({ description: "Artifact tag filter" })),
-      kind: Type.Optional(Type.String({ enum: ["tool_output", "diff", "file_snapshot", "subagent_result", "advisor_brief", "memory_note"] })),
+      kind: Type.Optional(Type.String({ enum: ["tool_output", "diff", "file_snapshot", "subagent_result", "advisor_brief", "memory_note", "fusion_result"] })),
       tier: Type.Optional(Type.String({ enum: ["hot", "warm", "cold"] })),
       limit: Type.Optional(Type.Number({ minimum: 1, maximum: 10, description: "Maximum artifacts to return" })),
     }),
@@ -833,7 +912,7 @@ export async function registerContextBrokerBeta(pi: ExtensionAPI, options: Conte
   });
 
   pi.registerCommand("context", {
-    description: "Inspect the context broker: status | brief | lookup <handle-or-text> | pin <handle-or-id> | export <handle-or-id> | prune",
+    description: "Inspect the context broker: status | brief | lookup <handle-or-text> | pin <handle-or-id> | export <handle-or-id> | config | prune",
     getArgumentCompletions: contextArgumentCompletions,
     handler: async (args, ctx) => {
       activeSessionId = sessionIdFor(ctx);
@@ -841,10 +920,11 @@ export async function registerContextBrokerBeta(pi: ExtensionAPI, options: Conte
       const query = rest.join(" ");
 
       if (action === "status") {
+        refreshRewriteThresholdFromConfig(ctx);
         routingTelemetry.statusCalls += 1;
         const status = broker.status();
         ctx.ui.notify(
-          `Context broker: enabled, session=${activeSessionId}, records=${status.records}/${status.maxRecords}, bytes=${status.bytes}/${status.maxBytes}, globalCaps=records:${capText(status.globalMaxRecords)} bytes:${capText(status.globalMaxBytes)}, tiers=hot:${status.hotRecords}/${status.hotBytes} warm:${status.warmRecords}/${status.warmBytes} cold:${status.coldRecords}/${status.coldBytes}, pinned=${status.pinnedRecords}/${status.pinnedBytes} bytes`,
+          `Context broker: enabled, session=${activeSessionId}, records=${status.records}/${status.maxRecords}, bytes=${status.bytes}/${status.maxBytes}, rewriteThresholdBytes=${rewriteThresholdBytes}(${rewriteThresholdSource}), globalCaps=records:${capText(status.globalMaxRecords)} bytes:${capText(status.globalMaxBytes)}, tiers=hot:${status.hotRecords}/${status.hotBytes} warm:${status.warmRecords}/${status.warmBytes} cold:${status.coldRecords}/${status.coldBytes}, pinned=${status.pinnedRecords}/${status.pinnedBytes} bytes`,
           "info",
         );
         ctx.ui.notify(formatRoutingTelemetry(), "info");
@@ -909,6 +989,31 @@ export async function registerContextBrokerBeta(pi: ExtensionAPI, options: Conte
         return;
       }
 
+      if (action === "config") {
+        const [key, rawValue] = rest;
+        if (!key) {
+          refreshRewriteThresholdFromConfig(ctx);
+          ctx.ui.notify(formatContextBrokerConfig(ctx), "info");
+          return;
+        }
+        if (key === "threshold") {
+          const value = parseNonNegativeInt(rawValue);
+          if (value === undefined) {
+            ctx.ui.notify("Usage: /context config threshold <non-negative bytes>", "warning");
+            return;
+          }
+          const path = saveConfiguredRewriteThresholdBytes(ctx, value);
+          if (rewriteThresholdOption === undefined && rewriteThresholdEnv === undefined) {
+            rewriteThresholdBytes = value;
+            rewriteThresholdSource = "config";
+          }
+          ctx.ui.notify(`Context broker config updated: rewriteThresholdBytes=${value}\nconfig: ${path}${rewriteThresholdSource !== "config" ? `\nNote: current ${rewriteThresholdSource} override still takes precedence this session.` : ""}`, "info");
+          return;
+        }
+        ctx.ui.notify("Usage: /context config threshold <non-negative bytes>", "warning");
+        return;
+      }
+
       if (action === "prune") {
         routingTelemetry.pruneCalls += 1;
         const status = broker.prune();
@@ -916,7 +1021,7 @@ export async function registerContextBrokerBeta(pi: ExtensionAPI, options: Conte
         return;
       }
 
-      ctx.ui.notify("Usage: /context status | brief | lookup <handle-or-text> | pin <handle-or-id> | export <handle-or-id> | prune", "warning");
+      ctx.ui.notify("Usage: /context status | brief | lookup <handle-or-text> | pin <handle-or-id> | export <handle-or-id> | config | prune", "warning");
     },
   });
 }

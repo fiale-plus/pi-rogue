@@ -81,8 +81,10 @@ describe("context broker extension enablement", () => {
       "lookup",
       "pin",
       "export",
+      "config",
       "prune",
     ]);
+    expect(command.getArgumentCompletions("config threshold ")?.map((item: any) => item.value)).toContain("config threshold 8192");
   });
 
   it("backfills current branch toolResult and bashExecution entries idempotently", async () => {
@@ -594,6 +596,37 @@ lookupBytes: 500,
 
     expect(result.content[0].text).toContain("requires a focused filter");
     expect(result.content[0].text).not.toContain("payload must not dump");
+  });
+
+  it("allows /context config threshold to tune rewrite threshold", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "ctx-broker-config-test-"));
+    try {
+      const { pi, handlers, commands } = createPiMock();
+      registerContextBrokerBeta(pi);
+      const { ctx, notifications } = createCtx();
+      ctx.cwd = dir;
+
+      await runHandlers(handlers, "session_start", { type: "session_start" }, ctx);
+      await commands.get("context").handler("status", ctx);
+      expect(notifications.at(-2)?.message).toContain("rewriteThresholdBytes=8192(default)");
+
+      await commands.get("context").handler("config threshold 40", ctx);
+      await commands.get("context").handler("config", ctx);
+      expect(notifications.at(-1)?.message).toContain("rewriteThresholdBytes=40 (source=config)");
+
+      const raw = "CONFIG_THRESHOLD_" + "x".repeat(100);
+      const result = await handlers.get("context")?.[0]({
+        type: "context",
+        messages: [
+          { role: "toolResult", toolCallId: "configured-large", toolName: "bash", content: [{ type: "text", text: raw }], isError: false, timestamp: 1 },
+        ],
+      }, ctx);
+
+      expect(result.messages[0].content[0].text).toContain("Context broker artifact: ctx://");
+      expect(result.messages[0].content[0].text).not.toContain(raw);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it("rewrites large historical tool results in context to live broker handles", async () => {

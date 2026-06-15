@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.3.1
+
+### Summary
+
+This patch release ships opt-in model-only Fusion in the published `@fiale-plus/pi-rogue` artefact and tightens context-broker configurability.
+
+### Changes
+
+- Add the opt-in `fusion/*` comparable-panel provider path with local recipes, compact broker artifacts, and benchmark workflow.
+- Add `/context config threshold <bytes>` with autocomplete for the context-broker prompt rewrite threshold.
+- Keep the existing default rewrite threshold at 8192 bytes and preserve env/option override precedence.
+
+### Validation
+
+- `npm run check`
+- `npm test`
+- feature-loop-style reviewer pass: no blockers/majors
+
 ## 0.3.0
 
 ### Summary
