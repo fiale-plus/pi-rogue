@@ -214,7 +214,7 @@ function initPreset(dir: string, synthesisModel: string, sparkModel: string): vo
   console.log(`record manual scores in ${path.join(dir, "runs.jsonl")}`);
   console.log("");
   console.log("Run locally with:");
-  console.log(`  PI_ROGUE_FUSION_ENABLED=1 PI_ROGUE_FUSION_RECIPES=${path.join(dir, "recipes.json")} pi`);
+  console.log(`  PI_ROGUE_FUSION_RECIPES=${path.join(dir, "recipes.json")} pi`);
   console.log("");
   console.log("Compare variants per case:");
   console.log(`  baseline: ${synthesisModel}`);
@@ -309,7 +309,6 @@ function commandFor(variant: BenchmarkVariant, prompt: string, dir: string): { c
     args,
     env: {
       ...process.env,
-      PI_ROGUE_FUSION_ENABLED: "1",
       PI_ROGUE_FUSION_RECIPES: recipesPath,
     },
   };

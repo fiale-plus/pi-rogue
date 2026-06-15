@@ -1,7 +1,7 @@
 {
   "name": "@fiale-plus/pi-rogue-fusion",
   "version": "0.1.0",
-  "description": "Opt-in OpenRouter-style Fusion composite model provider for Pi-Rogue.",
+  "description": "OpenRouter-style Fusion composite model provider for Pi-Rogue.",
   "private": true,
   "type": "module",
   "license": "MIT",

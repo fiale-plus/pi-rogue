@@ -1,0 +1,159 @@
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, describe, expect, it } from "vitest";
+import { registerFusion } from "./extension.js";
+
+function createPiMock() {
+  const commands = new Map<string, any>();
+  const handlers = new Map<string, any[]>();
+  const providers = new Map<string, any>();
+  const unregistered: string[] = [];
+  const pi: any = {
+    registerCommand(name: string, options: any) {
+      commands.set(name, options);
+    },
+    registerProvider(name: string, provider: any) {
+      providers.set(name, provider);
+    },
+    unregisterProvider(name: string) {
+      unregistered.push(name);
+      providers.delete(name);
+    },
+    on(name: string, handler: any) {
+      handlers.set(name, [...(handlers.get(name) ?? []), handler]);
+    },
+  };
+  return { pi, commands, handlers, providers, unregistered };
+}
+
+function createCtx(cwd: string, notifications: Array<{ message: string; type?: string }> = []) {
+  return {
+    cwd,
+    ui: {
+      notify(message: string, type?: string) {
+        notifications.push({ message, type });
+      },
+    },
+    modelRegistry: {
+      getAvailable() {
+        return [
+          { provider: "openai-codex", id: "gpt-5.5", input: ["text"] },
+          { provider: "openai-codex", id: "gpt-5.3-codex-spark", input: ["text"] },
+          { provider: "image-only", id: "paint", input: ["image"] },
+          { provider: "fusion", id: "existing", input: ["text"] },
+        ];
+      },
+    },
+  };
+}
+
+describe("fusion extension", () => {
+  const oldRecipes = process.env.PI_ROGUE_FUSION_RECIPES;
+  const oldTraceDir = process.env.PI_ROGUE_FUSION_TRACE_DIR;
+
+  afterEach(() => {
+    if (oldRecipes === undefined) delete process.env.PI_ROGUE_FUSION_RECIPES;
+    else process.env.PI_ROGUE_FUSION_RECIPES = oldRecipes;
+    if (oldTraceDir === undefined) delete process.env.PI_ROGUE_FUSION_TRACE_DIR;
+    else process.env.PI_ROGUE_FUSION_TRACE_DIR = oldTraceDir;
+  });
+
+  it("registers the /fusion command by default but no provider when no recipes exist", () => {
+    delete process.env.PI_ROGUE_FUSION_RECIPES;
+    const cwd = mkdtempSync(join(tmpdir(), "fusion-no-recipes-"));
+    try {
+      const { pi, commands, handlers, providers, unregistered } = createPiMock();
+      registerFusion(pi);
+      expect(commands.has("fusion")).toBe(true);
+      handlers.get("session_start")?.[0]?.({}, createCtx(cwd));
+      expect(providers.has("fusion")).toBe(false);
+      expect(unregistered).toContain("fusion");
+    } finally {
+      rmSync(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it("auto-registers fusion models when recipes exist without requiring an enable env var", () => {
+    const cwd = mkdtempSync(join(tmpdir(), "fusion-recipes-"));
+    try {
+      const path = join(cwd, ".pi", "fusion", "recipes.json");
+      mkdirSync(join(cwd, ".pi", "fusion"), { recursive: true });
+      writeFileSync(path, JSON.stringify({ recipes: [{
+        schema: "pi-rogue.fusion.recipe.v1",
+        kind: "fusion",
+        id: "hard-judge",
+        model: "openai-codex/gpt-5.5",
+        analysis_models: ["openai-codex/gpt-5.5", "openai-codex/gpt-5.3-codex-spark"],
+      }] }, null, 2));
+
+      const { pi, handlers, providers } = createPiMock();
+      registerFusion(pi);
+      handlers.get("session_start")?.[0]?.({}, createCtx(cwd));
+
+      expect(providers.has("fusion")).toBe(true);
+      expect(providers.get("fusion").models.map((model: any) => model.id)).toEqual(["hard-judge"]);
+    } finally {
+      rmSync(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it("/fusion configure adds a recipe and guides reload/router next steps", async () => {
+    const cwd = mkdtempSync(join(tmpdir(), "fusion-configure-"));
+    const notifications: Array<{ message: string; type?: string }> = [];
+    try {
+      const { pi, commands } = createPiMock();
+      registerFusion(pi);
+      const fusion = commands.get("fusion");
+      await fusion.handler(
+        "configure add hard-judge openai-codex/gpt-5.5 openai-codex/gpt-5.5 openai-codex/gpt-5.3-codex-spark --tokens 1200 --temperature 0.4",
+        createCtx(cwd, notifications),
+      );
+
+      const path = join(cwd, ".pi-rogue", "fusion", "recipes.json");
+      const saved = JSON.parse(readFileSync(path, "utf8"));
+      expect(saved.recipes[0]).toMatchObject({
+        id: "hard-judge",
+        model: "openai-codex/gpt-5.5",
+        analysis_models: ["openai-codex/gpt-5.5", "openai-codex/gpt-5.3-codex-spark"],
+        max_completion_tokens: 1200,
+        temperature: 0.4,
+      });
+      expect(notifications.at(-1)?.message).toContain("Run /fusion reload or restart Pi");
+      expect(notifications.at(-1)?.message).toContain("/router models");
+    } finally {
+      rmSync(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it("offers configure and scoped model completions", () => {
+    const cwd = mkdtempSync(join(tmpdir(), "fusion-completions-"));
+    try {
+      const { pi, commands } = createPiMock();
+      registerFusion(pi);
+      const fusion = commands.get("fusion");
+      expect(fusion.getArgumentCompletions("con", createCtx(cwd)).map((item: any) => item.value)).toContain("configure");
+      expect(fusion.getArgumentCompletions("configure ", createCtx(cwd)).map((item: any) => item.value)).toEqual(expect.arrayContaining(["add", "edit", "remove", "help"]));
+      expect(fusion.getArgumentCompletions("configure add hard open", createCtx(cwd)).map((item: any) => item.value)).toEqual(expect.arrayContaining(["openai-codex/gpt-5.5", "openai-codex/gpt-5.3-codex-spark"]));
+    } finally {
+      rmSync(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it("/fusion configure help lists scoped session models", async () => {
+    const cwd = mkdtempSync(join(tmpdir(), "fusion-help-"));
+    const notifications: Array<{ message: string; type?: string }> = [];
+    try {
+      const { pi, commands } = createPiMock();
+      registerFusion(pi);
+      await commands.get("fusion").handler("configure", createCtx(cwd, notifications));
+      const message = notifications.at(-1)?.message ?? "";
+      expect(message).toContain("openai-codex/gpt-5.5");
+      expect(message).toContain("openai-codex/gpt-5.3-codex-spark");
+      expect(message).not.toContain("image-only/paint");
+      expect(message).toContain("Natural-language configure intent will be added later");
+    } finally {
+      rmSync(cwd, { recursive: true, force: true });
+    }
+  });
+});
