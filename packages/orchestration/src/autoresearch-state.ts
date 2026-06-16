@@ -66,5 +66,5 @@ export function formatResearchState(state: ResearchState): string {
 
   const cycles = state.cycles ?? 0;
   const last = state.lastResult ? `, last=${state.lastResult}` : "";
-  return `${label(state.kind)} active: ${truncate(state.instruction, 160)} — /loop ${state.interval || DEFAULT_RESEARCH_INTERVAL}; cycles=${cycles}${last}`;
+  return `${label(state.kind)} active: ${truncate(state.instruction, 160)} — /pi-rogue-orchestration loop ${state.interval || DEFAULT_RESEARCH_INTERVAL}; cycles=${cycles}${last}`;
 }

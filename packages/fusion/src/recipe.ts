@@ -1,4 +1,5 @@
 import { existsSync, readFileSync } from "node:fs";
+import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import type { FusionRecipe, ParsedModelRef } from "./types.js";
 
@@ -165,13 +166,11 @@ export function validateFusionRecipes(raw: unknown): { ok: true; recipes: Fusion
   return errors.length > 0 ? { ok: false, errors } : { ok: true, recipes };
 }
 
-export function fusionRecipePaths(cwd: string, env: NodeJS.ProcessEnv = process.env): string[] {
+export function fusionRecipePaths(_cwd: string, env: NodeJS.ProcessEnv = process.env): string[] {
   const configured = cleanString(env.PI_ROGUE_FUSION_RECIPES);
   return [
     ...(configured ? [resolve(configured)] : []),
-    resolve(cwd, ".pi-rogue/fusion/recipes.json"),
-    resolve(cwd, ".pi/fusion/recipes.json"),
-    join(process.env.HOME ?? "", ".pi", "agent", "pi-rogue", "fusion", "recipes.json"),
+    join(homedir(), ".pi", "agent", "pi-rogue", "fusion", "recipes.json"),
   ].filter(Boolean);
 }
 
@@ -179,7 +178,7 @@ export function defaultFusionRecipeWritePath(cwd: string, env: NodeJS.ProcessEnv
   const configured = cleanString(env.PI_ROGUE_FUSION_RECIPES);
   if (configured) return resolve(configured);
   const paths = fusionRecipePaths(cwd, env);
-  return paths.find((path) => existsSync(path)) ?? paths[0] ?? resolve(cwd, ".pi-rogue/fusion/recipes.json");
+  return paths.find((path) => existsSync(path)) ?? paths[0] ?? join(homedir(), ".pi", "agent", "pi-rogue", "fusion", "recipes.json");
 }
 
 export function loadFusionRecipes(cwd: string, env: NodeJS.ProcessEnv = process.env): { recipes: FusionRecipe[]; path?: string; errors: string[] } {

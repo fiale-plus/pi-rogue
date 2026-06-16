@@ -41,21 +41,56 @@ function squish(text: unknown, max = 140): string {
   return value.length <= max ? value : `${value.slice(0, max - 1).trimEnd()}…`;
 }
 
+type ProfileRole = keyof RouterProfile;
+
+const ROLE_FALLBACKS: Partial<Record<ProfileRole, ProfileRole>> = {
+  explore: "worker",
+  debug_diagnose: "smart",
+  review: "reviewer",
+  verify: "worker",
+};
+
 export function actionRole(action: RouteAction): RouterObserveSummary["role"] {
   switch (action) {
     case "continue_current": return "current";
     case "continue_local": return "worker";
     case "summarize_context": return "worker";
-    case "run_verifier": return "worker";
+    case "run_verifier": return "verify";
     case "ask_micro_hint": return "smart";
     case "escalate_plan_critique": return "smart";
-    case "escalate_debug_diagnosis": return "smart";
-    case "escalate_diff_review": return "reviewer";
+    case "escalate_debug_diagnosis": return "debug_diagnose";
+    case "escalate_diff_review": return "review";
     case "delegate_full_step": return "smart";
     case "spawn_subagent": return "smart";
     case "merge_subagent_result": return "current";
     case "stop_and_ask_user": return "none";
   }
+}
+
+function roleFallback(role: ProfileRole): ProfileRole | undefined {
+  return ROLE_FALLBACKS[role];
+}
+
+export function resolvedProfileTarget(role: ProfileRole, profile: RouterProfile): { targetModel?: string; fallbackRole?: ProfileRole } {
+  const direct = profile[role];
+  if (direct) return { targetModel: direct };
+  const fallback = roleFallback(role);
+  return fallback ? { targetModel: profile[fallback], fallbackRole: fallback } : {};
+}
+
+export function formatLiveRoleMap(profile: RouterProfile): string[] {
+  const line = (label: string, role: ProfileRole): string => {
+    const resolved = resolvedProfileTarget(role, profile);
+    const fallback = resolved.fallbackRole ? ` (fallback: ${resolved.fallbackRole})` : "";
+    return `${label}: ${role}=${resolved.targetModel ?? "unset"}${fallback}`;
+  };
+  return [
+    line("continue/summarize", "worker"),
+    line("verify", "verify"),
+    line("smart hint/plan/delegate", "smart"),
+    line("debug diagnosis", "debug_diagnose"),
+    line("diff review", "review"),
+  ];
 }
 
 function modelLeaf(model: string): string {
@@ -84,7 +119,7 @@ export function modelsMatch(current: string | undefined, target: string | undefi
 function targetForRole(role: RouterObserveSummary["role"], profile: RouterProfile, currentModel?: string): string | undefined {
   if (role === "current") return currentModel;
   if (role === "none") return undefined;
-  return profile[role];
+  return resolvedProfileTarget(role, profile).targetModel;
 }
 
 export function summarizeRouterDecision(checkpoint: RouterCheckpoint, decision: RouteDecision, config: RouterConfig): RouterObserveSummary {

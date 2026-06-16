@@ -355,7 +355,7 @@ describe("advisor two-agent convergence", () => {
   });
 
   it("renders manual advisor answers as advisor custom messages", async () => {
-    expect(commands.advisor).toBeTruthy();
+    expect(commands["pi-rogue-advisor"]).toBeTruthy();
 
     completeSimpleMock.mockResolvedValue({
       content: [{
@@ -364,7 +364,7 @@ describe("advisor two-agent convergence", () => {
       }],
     });
 
-    await commands.advisor.handler("should we merge this pr?", ctx);
+    await commands["pi-rogue-advisor"].handler("should we merge this pr?", ctx);
 
     expect(sendMessageMock).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -380,13 +380,13 @@ describe("advisor two-agent convergence", () => {
   });
 
   it("includes broker briefs in manual advisor context when available", async () => {
-    expect(commands.advisor).toBeTruthy();
+    expect(commands["pi-rogue-advisor"]).toBeTruthy();
     piMock.__piRogueContextBroker = {
       renderBrief: () => "## Context Broker\nHot:\n- ctx://session/s/tool_output/abc/ctx-1 summary=\"npm test passed\"",
     };
     completeSimpleMock.mockResolvedValue({ content: [{ type: "text", text: "Use the broker handle as evidence." }] });
 
-    await commands.advisor.handler("should we use broker context", ctx);
+    await commands["pi-rogue-advisor"].handler("should we use broker context", ctx);
 
     const messages = completeSimpleMock.mock.calls.at(-1)?.[1]?.messages;
     const promptText = JSON.stringify(messages ?? completeSimpleMock.mock.calls.at(-1));

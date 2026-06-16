@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { resetAdvisorSessionContext, setAdvisorCheckinsEnabled } from "./advisor-checkins.js";
 import { endGoalCheck } from "./goal-resolution.js";
-import { activeGoal, clearGoal, completeActiveGoal, registerGoal, setGoal, startGoalProcessing } from "./goal.js";
+import { activeGoal, clearGoal, completeActiveGoal, handleGoalCommand, registerGoal, setGoal, startGoalProcessing } from "./goal.js";
 import { featureFile, readText, sessionFile, writeText } from "./internal.js";
 
 vi.mock("./advisor-checkins.js", () => ({
@@ -153,21 +153,13 @@ describe("goal processing", () => {
     expect(setAdvisorCheckinsEnabledMock).toHaveBeenCalledWith(true);
   });
 
-  it("disables advisor check-ins when /goal clear stops the loop", async () => {
-    let handler: ((args: string, ctx: any) => Promise<void>) | undefined;
-    const pi = {
-      on: () => undefined,
-      registerCommand: (name: string, command: { handler: (args: string, ctx: any) => Promise<void> }) => {
-        if (name === "goal") handler = command.handler;
-      },
-      sendUserMessage: () => undefined,
-    } as any;
+  it("disables advisor check-ins when orchestration goal clear stops the loop", async () => {
+    const pi = { sendUserMessage: () => undefined } as any;
     const ctx = fakeCtx();
 
-    registerGoal(pi);
     setGoal(ctx, "clear lifecycle test");
     setAdvisorCheckinsEnabledMock.mockClear();
-    await handler?.("clear", ctx);
+    await handleGoalCommand(pi, "clear", ctx);
 
     expect(setAdvisorCheckinsEnabledMock).toHaveBeenCalledWith(false);
   });

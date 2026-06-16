@@ -6,6 +6,7 @@ import {
   formatProfile,
   loadRouterConfig,
   routerConfigPath,
+  routerConfigSources,
   routerEventsPath,
   saveRouterConfig,
   setRouterMode,
@@ -13,47 +14,52 @@ import {
   setRouterProfile,
   type RouterConfig,
 } from "./config.js";
-import { observeRouterTurn } from "./observe.js";
+import { formatLiveRoleMap, observeRouterTurn } from "./observe.js";
 import { routerArgumentCompletions } from "./completions.js";
+
+function roleMapText(profile: ReturnType<typeof activeProfile>): string {
+  return formatLiveRoleMap(profile).map((line) => `  ${line}`).join("\n");
+}
 
 function statusText(ctx: any, config: RouterConfig): string {
   const profile = activeProfile(config);
+  const sources = routerConfigSources(ctx);
   return [
     `router: ${config.enabled ? "on" : "off"}`,
     `model routing: ${config.mode === "auto_model" ? "auto_model (applies model switches only)" : "observe (recommendations only)"}`,
     `print: ${config.print}`,
     `profile: ${config.activeProfile}`,
     `worker: ${profile.worker}`,
-    `smart: ${profile.smart}`,
-    `teacher: ${profile.teacher}`,
-    `reviewer: ${profile.reviewer}`,
+    `  smart/review: ${profile.smart}`,
+    roleMapText(profile),
     `config: ${routerConfigPath(ctx)}`,
+    `config sources: ${sources.active.length ? sources.active.join(" → ") : "built-in defaults"}`,
+    `global config: ${sources.global}`,
     `ledger: ${routerEventsPath(ctx)}`,
   ].join("\n");
 }
 
 function notifyProfile(ctx: any, config: RouterConfig, prefix = "router profile"): void {
   const profile = activeProfile(config);
-  ctx.ui.notify(`${prefix}: ${config.activeProfile}\nworker: ${profile.worker}\nsmart: ${profile.smart}\nteacher: ${profile.teacher}\nreviewer: ${profile.reviewer}`, "info");
 }
 
 function helpText(ctx: any, config: RouterConfig): string {
   return [
-    "router command tree:",
-    "  /router status                 show current router state",
-    "  /router help                   show this help",
-    "  /router on                     enable router using current explicit mode",
-    "  /router off                    disable router",
-    "  /router mode observe           recommendations only",
-    "  /router mode auto_model        apply model switches only",
-    "  /router profile <name>         choose active profile",
-    "  /router print mismatch_only    notify only mismatches",
-    "  /router print all              notify every router decision",
-    "  /router print off              suppress observe notifications",
-    "  /router models                 show active role → model mapping",
-    "  /router profiles               list configured profiles",
-    "  /router cycle                  cycle to next profile",
-    "  /router configure              create/show config",
+    "pi-rogue-router command tree:",
+    "  /pi-rogue-router status                 show current router state",
+    "  /pi-rogue-router help                   show this help",
+    "  /pi-rogue-router on                     enable router using current explicit mode",
+    "  /pi-rogue-router off                    disable router",
+    "  /pi-rogue-router mode observe           recommendations only",
+    "  /pi-rogue-router mode auto_model        apply model switches only",
+    "  /pi-rogue-router profile <name>         choose active profile",
+    "  /pi-rogue-router print mismatch_only    notify only mismatches",
+    "  /pi-rogue-router print all              notify every router decision",
+    "  /pi-rogue-router print off              suppress observe notifications",
+    "  /pi-rogue-router models                 show active role → model mapping",
+    "  /pi-rogue-router profiles               list configured profiles",
+    "  /pi-rogue-router cycle                  cycle to next profile",
+    "  /pi-rogue-router configure              create/show config",
     "",
     "safety: observe is recommendations only; auto_model applies model switches only, never agent/subagent/tool routing.",
     "",
@@ -73,8 +79,8 @@ export function registerRouter(pi: ExtensionAPI): void {
   if (p.__piRogueRouterRegistered) return;
   p.__piRogueRouterRegistered = true;
 
-  pi.registerCommand("router", {
-    description: "Trajectory router. Usage: /router status|help|on|off|mode|profile|print|profiles|models|configure|cycle. Default observe-only; auto_model applies model switches only.",
+  pi.registerCommand("pi-rogue-router", {
+    description: "Trajectory router. Usage: /pi-rogue-router status|help|on|off|mode|profile|print|profiles|models|configure|cycle. Default observe-only; auto_model applies model switches only.",
     getArgumentCompletions: (prefix: string, ctx?: any) => routerArgumentCompletions(prefix, ctx),
     handler: async (args, ctx) => {
       const input = String(args ?? "").trim();
@@ -89,9 +95,9 @@ export function registerRouter(pi: ExtensionAPI): void {
         setEnabled(ctx, false);
         return;
       }
-      if (cmd === "configure" || cmd === "config") {
+      if (cmd === "configure") {
         const config = ensureRouterConfig(ctx);
-        ctx.ui.notify(["router config ready", "", "next: /router mode …, /router profile …, /router print …", "", statusText(ctx, config)].join("\n"), "info");
+        ctx.ui.notify(["router config ready", "", "next: /pi-rogue-router mode …, /pi-rogue-router profile …, /pi-rogue-router print …", "", statusText(ctx, config)].join("\n"), "info");
         return;
       }
 
@@ -168,12 +174,12 @@ export function registerRouter(pi: ExtensionAPI): void {
         return;
       }
 
-      ctx.ui.notify("Usage: /router status|help|on|off|mode [observe|auto_model]|profile [name]|print [mismatch_only|all|off]|profiles|models|configure|cycle", "error");
+      ctx.ui.notify("Usage: /pi-rogue-router status|help|on|off|mode [observe|auto_model]|profile [name]|print [mismatch_only|all|off]|profiles|models|configure|cycle", "error");
     },
   });
 
   // Ctrl-P is reserved by Pi's built-in model cycle action, so the
-  // extension uses an unreserved chord and exposes `/router cycle` for
+  // extension uses an unreserved chord and exposes `/pi-rogue-router cycle` for
   // command-palette/typed rotation over the same profile set.
   pi.registerShortcut("ctrl+alt+p", {
     description: "Cycle router profile",

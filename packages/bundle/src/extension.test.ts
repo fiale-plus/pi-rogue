@@ -40,7 +40,12 @@ describe("bundle extension defaults", () => {
     await registerBundle(pi);
 
     expect(commands.has("context")).toBe(true);
-    expect(commands.has("router")).toBe(true);
+    expect(commands.has("pi-rogue")).toBe(true);
+    expect(commands.has("pi-rogue-advisor")).toBe(true);
+    expect(commands.has("pi-rogue-router")).toBe(true);
+    expect(commands.has("pi-rogue-fusion")).toBe(true);
+    expect(commands.has("pi-rogue-orchestration")).toBe(true);
+    expect(["advisor", "router", "fusion", "goal", "loop", "autoresearch", "autoresearch-lab"].some((name) => commands.has(name))).toBe(false);
   });
 
   it("keeps an explicit env kill switch for context broker rollout", async () => {

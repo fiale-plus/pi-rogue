@@ -1,9 +1,9 @@
-import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { routerArgumentCompletions } from "./completions.js";
-import { activeProfile, cycleRouterProfile, ensureRouterConfig, loadRouterConfig, routerConfigPath, routerEventsPath, routerSessionDir, routerStatePath, saveRouterConfig, setRouterMode, setRouterPrint, setRouterProfile } from "./config.js";
+import { activeProfile, cycleRouterProfile, ensureRouterConfig, loadRouterConfig, routerConfigPath, routerEventsPath, routerGlobalConfigPath, routerSessionDir, routerStatePath, saveRouterConfig, setRouterMode, setRouterPrint, setRouterProfile } from "./config.js";
 import { registerRouter } from "./extension.js";
 import { decideRoute } from "./decision.js";
 import { applyModelRouting, modelsMatch, observeRouterTurn, summarizeRouterDecision } from "./observe.js";
@@ -47,6 +47,21 @@ function piMock() {
   };
   return { pi, commands, shortcuts, handlers };
 }
+
+const oldHome = process.env.HOME;
+let isolatedHome = "";
+
+beforeEach(() => {
+  isolatedHome = mkdtempSync(join(tmpdir(), "pi-router-home-"));
+  process.env.HOME = isolatedHome;
+});
+
+afterEach(() => {
+  if (oldHome === undefined) delete process.env.HOME;
+  else process.env.HOME = oldHome;
+  if (isolatedHome) rmSync(isolatedHome, { recursive: true, force: true });
+  isolatedHome = "";
+});
 
 function checkpoint(overrides: Partial<RouterCheckpoint> = {}): RouterCheckpoint {
   const base: RouterCheckpoint = {
@@ -97,6 +112,35 @@ describe("router config profiles", () => {
     expect(config.mode).toBe("observe");
     expect(activeProfile(config).worker).toBe("openai-codex/gpt-5.5");
     expect(readFileSync(routerConfigPath(ctx), "utf8")).toContain("spark-smart");
+  });
+
+  it("reads and writes user-root config only", () => {
+    const ctx = ctxMock();
+    const globalPath = routerGlobalConfigPath();
+    mkdirSync(join(globalPath, ".."), { recursive: true });
+    writeFileSync(globalPath, JSON.stringify({
+      enabled: true,
+      mode: "auto_model",
+      activeProfile: "global-profile",
+      profileOrder: ["global-profile"],
+      profiles: {
+        "global-profile": { worker: "global-worker", smart: "global-smart", teacher: "global-teacher", reviewer: "global-reviewer" },
+      },
+    }));
+
+    expect(routerConfigPath(ctx)).toBe(globalPath);
+    expect(loadRouterConfig(ctx)).toMatchObject({ enabled: true, mode: "auto_model", activeProfile: "global-profile" });
+
+    saveRouterConfig(ctx, {
+      ...loadRouterConfig(ctx),
+      activeProfile: "user-profile",
+      profileOrder: ["user-profile"],
+      profiles: { "user-profile": { worker: "user-worker", smart: "user-smart", teacher: "user-teacher", reviewer: "user-reviewer" } },
+    });
+
+    const loaded = loadRouterConfig(ctx);
+    expect(loaded.activeProfile).toBe("user-profile");
+    expect(loaded.profiles["user-profile"].smart).toBe("user-smart");
   });
 
   it("sets and cycles profiles", () => {
@@ -153,26 +197,26 @@ describe("router extension", () => {
 
     registerRouter(pi);
 
-    expect(commands.has("router")).toBe(true);
+    expect(commands.has("pi-rogue-router")).toBe(true);
     expect(shortcuts.has("ctrl+alt+p")).toBe(true);
     expect(handlers.has("turn_end")).toBe(true);
 
-    await commands.get("router").handler("on", ctx);
+    await commands.get("pi-rogue-router").handler("on", ctx);
     expect(loadRouterConfig(ctx).enabled).toBe(true);
 
-    await commands.get("router").handler("profile spark-smart", ctx);
+    await commands.get("pi-rogue-router").handler("profile spark-smart", ctx);
     expect(loadRouterConfig(ctx).activeProfile).toBe("spark-smart");
 
-    await commands.get("router").handler("mode auto_model", ctx);
+    await commands.get("pi-rogue-router").handler("mode auto_model", ctx);
     expect(loadRouterConfig(ctx).mode).toBe("auto_model");
-    await commands.get("router").handler("print all", ctx);
+    await commands.get("pi-rogue-router").handler("print all", ctx);
     expect(loadRouterConfig(ctx).print).toBe("all");
-    await commands.get("router").handler("help", ctx);
+    await commands.get("pi-rogue-router").handler("help", ctx);
     expect(ctx.notifications.at(-1)?.text).toContain("router command tree:");
-    await commands.get("router").handler("off", ctx);
-    await commands.get("router").handler("on", ctx);
+    await commands.get("pi-rogue-router").handler("off", ctx);
+    await commands.get("pi-rogue-router").handler("on", ctx);
     expect(ctx.notifications.at(-1)?.text).toContain("auto_model applies model switches only");
-    await commands.get("router").handler("status", ctx);
+    await commands.get("pi-rogue-router").handler("status", ctx);
     expect(ctx.notifications.at(-1)?.text).toContain("model routing: auto_model");
 
     await shortcuts.get("ctrl+alt+p").handler(ctx);
@@ -185,8 +229,32 @@ describe("router extension", () => {
     const summary = summarizeRouterDecision(item, decideRoute(item), config);
 
     expect(summary.text).toContain("MISMATCH");
-    expect(summary.text).toContain("smart(openai-codex/gpt-5.5)");
+    expect(summary.text).toContain("debug_diagnose(openai-codex/gpt-5.5)");
     expect(summary.text).toContain("current=gpt-5.3-codex-spark");
+  });
+
+  it("falls back optional live roles for compact four-role profiles", () => {
+    const config = {
+      ...loadRouterConfig(ctxMock()),
+      activeProfile: "compact",
+      profiles: {
+        compact: {
+          worker: "fast-worker",
+          smart: "deep-smart",
+          teacher: "deep-teacher",
+          reviewer: "deep-reviewer",
+        },
+      },
+      profileOrder: ["compact"],
+    };
+    const item = checkpoint({ activeModel: "current-model", provider: undefined });
+    const verify = summarizeRouterDecision(item, { ...decideRoute(item), action: "run_verifier" }, config);
+    const debug = summarizeRouterDecision(item, { ...decideRoute(item), action: "escalate_debug_diagnosis" }, config);
+    const review = summarizeRouterDecision(item, { ...decideRoute(item), action: "escalate_diff_review" }, config);
+
+    expect(verify).toMatchObject({ role: "verify", targetModel: "fast-worker" });
+    expect(debug).toMatchObject({ role: "debug_diagnose", targetModel: "deep-smart" });
+    expect(review).toMatchObject({ role: "review", targetModel: "deep-reviewer" });
   });
 
   it("auto_model applies only model switches for explicit target mismatches", async () => {

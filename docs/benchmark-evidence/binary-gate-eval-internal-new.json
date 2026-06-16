@@ -57,7 +57,7 @@
       "conf": 0.814913116918743
     },
     {
-      "text": "also I see template not values Advisor-Coach config enabled: ${config.enabled} preflight: ${config.preflight} postReview: ${config.postReview} model: ${config.provider}/${config.model} reasoning: ${config.reasoning} maxTokens: ${config.maxTokens} showOnTrack: ${config.showOnTrack} Commands: /advisor-coach on|off /advisor-coach preflight_on|preflight_off /advisor-coach post_on|post_off",
+      "text": "also I see template not values Advisor-Coach config enabled: ${config.enabled} preflight: ${config.preflight} postReview: ${config.postReview} model: ${config.provider}/${config.model} reasoning: ${config.reasoning} maxTokens: ${config.maxTokens} showOnTrack: ${config.showOnTrack} Commands: /advisor-coach  /advisor-coach preflight_on|preflight_off /advisor-coach post_on|post_off",
       "source": "gold",
       "actual": "continue",
       "predicted": "escalate",
@@ -71,7 +71,7 @@
       "conf": 0.6596574337962874
     },
     {
-      "text": "also: Advisor-Coach config enabled: ${config.enabled} preflight: ${config.preflight} postReview: ${config.postReview} model: ${config.provider}/${config.model} reasoning: ${config.reasoning} maxTokens: ${config.maxTokens} showOnTrack: ${config.showOnTrack} Commands: /advisor-coach on|off /advisor-coach preflight_on|preflight_off /advisor-coach post_on|post_off",
+      "text": "also: Advisor-Coach config enabled: ${config.enabled} preflight: ${config.preflight} postReview: ${config.postReview} model: ${config.provider}/${config.model} reasoning: ${config.reasoning} maxTokens: ${config.maxTokens} showOnTrack: ${config.showOnTrack} Commands: /advisor-coach  /advisor-coach preflight_on|preflight_off /advisor-coach post_on|post_off",
       "source": "gold",
       "actual": "continue",
       "predicted": "escalate",

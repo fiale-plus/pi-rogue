@@ -6,7 +6,6 @@ import { beginGoalCheck, buildGoalCheckPrompt, endGoalCheck, goalCheckResult, ha
 import { clearLoop, triggerLoopTick } from "./loop.js";
 import { clearNoProgressRecovery } from "./novelty-guard.js";
 import { resetAdvisorSessionContext, setAdvisorCheckinsEnabled } from "./advisor-checkins.js";
-import { goalArgumentCompletions } from "./completions.js";
 
 const FEATURE = "orchestration";
 const CURRENT_FILE = "goal.md";
@@ -249,64 +248,61 @@ export function registerGoal(pi: ExtensionAPI): void {
     },
   });
 
-  pi.registerCommand("goal", {
-    description: "Set, show, clear, or list the current session goal",
-    getArgumentCompletions: (prefix: string) => goalArgumentCompletions(prefix),
-    handler: async (args, ctx) => {
-      const input = String(args ?? "").trim();
-      const [cmd, ...rest] = input.split(/\s+/);
-      const known = new Set(["set", "show", "clear", "list"]);
-      const resolved = !input ? "show" : known.has(cmd) ? cmd : "set";
-      const text = resolved === "set" && known.has(cmd) ? rest.join(" ").trim() : input;
+}
 
-      if (resolved === "show") {
-        const goal = activeGoal(ctx);
-        setGoalStatus(ctx, goal || null);
-        ctx.ui.notify(goal ? `🎯 ${truncate(goal, 160)}` : "No active goal.", "info");
-        return;
-      }
+export async function handleGoalCommand(pi: ExtensionAPI, args: unknown, ctx: any): Promise<void> {
+  const input = String(args ?? "").trim();
+  const [cmd, ...rest] = input.split(/\s+/);
+  const known = new Set(["set", "show", "clear", "list"]);
+  const resolved = !input ? "show" : known.has(cmd) ? cmd : "set";
+  const text = resolved === "set" && known.has(cmd) ? rest.join(" ").trim() : input;
 
-      if (resolved === "clear") {
-        const goal = activeGoal(ctx);
-        const clearedResearch = goal ? clearResearchStateForGoal(ctx, goal) : false;
-        clearGoal(ctx);
-        endGoalCheck(ctx);
-        setGoalStatus(ctx, null);
-        clearLoop(ctx, { clearResearch: true });
-        ctx.ui.notify(goal ? `Goal cleared${clearedResearch ? "; matching autoresearch status cleared" : ""}.` : "No goal to clear.", "info");
-        return;
-      }
+  if (resolved === "show") {
+    const goal = activeGoal(ctx);
+    setGoalStatus(ctx, goal || null);
+    ctx.ui.notify(goal ? `🎯 ${truncate(goal, 160)}` : "No active goal.", "info");
+    return;
+  }
 
-      if (resolved === "list") {
-        const entries = historyEntries();
-        if (entries.length === 0) {
-          ctx.ui.notify("No goal history yet.", "info");
-          return;
-        }
+  if (resolved === "clear") {
+    const goal = activeGoal(ctx);
+    const clearedResearch = goal ? clearResearchStateForGoal(ctx, goal) : false;
+    clearGoal(ctx);
+    endGoalCheck(ctx);
+    setGoalStatus(ctx, null);
+    clearLoop(ctx, { clearResearch: true });
+    ctx.ui.notify(goal ? `Goal cleared${clearedResearch ? "; matching autoresearch status cleared" : ""}.` : "No goal to clear.", "info");
+    return;
+  }
 
-        ctx.ui.notify(
-          entries
-            .map((entry, index) => `${index + 1}. ${truncate(entry.goal, 120)} (${new Date(entry.at).toLocaleDateString()})`)
-            .join("\n"),
-          "info",
-        );
-        return;
-      }
+  if (resolved === "list") {
+    const entries = historyEntries();
+    if (entries.length === 0) {
+      ctx.ui.notify("No goal history yet.", "info");
+      return;
+    }
 
-      if (!text) {
-        ctx.ui.notify("Usage: /goal set <text>", "error");
-        return;
-      }
+    ctx.ui.notify(
+      entries
+        .map((entry, index) => `${index + 1}. ${truncate(entry.goal, 120)} (${new Date(entry.at).toLocaleDateString()})`)
+        .join("\n"),
+      "info",
+    );
+    return;
+  }
 
-      const result = setGoal(ctx, text);
-      if (result === "duplicate") {
-        ctx.ui.notify(`🎯 Goal already active: ${truncate(text, 160)}.`, "info");
-        return;
-      }
+  if (!text) {
+    ctx.ui.notify("Usage: /pi-rogue-orchestration goal set <text>", "error");
+    return;
+  }
 
-      setGoalStatus(ctx, text);
-      const started = startGoalProcessing(pi, ctx, text);
-      ctx.ui.notify(`🎯 Goal set: ${truncate(text, 160)}${started === "pending" ? " (goal processing already pending)" : " — processing started"}`, "info");
-    },
-  });
+  const result = setGoal(ctx, text);
+  if (result === "duplicate") {
+    ctx.ui.notify(`🎯 Goal already active: ${truncate(text, 160)}.`, "info");
+    return;
+  }
+
+  setGoalStatus(ctx, text);
+  const started = startGoalProcessing(pi, ctx, text);
+  ctx.ui.notify(`🎯 Goal set: ${truncate(text, 160)}${started === "pending" ? " (goal processing already pending)" : " — processing started"}`, "info");
 }

@@ -1,4 +1,5 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { homedir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { hashText } from "./hash.js";
 
@@ -72,16 +73,25 @@ export const DEFAULT_ROUTER_CONFIG: RouterConfig = {
   },
 };
 
-function cwdFromCtx(ctx: any): string {
-  return resolve(String(ctx?.cwd ?? process.cwd()));
+export function routerGlobalDir(): string {
+  return join(homedir(), ".pi", "agent", "pi-rogue", "router");
 }
 
-export function routerDir(ctx: any): string {
-  return join(cwdFromCtx(ctx), ".pi", "router");
+export function routerDir(_ctx: any): string {
+  return routerGlobalDir();
+}
+
+export function routerGlobalConfigPath(): string {
+  return join(routerGlobalDir(), "config.json");
 }
 
 export function routerConfigPath(ctx: any): string {
   return join(routerDir(ctx), "config.json");
+}
+
+export function routerConfigSources(_ctx: any): { global: string; repo: string; active: string[] } {
+  const global = routerGlobalConfigPath();
+  return { global, repo: "disabled: user-root storage only", active: [existsSync(global) ? global : ""].filter(Boolean) };
 }
 
 function sessionPathFromCtx(ctx: any): string | undefined {
@@ -147,18 +157,19 @@ export function normalizeRouterConfig(raw: Partial<RouterConfig> | null | undefi
   };
 }
 
-export function loadRouterConfig(ctx: any): RouterConfig {
-  return normalizeRouterConfig(readJson<Partial<RouterConfig>>(routerConfigPath(ctx), {}));
+export function loadRouterConfig(_ctx: any): RouterConfig {
+  const global = readJson<Partial<RouterConfig>>(routerGlobalConfigPath(), {});
+  return normalizeRouterConfig(global);
 }
 
-export function saveRouterConfig(ctx: any, config: RouterConfig): void {
-  const path = routerConfigPath(ctx);
+export function saveRouterConfig(_ctx: any, config: RouterConfig): void {
+  const path = routerGlobalConfigPath();
   mkdirSync(dirname(path), { recursive: true });
   writeFileSync(path, `${JSON.stringify(normalizeRouterConfig(config), null, 2)}\n`);
 }
 
 export function ensureRouterConfig(ctx: any): RouterConfig {
-  const path = routerConfigPath(ctx);
+  const path = routerGlobalConfigPath();
   const config = loadRouterConfig(ctx);
   if (!existsSync(path)) saveRouterConfig(ctx, config);
   return config;

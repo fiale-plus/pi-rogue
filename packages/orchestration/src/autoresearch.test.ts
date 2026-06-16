@@ -1,7 +1,8 @@
 import { randomUUID } from "node:crypto";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { setAdvisorCheckinsEnabled } from "./advisor-checkins.js";
-import { buildResearchGoal, buildResearchLoopInstruction, registerAutoresearch } from "./autoresearch.js";
+import { buildResearchGoal, buildResearchLoopInstruction } from "./autoresearch.js";
+import { registerOrchestration } from "./extension.js";
 import { formatResearchState, type ResearchState } from "./autoresearch-state.js";
 import { clearLoop } from "./loop.js";
 
@@ -46,7 +47,7 @@ describe("autoresearch status", () => {
 
     const text = formatResearchState(state);
 
-    expect(text).toContain("/loop 5m");
+    expect(text).toContain("/pi-rogue-orchestration loop 5m");
     expect(text).toContain("cycles=1");
     expect(text).toContain("last=done");
   });
@@ -88,16 +89,17 @@ describe("autoresearch status", () => {
     const sent: string[] = [];
     const pi = {
       registerCommand: (name: string, command: { handler: (args: string, ctx: any) => Promise<void> }) => {
-        if (name === "autoresearch") handler = command.handler;
+        if (name === "pi-rogue-orchestration") handler = command.handler;
       },
       sendUserMessage: (text: string) => sent.push(text),
+      on: () => undefined,
     } as any;
     const ctx = fakeCtx();
 
-    registerAutoresearch(pi);
+    registerOrchestration(pi);
     expect(handler).toBeTypeOf("function");
-    await handler?.("improve repetition handling", ctx);
-    await handler?.("improve repetition handling", ctx);
+    await handler?.("autoresearch improve repetition handling", ctx);
+    await handler?.("autoresearch improve repetition handling", ctx);
 
     expect(sent).toHaveLength(1);
     expect(ctx.notifications.at(-1)).toContain("already active");
@@ -108,35 +110,37 @@ describe("autoresearch status", () => {
     const sent: string[] = [];
     const pi = {
       registerCommand: (name: string, command: { handler: (args: string, ctx: any) => Promise<void> }) => {
-        if (name === "autoresearch") handler = command.handler;
+        if (name === "pi-rogue-orchestration") handler = command.handler;
       },
       sendUserMessage: (text: string) => sent.push(text),
+      on: () => undefined,
     } as any;
     const ctx = fakeCtx();
 
-    registerAutoresearch(pi);
-    await handler?.("improve stale loop recovery", ctx);
+    registerOrchestration(pi);
+    await handler?.("autoresearch improve stale loop recovery", ctx);
     clearLoop(ctx, { preserveCheckins: true });
-    await handler?.("improve stale loop recovery", ctx);
+    await handler?.("autoresearch improve stale loop recovery", ctx);
 
     expect(sent).toHaveLength(2);
     expect(sent[1]).toContain("improve stale loop recovery");
   });
 
-  it("disables advisor check-ins when /autoresearch clear stops the loop", async () => {
+  it("disables advisor check-ins when orchestration autoresearch clear stops the loop", async () => {
     let handler: ((args: string, ctx: any) => Promise<void>) | undefined;
     const pi = {
       registerCommand: (name: string, command: { handler: (args: string, ctx: any) => Promise<void> }) => {
-        if (name === "autoresearch") handler = command.handler;
+        if (name === "pi-rogue-orchestration") handler = command.handler;
       },
       sendUserMessage: () => undefined,
+      on: () => undefined,
     } as any;
     const ctx = fakeCtx();
 
-    registerAutoresearch(pi);
-    await handler?.("improve lifecycle cleanup", ctx);
+    registerOrchestration(pi);
+    await handler?.("autoresearch improve lifecycle cleanup", ctx);
     setAdvisorCheckinsEnabledMock.mockClear();
-    await handler?.("clear", ctx);
+    await handler?.("autoresearch clear", ctx);
 
     expect(setAdvisorCheckinsEnabledMock).toHaveBeenCalledWith(false);
   });

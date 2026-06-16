@@ -1,7 +1,12 @@
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { completeSimple } from "@earendil-works/pi-ai";
 import {
+  applyPiRogueConfigurePlan,
   buildAdvisorCheckinPrompt,
+  buildPiRogueConfigurePlan,
   completeWithHigherAdvisorModel,
   completeWithModelFallback,
   contentText,
@@ -352,6 +357,89 @@ describe("advisor completion fallback behavior", () => {
     expect(result?.fallback).toBe(true);
     expect(completeSimpleMock).toHaveBeenCalledTimes(1);
     expect(completeSimpleMock.mock.calls[0]?.[0]?.id).toBe("provider/text-light");
+  });
+});
+
+
+describe("Pi-Rogue configure planning", () => {
+  function ctx(cwd: string) {
+    return {
+      cwd,
+      modelRegistry: {
+        getAvailable: () => [
+          { provider: "openai-codex", id: "gpt-5.5", input: ["text"] },
+          { provider: "openai-codex", id: "gpt-5.3-codex-spark", input: ["text"] },
+          { provider: "image-only", id: "paint", input: ["image"] },
+        ],
+      },
+    } as any;
+  }
+
+  it("derives advisor/router/fusion defaults from available models and recipes", () => {
+    const oldHome = process.env.HOME;
+    const oldRecipes = process.env.PI_ROGUE_FUSION_RECIPES;
+    const root = mkdtempSync(join(tmpdir(), "pi-rogue-configure-home-"));
+    const cwd = mkdtempSync(join(tmpdir(), "pi-rogue-configure-cwd-"));
+    try {
+      process.env.HOME = root;
+      delete process.env.PI_ROGUE_FUSION_RECIPES;
+      const recipes = join(root, ".pi", "agent", "pi-rogue", "fusion", "recipes.json");
+      mkdirSync(join(root, ".pi", "agent", "pi-rogue", "fusion"), { recursive: true });
+      writeFileSync(recipes, JSON.stringify({ recipes: [{ id: "gpt55fused-53spark" }] }), "utf8");
+
+      const plan = buildPiRogueConfigurePlan(ctx(cwd));
+
+      expect(plan.mode).toBe("status");
+      expect(plan.advisorModel).toBe("openai-codex/gpt-5.5");
+      expect(plan.workerModel).toBe("openai-codex/gpt-5.3-codex-spark");
+      expect(plan.activeRouterProfile).toBe("fusion-smart");
+      expect(plan.smartModel).toBe("fusion/gpt55fused-53spark");
+    } finally {
+      if (oldHome === undefined) delete process.env.HOME;
+      else process.env.HOME = oldHome;
+      if (oldRecipes === undefined) delete process.env.PI_ROGUE_FUSION_RECIPES;
+      else process.env.PI_ROGUE_FUSION_RECIPES = oldRecipes;
+      rmSync(root, { recursive: true, force: true });
+      rmSync(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it("applies an explicit plan to only the plan files", () => {
+    const root = mkdtempSync(join(tmpdir(), "pi-rogue-configure-apply-"));
+    try {
+      const plan = {
+        mode: "on" as const,
+        root,
+        advisorModel: "openai-codex/gpt-5.5",
+        workerModel: "openai-codex/gpt-5.3-codex-spark",
+        smartModel: "fusion/gpt55fused-53spark",
+        activeRouterProfile: "fusion-smart" as const,
+        fusionRecipeId: "gpt55fused-53spark",
+        files: {
+          summary: join(root, "config.json"),
+          advisor: join(root, "advisor", "config.json"),
+          router: join(root, "router", "config.json"),
+          routerCards: join(root, "router", "model-cards.jsonl"),
+          fusionRecipes: join(root, "fusion", "recipes.json"),
+          contextBroker: join(root, "context-broker", "artifacts.sqlite"),
+        },
+        warnings: [],
+      };
+
+      applyPiRogueConfigurePlan(plan);
+
+      const advisor = JSON.parse(readFileSync(plan.files.advisor, "utf8"));
+      expect(advisor.model).toBe("openai-codex/gpt-5.5");
+      expect(advisor.mode).toBe("auto");
+      expect(advisor.checkins).toBe("mid-hour");
+      const router = JSON.parse(readFileSync(plan.files.router, "utf8"));
+      expect(router).toMatchObject({ enabled: true, mode: "observe", activeProfile: "fusion-smart" });
+      expect(router.profiles["fusion-smart"].smart).toBe("fusion/gpt55fused-53spark");
+      expect(readFileSync(plan.files.routerCards, "utf8")).toContain("gpt55fused-53spark");
+      expect(existsSync(plan.files.summary)).toBe(true);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 });
 
