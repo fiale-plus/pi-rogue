@@ -5,7 +5,6 @@ import { setAdvisorCheckinsEnabled } from "./advisor-checkins.js";
 import { buildGoalCheckPrompt, beginGoalCheck, hasGoalCheckPending } from "./goal-resolution.js";
 import { clearNoProgressRecovery } from "./novelty-guard.js";
 import { readSessionJson, writeSessionJson } from "./state.js";
-import { loopArgumentCompletions } from "./completions.js";
 
 const FEATURE = "orchestration";
 const LOOP_FILE = "loop.json";
@@ -87,7 +86,7 @@ function parseIntervalMs(interval: string): number | null {
   return ms >= MIN_INTERVAL_MS ? ms : null;
 }
 
-function formatLoopState(state: LoopState): string {
+export function formatLoopState(state: LoopState): string {
   if (!state.enabled) {
     return "No active loop.";
   }
@@ -238,40 +237,37 @@ export function registerLoop(pi: ExtensionAPI): void {
     setLoopStatus(ctx, defaultLoopState());
   });
 
-  pi.registerCommand("loop", {
-    description: "Record, show, or clear the current session loop cadence",
-    getArgumentCompletions: (prefix: string) => loopArgumentCompletions(prefix),
-    handler: async (args, ctx) => {
-      const input = String(args ?? "").trim();
-      const [cmd, ...rest] = input.split(/\s+/);
-      const resolved = !input ? "status" : ["status", "show", "off", "clear", "stop"].includes(cmd) ? cmd : "set";
+}
 
-      if (resolved === "status" || resolved === "show") {
-        ctx.ui.notify(formatLoopState(readLoopState(ctx)), "info");
-        return;
-      }
+export async function handleLoopCommand(pi: ExtensionAPI, args: unknown, ctx: any): Promise<void> {
+  const input = String(args ?? "").trim();
+  const [cmd, ...rest] = input.split(/\s+/);
+  const resolved = !input ? "status" : ["status", "show", "off", "clear", "stop"].includes(cmd) ? cmd : "set";
 
-      if (resolved === "off" || resolved === "clear" || resolved === "stop") {
-        const clearedResearch = hasActiveResearch(ctx);
-        const next = clearLoop(ctx, { clearResearch: true });
-        ctx.ui.notify(next.enabled ? formatLoopState(next) : `Loop cleared${clearedResearch ? "; autoresearch status cleared" : ""}.`, "info");
-        return;
-      }
+  if (resolved === "status" || resolved === "show") {
+    ctx.ui.notify(formatLoopState(readLoopState(ctx)), "info");
+    return;
+  }
 
-      const interval = cmd;
-      const instruction = rest.join(" ").trim();
-      if (!interval || !instruction || parseIntervalMs(interval) === null) {
-        ctx.ui.notify("Usage: /loop <interval> <instruction> (e.g. 1m, 5m, 1h)", "error");
-        return;
-      }
+  if (resolved === "off" || resolved === "clear" || resolved === "stop") {
+    const clearedResearch = hasActiveResearch(ctx);
+    const next = clearLoop(ctx, { clearResearch: true });
+    ctx.ui.notify(next.enabled ? formatLoopState(next) : `Loop cleared${clearedResearch ? "; autoresearch status cleared" : ""}.`, "info");
+    return;
+  }
 
-      clearLoop(ctx, { clearResearch: true });
-      const next = startLoop(pi, ctx, interval, instruction);
-      if (!next) {
-        ctx.ui.notify("Usage: /loop <interval> <instruction> (e.g. 1m, 5m, 1h)", "error");
-        return;
-      }
-      ctx.ui.notify(formatLoopState(next), "info");
-    },
-  });
+  const interval = cmd;
+  const instruction = rest.join(" ").trim();
+  if (!interval || !instruction || parseIntervalMs(interval) === null) {
+    ctx.ui.notify("Usage: /pi-rogue-orchestration loop <interval> <instruction> (e.g. 1m, 5m, 1h)", "error");
+    return;
+  }
+
+  clearLoop(ctx, { clearResearch: true });
+  const next = startLoop(pi, ctx, interval, instruction);
+  if (!next) {
+    ctx.ui.notify("Usage: /pi-rogue-orchestration loop <interval> <instruction> (e.g. 1m, 5m, 1h)", "error");
+    return;
+  }
+  ctx.ui.notify(formatLoopState(next), "info");
 }

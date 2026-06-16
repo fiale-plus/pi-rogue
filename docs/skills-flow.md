@@ -4,7 +4,7 @@ This repo keeps the existing skill logic intact and routes it into the orchestra
 
 ## Advisory
 
-- `skill:advisor`
+- `skill:pi-rogue-advisor`
 - Feeds `packages/advisor`
 - Role: strategic advice, routing, preflight, and session guidance
 
@@ -18,9 +18,9 @@ This repo keeps the existing skill logic intact and routes it into the orchestra
 ### `autoresearch`
 
 - Source skill: iterative optimization with measurement, implementation, checks, and stall detection
-- In flow: `packages/orchestration` command `/autoresearch`
+- In flow: `packages/orchestration` command `/pi-rogue-orchestration autoresearch`
 - Role: single-agent optimization over a measurable target
-- Runtime: facade over `/goal` + `/loop`; starting autoresearch writes a research-shaped goal, starts a 5m loop, enables advisor check-ins while active, queues the first cycle immediately, records cycle/result status, and clears stale status/check-ins when the backing goal or loop is cleared
+- Runtime: facade over `/pi-rogue-orchestration goal` + `/pi-rogue-orchestration loop`; starting autoresearch writes a research-shaped goal, starts a 5m loop, enables advisor check-ins while active, queues the first cycle immediately, records cycle/result status, and clears stale status/check-ins when the backing goal or loop is cleared
 - Preserved goodness:
   - metric-first workflow
   - measurement + checks
@@ -31,9 +31,9 @@ This repo keeps the existing skill logic intact and routes it into the orchestra
 ### `autoresearch-lab`
 
 - Source skill: parallel multi-agent research
-- In flow: `packages/orchestration` command `/autoresearch-lab`
+- In flow: `packages/orchestration` command `/pi-rogue-orchestration lab`
 - Role: split the work into independent areas and run them in parallel worktrees
-- Runtime: facade over `/goal` + `/loop`; starting lab mode writes a lab-shaped goal, starts a 5m loop, and queues the first cycle immediately
+- Runtime: facade over `/pi-rogue-orchestration goal` + `/pi-rogue-orchestration loop`; starting lab mode writes a lab-shaped goal, starts a 5m loop, and queues the first cycle immediately
 - Preserved goodness:
   - isolated worktrees
   - evaluator checkpoint
@@ -43,7 +43,7 @@ This repo keeps the existing skill logic intact and routes it into the orchestra
 ## Auto-detection and confirmation
 
 - Auto-detect candidate orchestration modes from the user request and project context.
-- Present a proposal first (`goal`, `autoresearch`, or `autoresearch-lab`) instead of silently starting a long run.
+- Present a proposal first (`goal`, `autoresearch`, or `lab`) instead of silently starting a long run.
 - In interactive mode, ask for explicit confirmation before writing or launching a long-lived flow.
 - In unattended mode, only auto-run if policy explicitly allows the detected command.
 - Never auto-escalate from `autoresearch` to `autoresearch-lab` without approval.
@@ -52,7 +52,7 @@ This repo keeps the existing skill logic intact and routes it into the orchestra
 
 The commands remain distinct:
 
-- `/autoresearch` = solo optimization
-- `/autoresearch-lab` = parallel research lab
+- `/pi-rogue-orchestration autoresearch` = solo optimization
+- `/pi-rogue-orchestration lab` = parallel research lab
 
 They are not collapsed into a single generic research template.

@@ -1,3 +1,4 @@
+import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
@@ -154,9 +155,9 @@ function cwdOf(ctx: any): string {
   return String(ctx?.cwd ?? process.cwd());
 }
 
-function traceDir(ctx: any): string {
+function traceDir(_ctx: any): string {
   const configured = process.env.PI_ROGUE_FUSION_TRACE_DIR;
-  return configured ? resolve(configured) : join(cwdOf(ctx), ".pi", "fusion", "runs");
+  return configured ? resolve(configured) : join(homedir(), ".pi", "agent", "pi-rogue", "fusion", "runs");
 }
 
 function recipePathFor(ctx: any): string {
@@ -180,7 +181,7 @@ function formatConfiguredModels(ctx: any, limit = 12): string {
   const models = configuredModels(ctx);
   if (models.length === 0) return "No scoped text models were visible in this Pi session yet.";
   const shown = models.slice(0, limit).map((model) => `- ${model}`);
-  if (models.length > limit) shown.push(`…and ${models.length - limit} more. Use /router models for the full active router profile.`);
+  if (models.length > limit) shown.push(`…and ${models.length - limit} more. Use /pi-rogue-router models for the full active router profile.`);
   return shown.join("\n");
 }
 
@@ -256,17 +257,17 @@ function configureHelp(ctx: any): string {
     `recipe file: ${path}`,
     "",
     "Commands:",
-    "- /fusion configure add <id> <synthesis-model> <analysis-model...> [--tokens N] [--temperature 0..2] [--timeout-ms N] [--per-model-timeout-ms N]",
-    "- /fusion configure edit <id> <synthesis-model> <analysis-model...> [--tokens N] [--temperature 0..2] [--timeout-ms N] [--per-model-timeout-ms N]",
-    "- /fusion configure remove <id>",
+    "- /pi-rogue-fusion configure add <id> <synthesis-model> <analysis-model...> [--tokens N] [--temperature 0..2] [--timeout-ms N] [--per-model-timeout-ms N]",
+    "- /pi-rogue-fusion configure edit <id> <synthesis-model> <analysis-model...> [--tokens N] [--temperature 0..2] [--timeout-ms N] [--per-model-timeout-ms N]",
+    "- /pi-rogue-fusion configure remove <id>",
     "",
     "Example:",
-    "  /fusion configure add hard-judge openai-codex/gpt-5.5 openai-codex/gpt-5.5 openai-codex/gpt-5.3-codex-spark --tokens 1200",
+    "  /pi-rogue-fusion configure add hard-judge openai-codex/gpt-5.5 openai-codex/gpt-5.5 openai-codex/gpt-5.3-codex-spark --tokens 1200",
     "",
     "Scoped text models visible to this session:",
     formatConfiguredModels(ctx),
     "",
-    "After changing recipes, run /fusion reload or restart Pi so fusion/<id> models are registered. Then try those model refs in /router models or a router profile.",
+    "After changing recipes, run /pi-rogue-fusion reload or restart Pi so fusion/<id> models are registered. Then try those model refs in /pi-rogue-router models or a router profile.",
     "",
     "Natural-language configure intent will be added later; for now use add/edit/remove explicitly.",
   ].join("\n");
@@ -285,12 +286,12 @@ function configureFusion(args: string[], ctx: any): string {
 
   if (intent === "remove" || intent === "delete") {
     const id = rest[0];
-    if (!id) return "Usage: /fusion configure remove <id>";
+    if (!id) return "Usage: /pi-rogue-fusion configure remove <id>";
     const before = current.recipes.length;
     const recipes = current.recipes.filter((recipe) => recipe.id !== id);
     if (recipes.length === before) return `No fusion recipe found with id ${id}.`;
     writeRecipes(path, recipes);
-    return [`Removed fusion/${id}.`, `recipe file: ${path}`, "Run /fusion reload or restart Pi to refresh registered Fusion models."].join("\n");
+    return [`Removed fusion/${id}.`, `recipe file: ${path}`, "Run /pi-rogue-fusion reload or restart Pi to refresh registered Fusion models."].join("\n");
   }
 
   if (intent !== "add" && intent !== "edit") {
@@ -306,7 +307,7 @@ function configureFusion(args: string[], ctx: any): string {
   const parsed = parseConfigureFlags(rest.slice(2));
   const analysisModels = parsed.values.flatMap((value) => value.split(",")).map((value) => value.trim()).filter(Boolean);
   if (!id || !synthesisModel || analysisModels.length === 0) {
-    return `Usage: /fusion configure ${intent} <id> <synthesis-model> <analysis-model...> [--tokens N] [--temperature 0..2] [--timeout-ms N]`;
+    return `Usage: /pi-rogue-fusion configure ${intent} <id> <synthesis-model> <analysis-model...> [--tokens N] [--temperature 0..2] [--timeout-ms N]`;
   }
   if (parsed.errors.length > 0) return parsed.errors.join("\n");
 
@@ -325,7 +326,7 @@ function configureFusion(args: string[], ctx: any): string {
     ? current.recipes.filter((item) => item.id !== id)
     : current.recipes;
   if (intent === "add" && nextRecipes.some((item) => item.id === id)) {
-    return `fusion/${id} already exists. Use /fusion configure edit ${id} ... to replace it.`;
+    return `fusion/${id} already exists. Use /pi-rogue-fusion configure edit ${id} ... to replace it.`;
   }
   const result = validateFusionRecipes({ recipes: [...nextRecipes, recipe] });
   if (!result.ok) return result.errors.join("\n");
@@ -333,8 +334,8 @@ function configureFusion(args: string[], ctx: any): string {
   return [
     `${intent === "edit" ? "Updated" : "Added"} fusion/${id}.`,
     `recipe file: ${path}`,
-    "Run /fusion reload or restart Pi to register/refresh the model.",
-    "Then try fusion model refs in /router models or your router profile if you want routing suggestions to include them.",
+    "Run /pi-rogue-fusion reload or restart Pi to register/refresh the model.",
+    "Then try fusion model refs in /pi-rogue-router models or your router profile if you want routing suggestions to include them.",
   ].join("\n");
 }
 
@@ -384,12 +385,12 @@ function statusText(ctx: any): string {
   const loaded = loadFusionRecipes(cwdOf(ctx));
   const recipeLines = loaded.recipes.map((recipe) => `- fusion/${recipe.id}: model=${recipe.model} panel=${recipe.analysis_models.join(",")}`);
   return [
-    "fusion: active (models register when recipes are present)",
+    "fusion: active (recipes loaded; scoped aliases available)",
     `recipes: ${loaded.path ?? "not found"}`,
     `configure path: ${recipePathFor(ctx)}`,
     `trace dir: ${traceDir(ctx)}`,
     loaded.errors.length ? `errors:\n${loaded.errors.map((error) => `- ${error}`).join("\n")}` : "",
-    recipeLines.length ? recipeLines.join("\n") : "no recipes loaded; run /fusion configure to add one",
+    recipeLines.length ? recipeLines.join("\n") : "no recipes loaded; run /pi-rogue-fusion configure to add one",
   ].filter(Boolean).join("\n");
 }
 
@@ -398,8 +399,8 @@ export function registerFusion(pi: ExtensionAPI): void {
   if (p.__piRogueFusionRegistered) return;
   p.__piRogueFusionRegistered = true;
 
-  pi.registerCommand("fusion", {
-    description: "Fusion composite model provider. Usage: /fusion status|reload|configure. Models register when recipes exist.",
+  pi.registerCommand("pi-rogue-fusion", {
+    description: "Fusion composite model provider. Usage: /pi-rogue-fusion status|reload|configure. Models register when recipes exist.",
     getArgumentCompletions: (prefix: string, ctx?: any) => {
       const input = prefix.trimStart();
       const parts = input.split(/\s+/).filter(Boolean);
@@ -424,7 +425,7 @@ export function registerFusion(pi: ExtensionAPI): void {
         ].join("\n"), loaded.errors.length ? "error" : "info");
         return;
       }
-      if (cmd === "configure" || cmd === "config") {
+      if (cmd === "configure") {
         ctx.ui.notify(configureFusion(parts.slice(1), ctx), "info");
         return;
       }
@@ -432,7 +433,7 @@ export function registerFusion(pi: ExtensionAPI): void {
         ctx.ui.notify(statusText(ctx), "info");
         return;
       }
-      ctx.ui.notify("Usage: /fusion status|reload|configure", "error");
+      ctx.ui.notify("Usage: /pi-rogue-fusion status|reload|configure", "error");
     },
   });
 

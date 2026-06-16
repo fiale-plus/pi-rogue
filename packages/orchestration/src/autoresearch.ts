@@ -9,7 +9,6 @@ import {
   writeResearchState,
   type ResearchKind,
 } from "./autoresearch-state.js";
-import { autoresearchArgumentCompletions } from "./completions.js";
 
 export function buildResearchGoal(kind: ResearchKind, instruction: string): string {
   if (kind === "autoresearch-lab") {
@@ -49,91 +48,80 @@ export function buildResearchLoopInstruction(kind: ResearchKind, instruction: st
   ].join("\n");
 }
 
-function registerResearchCommand(pi: ExtensionAPI, commandName: ResearchKind): void {
+export async function handleResearchCommand(pi: ExtensionAPI, commandName: ResearchKind, args: unknown, ctx: any): Promise<void> {
   const prefix = label(commandName);
+  const input = String(args ?? "").trim();
+  const [cmd] = input.split(/\s+/);
+  const resolved = !input ? "status" : ["status", "show"].includes(cmd) ? cmd : ["off", "clear", "stop"].includes(cmd) ? "clear" : "set";
 
-  pi.registerCommand(commandName, {
-    description: commandName === "autoresearch-lab"
-      ? "Parallel multi-agent research mode backed by goal + loop"
-      : "Iterative optimization/research mode backed by goal + loop",
-    getArgumentCompletions: (prefix: string) => autoresearchArgumentCompletions(prefix),
-    handler: async (args, ctx) => {
-      const input = String(args ?? "").trim();
-      const [cmd] = input.split(/\s+/);
-      const resolved = !input ? "status" : ["status", "show"].includes(cmd) ? cmd : ["off", "clear", "stop"].includes(cmd) ? "clear" : "set";
+  if (resolved === "status" || resolved === "show") {
+    ctx.ui.notify(formatResearchState(readResearchState(ctx)), "info");
+    return;
+  }
 
-      if (resolved === "status" || resolved === "show") {
-        ctx.ui.notify(formatResearchState(readResearchState(ctx)), "info");
-        return;
-      }
+  if (resolved === "clear") {
+    const previous = readResearchState(ctx);
+    clearLoop(ctx, { clearResearch: true });
+    const clearedGoal = Boolean(previous.goal && activeGoal(ctx) === previous.goal);
+    if (clearedGoal) {
+      clearGoal(ctx);
+      setGoalStatus(ctx, null);
+    }
+    ctx.ui.notify(`${prefix} cleared; underlying loop stopped${clearedGoal ? " and matching goal cleared" : ""}.`, "info");
+    return;
+  }
 
-      if (resolved === "clear") {
-        const previous = readResearchState(ctx);
-        clearLoop(ctx, { clearResearch: true });
-        const clearedGoal = Boolean(previous.goal && activeGoal(ctx) === previous.goal);
-        if (clearedGoal) {
-          clearGoal(ctx);
-          setGoalStatus(ctx, null);
-        }
-        ctx.ui.notify(`${prefix} cleared; underlying loop stopped${clearedGoal ? " and matching goal cleared" : ""}.`, "info");
-        return;
-      }
+  const instruction = input;
+  if (!instruction) {
+    ctx.ui.notify(`Usage: /pi-rogue-orchestration ${commandName === "autoresearch-lab" ? "lab" : "autoresearch"} <instruction>`, "error");
+    return;
+  }
 
-      const instruction = input;
-      if (!instruction) {
-        ctx.ui.notify(`Usage: /${commandName} <instruction>`, "error");
-        return;
-      }
+  const goal = buildResearchGoal(commandName, instruction);
+  const loopInstruction = buildResearchLoopInstruction(commandName, instruction);
+  const previous = readResearchState(ctx);
+  const currentLoop = readLoopState(ctx);
+  if (
+    previous.kind === commandName
+    && previous.instruction === instruction
+    && previous.goal === goal
+    && activeGoal(ctx) === goal
+    && currentLoop.enabled
+    && currentLoop.instruction === loopInstruction
+  ) {
+    ctx.ui.notify(`${prefix} already active for this instruction. No duplicate cycle queued.`, "info");
+    return;
+  }
 
-      const goal = buildResearchGoal(commandName, instruction);
-      const loopInstruction = buildResearchLoopInstruction(commandName, instruction);
-      const previous = readResearchState(ctx);
-      const currentLoop = readLoopState(ctx);
-      if (
-        previous.kind === commandName
-        && previous.instruction === instruction
-        && previous.goal === goal
-        && activeGoal(ctx) === goal
-        && currentLoop.enabled
-        && currentLoop.instruction === loopInstruction
-      ) {
-        ctx.ui.notify(`${prefix} already active for this instruction. No duplicate cycle queued.`, "info");
-        return;
-      }
+  const restartSameGoal = activeGoal(ctx) === goal;
+  setGoal(ctx, goal, { restartDuplicate: restartSameGoal });
 
-      const restartSameGoal = activeGoal(ctx) === goal;
-      setGoal(ctx, goal, { restartDuplicate: restartSameGoal });
-
-      setGoalStatus(ctx, goal);
-      const next = writeResearchState(ctx, {
-        kind: commandName,
-        instruction,
-        goal,
-        loopInstruction,
-        interval: DEFAULT_RESEARCH_INTERVAL,
-        cycles: 0,
-        updatedAt: "",
-      });
-      const loop = startLoop(pi, ctx, DEFAULT_RESEARCH_INTERVAL, loopInstruction, { triggerNow: true });
-      if (!loop) {
-        ctx.ui.notify(`${prefix} could not start: invalid loop interval.`, "error");
-        return;
-      }
-      ctx.ui.notify(`${formatResearchState(next)}. First cycle queued now.`, "info");
-    },
+  setGoalStatus(ctx, goal);
+  const next = writeResearchState(ctx, {
+    kind: commandName,
+    instruction,
+    goal,
+    loopInstruction,
+    interval: DEFAULT_RESEARCH_INTERVAL,
+    cycles: 0,
+    updatedAt: "",
   });
+  const loop = startLoop(pi, ctx, DEFAULT_RESEARCH_INTERVAL, loopInstruction, { triggerNow: true });
+  if (!loop) {
+    ctx.ui.notify(`${prefix} could not start: invalid loop interval.`, "error");
+    return;
+  }
+  ctx.ui.notify(`${formatResearchState(next)}. First cycle queued now.`, "info");
 }
 
 export function registerAutoresearch(pi: ExtensionAPI): void {
   const p = pi as any;
   if (p.__piRogueAutoresearchRegistered) return;
   p.__piRogueAutoresearchRegistered = true;
-  registerResearchCommand(pi, "autoresearch");
 }
 
 export function registerAutoresearchLab(pi: ExtensionAPI): void {
   const p = pi as any;
   if (p.__piRogueAutoresearchLabRegistered) return;
   p.__piRogueAutoresearchLabRegistered = true;
-  registerResearchCommand(pi, "autoresearch-lab");
 }

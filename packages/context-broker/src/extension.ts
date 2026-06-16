@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import type { AgentToolResult } from "@earendil-works/pi-coding-agent";
 import type { AutocompleteItem } from "@earendil-works/pi-tui";
@@ -57,8 +57,8 @@ function envNonNegativeInt(name: string): number | undefined {
   return parseNonNegativeInt(process.env[name]);
 }
 
-function contextBrokerConfigPath(ctx: Pick<ExtensionContext, "cwd"> | { cwd?: unknown }): string {
-  return join(String(ctx.cwd ?? process.cwd()), ".pi", "context-broker", "config.json");
+function contextBrokerConfigPath(_ctx: Pick<ExtensionContext, "cwd"> | { cwd?: unknown }): string {
+  return join(homedir(), ".pi", "agent", "pi-rogue", "context-broker", "config.json");
 }
 
 function loadConfiguredRewriteThresholdBytes(ctx: Pick<ExtensionContext, "cwd"> | { cwd?: unknown }): number | undefined {

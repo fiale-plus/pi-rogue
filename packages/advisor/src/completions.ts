@@ -34,15 +34,13 @@ function completionsForPrefix(prefix: string, topLevel: Array<[string, string?]>
 }
 
 const advisorTopLevel: Array<[string, string?]> = [
-  ["status", "show status and configuration"],
-  ["config", "show full config"],
+  ["status", "show advisor status and configuration"],
   ["on", "enable auto mode"],
   ["off", "disable advisor"],
   ["mode", "set auto/manual/off"],
   ["review", "set light/strict/off"],
-  ["pause", "pause advisor auto-runs for N turns"],
-  ["unpause", "resume advisor auto-runs immediately"],
   ["model", "set or inspect model override"],
+  ["checkins", "explain orchestration-managed check-ins"],
 ];
 
 const advisorNested: Record<string, Array<[string, string?]>> = {
@@ -52,23 +50,12 @@ const advisorNested: Record<string, Array<[string, string?]>> = {
 };
 
 const piRogueTopLevel: Array<[string, string?]> = [
-  ["status", "show cockpit"],
-  ["advisor", "advisor status"],
-  ["orchestration", "goal/loop/autoresearch shortcuts"],
-  ["help", "show cockpit help"],
+  ["status", "show aggregate Pi-Rogue setup and cockpit"],
+  ["help", "show canonical command roots"],
+  ["doctor", "show setup/diagnostic checklist"],
 ];
 
-const piRogueNested: Record<string, Array<[string, string?]>> = {
-  advisor: advisorTopLevel,
-  orchestration: [
-    ["goal", "goal commands"],
-    ["loop", "loop commands"],
-    ["autoresearch", "solo research flow"],
-    ["autoresearch-lab", "parallel research flow"],
-    ["status", "show all surfaces"],
-  ],
-  help: [["advisor"], ["orchestration"], ["status"]],
-};
+const piRogueNested: Record<string, Array<[string, string?]>> = {};
 
 export function advisorArgumentCompletions(prefix: string): CompletionItem[] | null {
   return completionsForPrefix(prefix, advisorTopLevel, advisorNested);

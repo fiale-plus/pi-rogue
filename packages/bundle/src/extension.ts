@@ -1,3 +1,5 @@
+import { homedir } from "node:os";
+import { join } from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { registerAdvisor } from "@fiale-plus/pi-rogue-advisor";
 import { registerOrchestration } from "@fiale-plus/pi-rogue-orchestration";
@@ -17,7 +19,10 @@ export async function registerBundle(pi: ExtensionAPI): Promise<void> {
 
   if (contextBrokerEnabled()) {
     const { registerContextBrokerBeta } = await import("@fiale-plus/pi-rogue-context-broker/extension");
-    await registerContextBrokerBeta(pi);
+    await registerContextBrokerBeta(pi, {
+      durable: true,
+      storeDir: join(homedir(), ".pi", "agent", "pi-rogue", "context-broker"),
+    });
   }
 
   registerAdvisor(pi);

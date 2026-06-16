@@ -1,7 +1,7 @@
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { registerFusion } from "./extension.js";
 
 function createPiMock() {
@@ -51,21 +51,32 @@ function createCtx(cwd: string, notifications: Array<{ message: string; type?: s
 describe("fusion extension", () => {
   const oldRecipes = process.env.PI_ROGUE_FUSION_RECIPES;
   const oldTraceDir = process.env.PI_ROGUE_FUSION_TRACE_DIR;
+  const oldHome = process.env.HOME;
+  let isolatedHome = "";
+
+  beforeEach(() => {
+    isolatedHome = mkdtempSync(join(tmpdir(), "fusion-home-"));
+    process.env.HOME = isolatedHome;
+  });
 
   afterEach(() => {
     if (oldRecipes === undefined) delete process.env.PI_ROGUE_FUSION_RECIPES;
     else process.env.PI_ROGUE_FUSION_RECIPES = oldRecipes;
     if (oldTraceDir === undefined) delete process.env.PI_ROGUE_FUSION_TRACE_DIR;
     else process.env.PI_ROGUE_FUSION_TRACE_DIR = oldTraceDir;
+    if (oldHome === undefined) delete process.env.HOME;
+    else process.env.HOME = oldHome;
+    if (isolatedHome) rmSync(isolatedHome, { recursive: true, force: true });
+    isolatedHome = "";
   });
 
-  it("registers the /fusion command by default but no provider when no recipes exist", () => {
+  it("registers the /pi-rogue-fusion command by default but no provider when no recipes exist", () => {
     delete process.env.PI_ROGUE_FUSION_RECIPES;
     const cwd = mkdtempSync(join(tmpdir(), "fusion-no-recipes-"));
     try {
       const { pi, commands, handlers, providers, unregistered } = createPiMock();
       registerFusion(pi);
-      expect(commands.has("fusion")).toBe(true);
+      expect(commands.has("pi-rogue-fusion")).toBe(true);
       handlers.get("session_start")?.[0]?.({}, createCtx(cwd));
       expect(providers.has("fusion")).toBe(false);
       expect(unregistered).toContain("fusion");
@@ -77,8 +88,8 @@ describe("fusion extension", () => {
   it("auto-registers fusion models when recipes exist without requiring an enable env var", () => {
     const cwd = mkdtempSync(join(tmpdir(), "fusion-recipes-"));
     try {
-      const path = join(cwd, ".pi", "fusion", "recipes.json");
-      mkdirSync(join(cwd, ".pi", "fusion"), { recursive: true });
+      const path = join(isolatedHome, ".pi", "agent", "pi-rogue", "fusion", "recipes.json");
+      mkdirSync(join(isolatedHome, ".pi", "agent", "pi-rogue", "fusion"), { recursive: true });
       writeFileSync(path, JSON.stringify({ recipes: [{
         schema: "pi-rogue.fusion.recipe.v1",
         kind: "fusion",
@@ -98,19 +109,19 @@ describe("fusion extension", () => {
     }
   });
 
-  it("/fusion configure adds a recipe and guides reload/router next steps", async () => {
+  it("/pi-rogue-fusion configure adds a recipe and guides reload/pi-rogue-router next steps", async () => {
     const cwd = mkdtempSync(join(tmpdir(), "fusion-configure-"));
     const notifications: Array<{ message: string; type?: string }> = [];
     try {
       const { pi, commands } = createPiMock();
       registerFusion(pi);
-      const fusion = commands.get("fusion");
+      const fusion = commands.get("pi-rogue-fusion");
       await fusion.handler(
         "configure add hard-judge openai-codex/gpt-5.5 openai-codex/gpt-5.5 openai-codex/gpt-5.3-codex-spark --tokens 1200 --temperature 0.4",
         createCtx(cwd, notifications),
       );
 
-      const path = join(cwd, ".pi-rogue", "fusion", "recipes.json");
+      const path = join(isolatedHome, ".pi", "agent", "pi-rogue", "fusion", "recipes.json");
       const saved = JSON.parse(readFileSync(path, "utf8"));
       expect(saved.recipes[0]).toMatchObject({
         id: "hard-judge",
@@ -119,8 +130,8 @@ describe("fusion extension", () => {
         max_completion_tokens: 1200,
         temperature: 0.4,
       });
-      expect(notifications.at(-1)?.message).toContain("Run /fusion reload or restart Pi");
-      expect(notifications.at(-1)?.message).toContain("/router models");
+      expect(notifications.at(-1)?.message).toContain("Run /pi-rogue-fusion reload or restart Pi");
+      expect(notifications.at(-1)?.message).toContain("/pi-rogue-router models");
     } finally {
       rmSync(cwd, { recursive: true, force: true });
     }
@@ -131,7 +142,7 @@ describe("fusion extension", () => {
     try {
       const { pi, commands } = createPiMock();
       registerFusion(pi);
-      const fusion = commands.get("fusion");
+      const fusion = commands.get("pi-rogue-fusion");
       expect(fusion.getArgumentCompletions("con", createCtx(cwd)).map((item: any) => item.value)).toContain("configure");
       expect(fusion.getArgumentCompletions("configure ", createCtx(cwd)).map((item: any) => item.value)).toEqual(expect.arrayContaining(["add", "edit", "remove", "help"]));
       expect(fusion.getArgumentCompletions("configure add hard open", createCtx(cwd)).map((item: any) => item.value)).toEqual(expect.arrayContaining(["openai-codex/gpt-5.5", "openai-codex/gpt-5.3-codex-spark"]));
@@ -140,13 +151,13 @@ describe("fusion extension", () => {
     }
   });
 
-  it("/fusion configure help lists scoped session models", async () => {
+  it("/pi-rogue-fusion configure help lists scoped session models", async () => {
     const cwd = mkdtempSync(join(tmpdir(), "fusion-help-"));
     const notifications: Array<{ message: string; type?: string }> = [];
     try {
       const { pi, commands } = createPiMock();
       registerFusion(pi);
-      await commands.get("fusion").handler("configure", createCtx(cwd, notifications));
+      await commands.get("pi-rogue-fusion").handler("configure", createCtx(cwd, notifications));
       const message = notifications.at(-1)?.message ?? "";
       expect(message).toContain("openai-codex/gpt-5.5");
       expect(message).toContain("openai-codex/gpt-5.3-codex-spark");

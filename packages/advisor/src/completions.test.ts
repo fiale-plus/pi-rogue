@@ -4,8 +4,8 @@ import { advisorArgumentCompletions, piRogueArgumentCompletions } from "./comple
 describe("advisor completions", () => {
   it("offers top-level advisor continuations", () => {
     const values = advisorArgumentCompletions("")?.map((i) => i.value);
-    expect(values).toEqual(expect.arrayContaining(["status", "config", "model", "review", "pause", "unpause"]));
-    expect(values).not.toContain("checkins");
+    expect(values).not.toEqual(expect.arrayContaining(["pause", "unpause"]));
+    expect(values).not.toContain("config");
   });
 
   it("offers nested review choices", () => {
@@ -16,13 +16,14 @@ describe("advisor completions", () => {
 });
 
 describe("pi-rogue cockpit completions", () => {
-  it("offers umbrella sections", () => {
+  it("offers only concise root management commands", () => {
     const values = piRogueArgumentCompletions("")?.map((i) => i.value);
-    expect(values).toEqual(expect.arrayContaining(["status", "advisor", "orchestration", "help"]));
+    expect(values).toEqual(["status", "help", "doctor"]);
+    expect(values).not.toEqual(expect.arrayContaining(["config", "advisor", "router", "fusion", "orchestration"]));
   });
 
-  it("fans out to orchestration shortcuts", () => {
-    const values = piRogueArgumentCompletions("orchestration ")?.map((i) => i.value);
-    expect(values).toEqual(expect.arrayContaining(["goal", "loop", "autoresearch", "autoresearch-lab"]));
+  it("does not fan out subsystem or deprecated configure choices", () => {
+    expect(piRogueArgumentCompletions("configure ")).toBeNull();
+    expect(piRogueArgumentCompletions("router ")).toBeNull();
   });
 });

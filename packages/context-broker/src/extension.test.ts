@@ -600,7 +600,9 @@ lookupBytes: 500,
 
   it("allows /context config threshold to tune rewrite threshold", async () => {
     const dir = mkdtempSync(join(tmpdir(), "ctx-broker-config-test-"));
+    const oldHome = process.env.HOME;
     try {
+      process.env.HOME = dir;
       const { pi, handlers, commands } = createPiMock();
       registerContextBrokerBeta(pi);
       const { ctx, notifications } = createCtx();
@@ -625,6 +627,8 @@ lookupBytes: 500,
       expect(result.messages[0].content[0].text).toContain("Context broker artifact: ctx://");
       expect(result.messages[0].content[0].text).not.toContain(raw);
     } finally {
+      if (oldHome === undefined) delete process.env.HOME;
+      else process.env.HOME = oldHome;
       rmSync(dir, { recursive: true, force: true });
     }
   });

@@ -1,8 +1,60 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { registerAutoresearch, registerAutoresearchLab } from "./autoresearch.js";
-import { registerGoal } from "./goal.js";
-import { registerLoop } from "./loop.js";
+import { handleResearchCommand, registerAutoresearch, registerAutoresearchLab } from "./autoresearch.js";
+import { goalArgumentCompletions, loopArgumentCompletions, autoresearchArgumentCompletions } from "./completions.js";
+import { formatResearchState, readResearchState } from "./autoresearch-state.js";
+import { activeGoal, handleGoalCommand, registerGoal } from "./goal.js";
+import { formatLoopState, handleLoopCommand, readLoopState, registerLoop } from "./loop.js";
 import { registerNoveltyGuard } from "./novelty-guard.js";
+
+type CompletionItem = { value: string; label: string; description?: string };
+
+function item(value: string, description?: string): CompletionItem {
+  return { value, label: value, ...(description ? { description } : {}) };
+}
+
+function orchestrationCompletions(prefix: string): CompletionItem[] | null {
+  const input = prefix.trimStart();
+  const [cmd, ...rest] = input.split(/\s+/);
+  const tail = rest.join(" ");
+  if (!input || !input.includes(" ")) {
+    const q = input.toLowerCase();
+    const items = [
+      item("status", "show goal/loop/research state"),
+      item("help", "show orchestration command tree"),
+      item("goal ", "show/set/clear/list current goal"),
+      item("loop ", "show/set/clear loop cadence"),
+      item("autoresearch ", "solo research loop"),
+      item("lab ", "parallel research lab loop"),
+    ];
+    const out = q ? items.filter((entry) => entry.value.toLowerCase().startsWith(q)) : items;
+    return out.length ? out : null;
+  }
+  if (cmd === "goal") return goalArgumentCompletions(tail);
+  if (cmd === "loop") return loopArgumentCompletions(tail);
+  if (cmd === "autoresearch" || cmd === "lab") return autoresearchArgumentCompletions(tail);
+  return null;
+}
+
+function orchestrationStatus(ctx: any): string {
+  const goal = activeGoal(ctx);
+  return [
+    "Pi-Rogue orchestration:",
+    `goal: ${goal || "none"}`,
+    `loop: ${formatLoopState(readLoopState(ctx))}`,
+    `research: ${formatResearchState(readResearchState(ctx))}`,
+  ].join("\n");
+}
+
+function orchestrationHelp(): string {
+  return [
+    "pi-rogue-orchestration command tree:",
+    "  /pi-rogue-orchestration status",
+    "  /pi-rogue-orchestration goal [show|set <text>|clear|list]",
+    "  /pi-rogue-orchestration loop [status|off|clear|stop|<interval> <instruction>]",
+    "  /pi-rogue-orchestration autoresearch [status|clear|<instruction>]",
+    "  /pi-rogue-orchestration lab [status|clear|<instruction>]",
+  ].join("\n");
+}
 
 export function registerOrchestration(pi: ExtensionAPI): void {
   const p = pi as any;
@@ -14,6 +66,42 @@ export function registerOrchestration(pi: ExtensionAPI): void {
   registerLoop(pi);
   registerAutoresearch(pi);
   registerAutoresearchLab(pi);
+
+  pi.registerCommand("pi-rogue-orchestration", {
+    description: "Pi-Rogue orchestration. Usage: /pi-rogue-orchestration status|help|goal|loop|autoresearch|lab",
+    getArgumentCompletions: orchestrationCompletions,
+    handler: async (args, ctx) => {
+      const input = String(args ?? "").trim();
+      const [cmdRaw, ...rest] = input.split(/\s+/);
+      const cmd = cmdRaw || "status";
+      const tail = rest.join(" ");
+      if (cmd === "status" || cmd === "show") {
+        ctx.ui.notify(orchestrationStatus(ctx), "info");
+        return;
+      }
+      if (cmd === "help") {
+        ctx.ui.notify(orchestrationHelp(), "info");
+        return;
+      }
+      if (cmd === "goal") {
+        await handleGoalCommand(pi, tail, ctx);
+        return;
+      }
+      if (cmd === "loop") {
+        await handleLoopCommand(pi, tail, ctx);
+        return;
+      }
+      if (cmd === "autoresearch") {
+        await handleResearchCommand(pi, "autoresearch", tail, ctx);
+        return;
+      }
+      if (cmd === "lab" || cmd === "autoresearch-lab") {
+        await handleResearchCommand(pi, "autoresearch-lab", tail, ctx);
+        return;
+      }
+      ctx.ui.notify("Usage: /pi-rogue-orchestration status|help|goal|loop|autoresearch|lab", "error");
+    },
+  });
 }
 
 export { registerAutoresearch, registerAutoresearchLab, registerGoal, registerLoop };
