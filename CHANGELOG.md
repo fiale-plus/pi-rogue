@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.3.5
+
+### Summary
+
+This release publishes the streamlined Pi-Rogue command roots from `main`, making the installed package easier to operate from the top-level slash surfaces while preserving the explicit command behavior of advisor, orchestration, context, router, and fusion flows.
+
+### Changes
+
+- Add and document the consolidated `/pi-rogue` command posture for installed sessions.
+- Improve command-root completions and help/status routing across advisor, orchestration, context broker, router, and fusion surfaces.
+- Add UX/config documentation for the Pi-Rogue command layout and configuration flow.
+- Refresh advisor/router/orchestration tests for the streamlined command dispatch behavior.
+
+### Validation
+
+- `npm run check`
+- `npm test`
+
 ## 0.3.3
 
 ### Summary
