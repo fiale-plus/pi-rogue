@@ -5,7 +5,8 @@
   "description": "Pi-Rogue advisor extension repo and internal workspaces.",
   "type": "module",
   "workspaces": [
-    "packages/*"
+    "packages/*",
+    "packages/lab/*"
   ],
   "scripts": {
     "check": "npm run check -ws --if-present",

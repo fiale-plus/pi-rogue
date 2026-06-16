@@ -39,7 +39,7 @@ describe("bundle extension defaults", () => {
 
     await registerBundle(pi);
 
-    expect(commands.has("context")).toBe(true);
+    expect(commands.has("pi-rogue-context")).toBe(true);
     expect(commands.has("pi-rogue")).toBe(true);
     expect(commands.has("pi-rogue-advisor")).toBe(true);
     expect(commands.has("pi-rogue-router")).toBe(true);
@@ -54,7 +54,7 @@ describe("bundle extension defaults", () => {
 
     await registerBundle(pi);
 
-    expect(commands.has("context")).toBe(false);
+    expect(commands.has("pi-rogue-context")).toBe(false);
   });
 });
 

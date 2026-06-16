@@ -18,8 +18,8 @@ Pi already has useful pieces, but they are not coordinated as a first-class cont
 | Piece | Current value | Gap |
 |---|---|---|
 | `context-mode` | Stores tool output externally and sends compact summaries plus evidence IDs. `docs/savings.md` measured ~88.9% prompt reduction in one real session. | Not owned by Pi-Rogue and not integrated with memory retention, payload caps, or commandable lookup. |
-| `packages/brain` | Tracks active branch, last commit, sessions, and branch notes. It already tells agents to cite context-mode evidence IDs. | `state.sessions`, branch docs, and roadmap entries are append-only and do not define bounded retention. |
-| `repo-arch` | Provides repository-level knowledge and lookup. | Focused on repo structure, not transient session payloads, command outputs, approvals, or tool deltas. |
+| `packages/lab/brain` | Tracks active branch, last commit, sessions, and branch notes. It already tells agents to cite context-mode evidence IDs. | `state.sessions`, branch docs, and roadmap entries are append-only and do not define bounded retention. |
+| `packages/lab/repo-arch` | Provides repository-level knowledge and lookup. | Focused on repo structure, not transient session payloads, command outputs, approvals, or tool deltas. |
 | `pi-subagents` | Can isolate work into separate agent contexts. | Subagent results still need a compact artifact contract so parent prompts do not absorb full child transcripts. |
 | Advisor extensions | Existing local advisor patterns use capped message windows and cheap models for review/routing. | Advisor context is still assembled ad hoc rather than supplied by a broker with stable handles. |
 | Pi compaction | User config keeps recent tokens and reserves compaction budget. | Compaction is reactive after context growth, not proactive payload routing. |
@@ -91,7 +91,7 @@ interface ContextArtifact {
 }
 ```
 
-Suggested files under `~/.pi/agent/fiale-plus/context-broker/`:
+Suggested files under `~/.pi/agent/fiale-plus/pi-rogue/context-broker/`:
 
 - `artifacts.sqlite`: metadata, FTS index, tags, path mappings, parent links.
 - `blobs/<sha256-prefix>/<sha256>`: raw payloads.
@@ -135,7 +135,7 @@ Hot:
 - Last failure: ctx://... summary=...
 Pinned:
 - ctx://... summary=...
-Lookup: use /context lookup or broker lookup tool before asking the user to repeat data.
+Lookup: use /pi-rogue-context lookup or broker lookup tool before asking the user to repeat data.
 Rule: never paste raw broker payloads unless the user asks or the payload is below the inline threshold.
 ```
 
@@ -213,7 +213,7 @@ The current implementation is split across a shared contract package and a runti
 - Omitted summaries render as metadata-only placeholders so raw payload text is not injected into prompt briefs by default.
 - The bundle registers the context broker by default in mainline. Rollback is `PI_CONTEXT_BROKER_ENABLED=false` followed by `/reload` or restart.
 - Bundle consumers can explicitly import the runtime from `@fiale-plus/pi-rogue/context-broker`; the private leaf package is not a separate public install target.
-- The command surface registers `/context status`, `/context brief`, `/context lookup <handle|text>`, `/context pin <handle>`, `/context export <handle>`, and `/context prune` with autocomplete, plus an LLM-callable `context_lookup` tool for exact handle dereferencing.
+- The command surface registers `/pi-rogue-context status`, `/pi-rogue-context brief`, `/pi-rogue-context lookup <handle|text>`, `/pi-rogue-context pin <handle>`, `/pi-rogue-context export <handle>`, and `/pi-rogue-context prune` with autocomplete, plus an LLM-callable `context_lookup` tool for exact handle dereferencing.
 - On reload/session start, the runtime backfills the current session branch from `toolResult` and prompt-visible `bashExecution` entries, deduped by session entry id, tolerant of malformed entries, and honoring Pi's `excludeFromContext` bash entries.
 - Prompt integration injects a bounded broker brief and uses the `context` hook to rewrite prompt-visible `toolResult` and `bashExecution` payloads to broker handles/summaries by default while preserving exact lookup.
 - Optional durability via `PI_CONTEXT_BROKER_DURABLE=true` or `PI_CONTEXT_BROKER_STORE_DIR` stores SQLite metadata/payloads with FTS so lookup handles, tier, and pin state survive restarts without replay reconstruction. SQLite is loaded lazily only when durable SQLite is selected; the legacy JSONL/blob backend remains selectable with `PI_CONTEXT_BROKER_BACKEND=jsonl`.
