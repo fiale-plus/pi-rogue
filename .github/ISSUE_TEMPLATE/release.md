@@ -44,7 +44,7 @@ Advisor, orchestration, and legacy bundle releases are paused (or deprecated tra
 - Tag format: `pi-rogue-<semver>`
 - Release title: `<semver>`
 - Use the package prefix in the tag, not in the title.
-- Internal helper packages (guardrails/brain/repo-arch) remain lab/greenhouse and are not published independently.
+- Internal helper packages (`packages/lab/guardrails`, `packages/lab/brain`, `packages/lab/repo-arch`) remain lab-internal and are not published independently.
 - Direct releases of advisor and pi-rogue-orchestration are paused per docs/release.md.
 
 ## Notes

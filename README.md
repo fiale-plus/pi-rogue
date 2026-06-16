@@ -66,8 +66,7 @@ All command surfaces below are provided by the single `@fiale-plus/pi-rogue` art
 - `/pi-rogue-router` mode `observe` (default) keeps routing as recommendations only and does not auto-switch policy
 - `/pi-rogue-router` mode `auto_model` explicitly applies only model routing; this still requires clear user-level intent and explicit opt-in
 - `/pi-rogue-fusion status|reload|configure` — OpenRouter-style comparable-panel Fusion provider controls (models register when recipes exist)
-- `/pi-rogue-context status|brief|lookup <handle|text>|pin <handle-or-id>|export <handle-or-id>|config threshold <bytes>|prune` — context broker controls (threshold minimum 2 KiB)
-- Legacy `/context` command alias is not supported.
+- `/pi-rogue-context status|brief|lookup <handle|text>|pin <handle-or-id>|export <handle-or-id>|config threshold <bytes>|prune` — context broker controls (threshold minimum 2 KiB). Legacy `/context` alias is not supported.
 
 ### Fusion
 
@@ -79,11 +78,11 @@ See `packages/fusion/README.md`.
 
 ### Lab packages
 
-- `packages/guardrails/` — Shell command risk checks and approvals for Pi.
-- `packages/brain/` — Local project memory helpers.
-- `packages/repo-arch/` — Repo integration bridge for repo-arch CLI.
+- `packages/lab/guardrails/` — Shell command risk checks and approvals for Pi.
+- `packages/lab/brain/` — Local project memory helpers.
+- `packages/lab/repo-arch/` — Repo integration bridge for repo-arch CLI.
 
-These are experimental/internal lab surfaces and may move under `packages/lab/` as a future cleanup.
+These are experimental/internal lab surfaces and grouped under `packages/lab/`.
 
 ## Documentation
 
@@ -112,9 +111,11 @@ npm test
 packages/
   advisor/
   core/
-  guardrails/
-  brain/
-  repo-arch/
+  context-broker/
+  lab/
+    guardrails/
+    brain/
+    repo-arch/
   orchestration/
   router/
   fusion/

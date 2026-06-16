@@ -18,8 +18,8 @@ Pi already has useful pieces, but they are not coordinated as a first-class cont
 | Piece | Current value | Gap |
 |---|---|---|
 | `context-mode` | Stores tool output externally and sends compact summaries plus evidence IDs. `docs/savings.md` measured ~88.9% prompt reduction in one real session. | Not owned by Pi-Rogue and not integrated with memory retention, payload caps, or commandable lookup. |
-| `packages/brain` | Tracks active branch, last commit, sessions, and branch notes. It already tells agents to cite context-mode evidence IDs. | `state.sessions`, branch docs, and roadmap entries are append-only and do not define bounded retention. |
-| `repo-arch` | Provides repository-level knowledge and lookup. | Focused on repo structure, not transient session payloads, command outputs, approvals, or tool deltas. |
+| `packages/lab/brain` | Tracks active branch, last commit, sessions, and branch notes. It already tells agents to cite context-mode evidence IDs. | `state.sessions`, branch docs, and roadmap entries are append-only and do not define bounded retention. |
+| `packages/lab/repo-arch` | Provides repository-level knowledge and lookup. | Focused on repo structure, not transient session payloads, command outputs, approvals, or tool deltas. |
 | `pi-subagents` | Can isolate work into separate agent contexts. | Subagent results still need a compact artifact contract so parent prompts do not absorb full child transcripts. |
 | Advisor extensions | Existing local advisor patterns use capped message windows and cheap models for review/routing. | Advisor context is still assembled ad hoc rather than supplied by a broker with stable handles. |
 | Pi compaction | User config keeps recent tokens and reserves compaction budget. | Compaction is reactive after context growth, not proactive payload routing. |

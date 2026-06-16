@@ -16,9 +16,9 @@
       "@fiale-plus/pi-rogue-context-broker/extension": ["./packages/context-broker/src/extension.ts"],
       "@fiale-plus/pi-rogue-context-broker/file": ["./packages/context-broker/src/file.ts"],
       "@fiale-plus/pi-rogue-context-broker/sqlite": ["./packages/context-broker/src/sqlite.ts"],
-      "@fiale-plus/pi-rogue-guardrails": ["./packages/guardrails/src"],
-      "@fiale-plus/pi-rogue-brain": ["./packages/brain/src"],
-      "@fiale-plus/pi-rogue-repo-arch": ["./packages/repo-arch/src"],
+      "@fiale-plus/pi-rogue-guardrails": ["./packages/lab/guardrails/src"],
+      "@fiale-plus/pi-rogue-brain": ["./packages/lab/brain/src"],
+      "@fiale-plus/pi-rogue-repo-arch": ["./packages/lab/repo-arch/src"],
       "@fiale-plus/pi-rogue-router": ["./packages/router/src"],
       "@fiale-plus/pi-rogue-router/extension": ["./packages/router/src/extension.ts"],
       "@fiale-plus/pi-rogue-fusion": ["./packages/fusion/src"],
@@ -27,7 +27,10 @@
   },
   "include": [
     "packages/*/src/**/*.ts",
+    "packages/*/*/src/**/*.ts",
     "packages/*/orchestration/**/*.ts",
-    "packages/*/pi/**/*.ts"
+    "packages/*/*/orchestration/**/*.ts",
+    "packages/*/pi/**/*.ts",
+    "packages/*/*/pi/**/*.ts"
   ]
 }
