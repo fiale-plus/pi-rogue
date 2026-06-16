@@ -33,8 +33,9 @@ const DEFAULT_BRIEF_BYTES = 1_800;
 const DEFAULT_LOOKUP_BYTES = 12_000;
 const DEFAULT_SEARCH_BYTES = 2_000;
 const DEFAULT_REWRITE_THRESHOLD_BYTES = 8 * 1024;
+const MIN_REWRITE_THRESHOLD_BYTES = 2 * 1024;
 const REWRITE_THRESHOLD_ENV = "PI_CONTEXT_BROKER_REWRITE_THRESHOLD_BYTES";
-const REWRITE_THRESHOLD_PRESETS = [4 * 1024, 8 * 1024, 16 * 1024, 32 * 1024];
+const REWRITE_THRESHOLD_PRESETS = [2 * 1024, 4 * 1024, 8 * 1024, 16 * 1024, 32 * 1024];
 const DEFAULT_TTL_MS = 24 * 60 * 60 * 1000;
 const DEFAULT_HOT_TO_WARM_MS = 2 * 60 * 60 * 1000;
 const DEFAULT_WARM_TO_COLD_MS = 12 * 60 * 60 * 1000;
@@ -57,6 +58,11 @@ function envNonNegativeInt(name: string): number | undefined {
   return parseNonNegativeInt(process.env[name]);
 }
 
+function clampRewriteThresholdBytes(value: number | undefined): number | undefined {
+  if (value === undefined) return undefined;
+  return Math.max(MIN_REWRITE_THRESHOLD_BYTES, value);
+}
+
 function contextBrokerConfigPath(_ctx: Pick<ExtensionContext, "cwd"> | { cwd?: unknown }): string {
   return join(homedir(), ".pi", "agent", "pi-rogue", "context-broker", "config.json");
 }
@@ -66,7 +72,7 @@ function loadConfiguredRewriteThresholdBytes(ctx: Pick<ExtensionContext, "cwd"> 
   if (!existsSync(path)) return undefined;
   try {
     const parsed = JSON.parse(readFileSync(path, "utf8")) as { rewriteThresholdBytes?: unknown; rewrite_threshold_bytes?: unknown };
-    return parseNonNegativeInt(parsed.rewriteThresholdBytes ?? parsed.rewrite_threshold_bytes);
+    return clampRewriteThresholdBytes(parseNonNegativeInt(parsed.rewriteThresholdBytes ?? parsed.rewrite_threshold_bytes));
   } catch {
     return undefined;
   }
@@ -188,8 +194,8 @@ function renderLookupOutput(item: ContextArtifact, payloadLimit: number): string
     ? [
       "payload:",
       isOpaque && !isBinary
-        ? "[payload omitted from prompt because it appears opaque/high-token; use /context export"
-        : "[payload intentionally omitted from prompt for safety; use /context export",
+        ? "[payload omitted from prompt because it appears opaque/high-token; use /pi-rogue-context export"
+        : "[payload intentionally omitted from prompt for safety; use /pi-rogue-context export",
       sanitizeForPrompt(item.handle),
       "for full content]",
     ]
@@ -308,7 +314,7 @@ function brokerPlaceholder(artifact: ContextArtifact): string {
     `Context broker artifact: ${artifact.handle}`,
     `Summary: ${artifact.summary}`,
     `Payload bytes: ${artifact.bytes}`,
-    "Raw payload omitted from prompt. Use /context lookup <handle> if exact evidence is needed.",
+    "Raw payload omitted from prompt. Use /pi-rogue-context lookup <handle> if exact evidence is needed.",
   ].join("\n");
 }
 
@@ -332,7 +338,7 @@ function summarizeTool(event: { toolName: string; input?: any; isError?: boolean
   const command = event.toolName === "bash" ? event.input?.command : undefined;
   const path = event.input?.path;
   const target = command ? ` command=${compact(String(command), 120)}` : path ? ` path=${path}` : "";
-  const marker = hostile ? "; payload marked hostile; use /context export for full content" : "";
+  const marker = hostile ? "; payload marked hostile; use /pi-rogue-context export for full content" : "";
   return `${event.isError ? "failed" : "completed"} ${event.toolName}${target}; payload=${bytes} bytes${marker}`;
 }
 
@@ -367,17 +373,18 @@ export async function registerContextBrokerBeta(pi: ExtensionAPI, options: Conte
   const lookupBytes = options.lookupBytes ?? DEFAULT_LOOKUP_BYTES;
   const searchBytes = options.searchBytes ?? DEFAULT_SEARCH_BYTES;
   const rewriteThresholdOption = options.rewriteThresholdBytes;
-  const rewriteThresholdEnv = envNonNegativeInt(REWRITE_THRESHOLD_ENV);
+  const rewriteThresholdEnv = clampRewriteThresholdBytes(envNonNegativeInt(REWRITE_THRESHOLD_ENV));
+  const rewriteThresholdConfigured = loadConfiguredRewriteThresholdBytes({ cwd: process.cwd() });
   let rewriteThresholdBytes =
     rewriteThresholdOption
     ?? rewriteThresholdEnv
-    ?? loadConfiguredRewriteThresholdBytes({ cwd: process.cwd() })
+    ?? rewriteThresholdConfigured
     ?? DEFAULT_REWRITE_THRESHOLD_BYTES;
   let rewriteThresholdSource = rewriteThresholdOption !== undefined
     ? "option"
     : rewriteThresholdEnv !== undefined
       ? "env"
-      : loadConfiguredRewriteThresholdBytes({ cwd: process.cwd() }) !== undefined
+      : rewriteThresholdConfigured !== undefined
         ? "config"
         : "default";
   const durable = options.durable ?? (envFlag("PI_CONTEXT_BROKER_DURABLE") || Boolean(options.storeDir ?? process.env.PI_CONTEXT_BROKER_STORE_DIR));
@@ -706,7 +713,7 @@ export async function registerContextBrokerBeta(pi: ExtensionAPI, options: Conte
     const { added, scanned, errors } = backfillSessionArtifacts(ctx);
     ctx.ui.setStatus?.("context-broker", "ctx:on");
     ctx.ui.notify(
-      `Context broker enabled. Backfilled ${added}/${scanned} current-branch tool artifacts${errors ? ` (${errors} malformed skipped)` : ""}. Use /context status or /context brief.`,
+      `Context broker enabled. Backfilled ${added}/${scanned} current-branch tool artifacts${errors ? ` (${errors} malformed skipped)` : ""}. Use /pi-rogue-context status or /pi-rogue-context brief.`,
       errors ? "warning" : "info",
     );
   });
@@ -856,7 +863,7 @@ export async function registerContextBrokerBeta(pi: ExtensionAPI, options: Conte
       systemPrompt: [
         event.systemPrompt,
         brief,
-        "Context broker rule: use /context lookup <handle> for exact evidence when a broker handle is relevant. Broker briefs are bounded summaries and never raw payload dumps.",
+        "Context broker rule: use /pi-rogue-context lookup <handle> for exact evidence when a broker handle is relevant. Broker briefs are bounded summaries and never raw payload dumps.",
       ].join("\n\n"),
     };
   });
@@ -911,7 +918,7 @@ export async function registerContextBrokerBeta(pi: ExtensionAPI, options: Conte
     },
   });
 
-  pi.registerCommand("context", {
+  pi.registerCommand("pi-rogue-context", {
     description: "Inspect the context broker: status | brief | lookup <handle-or-text> | pin <handle-or-id> | export <handle-or-id> | config | prune",
     getArgumentCompletions: contextArgumentCompletions,
     handler: async (args, ctx) => {
@@ -938,7 +945,7 @@ export async function registerContextBrokerBeta(pi: ExtensionAPI, options: Conte
 
       if (action === "lookup") {
         if (!query) {
-          ctx.ui.notify("Usage: /context lookup <ctx://handle-or-text>", "warning");
+          ctx.ui.notify("Usage: /pi-rogue-context lookup <ctx://handle-or-text>", "warning");
           return;
         }
         routingTelemetry.commandLookupCalls += 1;
@@ -959,7 +966,7 @@ export async function registerContextBrokerBeta(pi: ExtensionAPI, options: Conte
 
       if (action === "pin") {
         if (!query) {
-          ctx.ui.notify("Usage: /context pin <ctx://handle-or-id>", "warning");
+          ctx.ui.notify("Usage: /pi-rogue-context pin <ctx://handle-or-id>", "warning");
           return;
         }
         const pinned = broker.pin(query, true);
@@ -970,7 +977,7 @@ export async function registerContextBrokerBeta(pi: ExtensionAPI, options: Conte
 
       if (action === "export") {
         if (!query) {
-          ctx.ui.notify("Usage: /context export <ctx://handle-or-id>", "warning");
+          ctx.ui.notify("Usage: /pi-rogue-context export <ctx://handle-or-id>", "warning");
           return;
         }
 
@@ -998,8 +1005,12 @@ export async function registerContextBrokerBeta(pi: ExtensionAPI, options: Conte
         }
         if (key === "threshold") {
           const value = parseNonNegativeInt(rawValue);
-          if (value === undefined) {
-            ctx.ui.notify("Usage: /context config threshold <non-negative bytes>", "warning");
+          if (value === undefined || value < MIN_REWRITE_THRESHOLD_BYTES) {
+            ctx.ui.notify(
+              `Usage: /pi-rogue-context config threshold <bytes>\n` +
+              `  - must be an integer >= ${MIN_REWRITE_THRESHOLD_BYTES} bytes`,
+              "warning",
+            );
             return;
           }
           const path = saveConfiguredRewriteThresholdBytes(ctx, value);
@@ -1010,7 +1021,7 @@ export async function registerContextBrokerBeta(pi: ExtensionAPI, options: Conte
           ctx.ui.notify(`Context broker config updated: rewriteThresholdBytes=${value}\nconfig: ${path}${rewriteThresholdSource !== "config" ? `\nNote: current ${rewriteThresholdSource} override still takes precedence this session.` : ""}`, "info");
           return;
         }
-        ctx.ui.notify("Usage: /context config threshold <non-negative bytes>", "warning");
+        ctx.ui.notify(`Usage: /pi-rogue-context config threshold <bytes> (minimum ${MIN_REWRITE_THRESHOLD_BYTES} bytes)`, "warning");
         return;
       }
 
@@ -1021,7 +1032,7 @@ export async function registerContextBrokerBeta(pi: ExtensionAPI, options: Conte
         return;
       }
 
-      ctx.ui.notify("Usage: /context status | brief | lookup <handle-or-text> | pin <handle-or-id> | export <handle-or-id> | config | prune", "warning");
+      ctx.ui.notify("Usage: /pi-rogue-context status | brief | lookup <handle-or-text> | pin <handle-or-id> | export <handle-or-id> | config | prune", "warning");
     },
   });
 }

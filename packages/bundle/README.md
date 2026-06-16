@@ -31,13 +31,14 @@ npm install
 
 - The context-broker runtime is bundled and registered by default in the bundle.
 - Consumers can import the runtime through the bundle subpath: `@fiale-plus/pi-rogue/context-broker`.
-- Set `PI_CONTEXT_BROKER_ENABLED=false` before starting Pi to disable the `/context` command surface and prompt-load rewriting.
+- Set `PI_CONTEXT_BROKER_ENABLED=false` before starting Pi to disable the `/pi-rogue-context` command surface and prompt-load rewriting.
+- Legacy `/context` command alias is not registered.
 - Optional durable broker storage can be enabled with `PI_CONTEXT_BROKER_DURABLE=true` or `PI_CONTEXT_BROKER_STORE_DIR=/path/to/store`; it defaults to SQLite/FTS and supports `PI_CONTEXT_BROKER_BACKEND=jsonl` for the legacy JSONL/blob backend.
 
 ## Command surface
 
 - Default: `/advisor`, `/goal`, `/loop`, `/autoresearch`, `/autoresearch-lab`, `/router`, `/fusion` plus status/config/command paths (all provided via the bundle).
-- Context broker: enabled by default; `PI_CONTEXT_BROKER_ENABLED=false` disables `/context status`, `/context brief`, `/context lookup <handle|text>`, `/context pin <handle>`, `/context export <handle>`, `/context config threshold <bytes>`, and `/context prune` with autocomplete.
+- Context broker: enabled by default; `PI_CONTEXT_BROKER_ENABLED=false` disables `/pi-rogue-context status`, `/pi-rogue-context brief`, `/pi-rogue-context lookup <handle|text>`, `/pi-rogue-context pin <handle>`, `/pi-rogue-context export <handle>`, `/pi-rogue-context config threshold <bytes>`, and `/pi-rogue-context prune` with autocomplete.
 - Fusion provider: `/fusion` is available by default; configured `fusion/<recipe-id>` models register when recipes exist, or use `/fusion configure` then `/fusion reload` explicitly in a session.
 
 ### Router (offline)

@@ -16,7 +16,7 @@ It is registered by default in the bundle, with an explicit env kill switch.
 
 ## Mainline extension
 
-The bundle registers a `context_lookup` LLM tool plus `/context` commands by default. To disable the runtime for rollback:
+The bundle registers a `context_lookup` LLM tool plus `/pi-rogue-context` commands by default (legacy `/context` is not registered). To disable the runtime for rollback:
 
 ```bash
 PI_CONTEXT_BROKER_ENABLED=false pi
@@ -24,22 +24,23 @@ PI_CONTEXT_BROKER_ENABLED=false pi
 
 When active, the bundle registers:
 
-- `/context status` — enabled state, record/byte counts, pinned counts, routing telemetry, and prompt rewrite savings bytes.
-- `/context brief` — bounded prompt-safe broker brief with handles and summaries.
-- `/context lookup <handle|text>` — exact handle rehydration or current-session text search.
-- `/context pin <handle>` — protect an artifact from normal TTL/cap pruning.
-- `/context export <handle>` — write full payload to a temp file without dumping it into prompt.
-- `/context prune` — run TTL/cap pruning immediately.
+- `/pi-rogue-context status` — enabled state, record/byte counts, pinned counts, routing telemetry, and prompt rewrite savings bytes.
+- `/pi-rogue-context brief` — bounded prompt-safe broker brief with handles and summaries.
+- `/pi-rogue-context lookup <handle|text>` — exact handle rehydration or current-session text search.
+- `/pi-rogue-context pin <handle>` — protect an artifact from normal TTL/cap pruning.
+- `/pi-rogue-context export <handle>` — write full payload to a temp file without dumping it into prompt.
+- `/pi-rogue-context prune` — run TTL/cap pruning immediately.
 
-The command includes autocomplete for subcommands and known artifact handles. Exact handle lookup returns clipped payload text; text search returns a smaller clipped excerpt, and truncation is marked explicitly. Exact-handle misses and text/filter misses use distinct messages, and `/context status` reports exact/text miss counters.
+The command includes autocomplete for subcommands and known artifact handles. Exact handle lookup returns clipped payload text; text search returns a smaller clipped excerpt, and truncation is marked explicitly. Exact-handle misses and text/filter misses use distinct messages, and `/pi-rogue-context status` reports exact/text miss counters.
 
 Optional durability is available with `PI_CONTEXT_BROKER_DURABLE=true` or `PI_CONTEXT_BROKER_STORE_DIR=/path/to/store`. Durable mode now defaults to SQLite (`artifacts.sqlite`) with an FTS index for text lookup, so exact handles, tier, and pin state survive restarts without replay reconstruction. Set `PI_CONTEXT_BROKER_BACKEND=jsonl` to use the legacy JSONL/blob backend. Durable mode applies default global retention caps when env caps are not set: 2,048 records and 256 MiB across sessions.
 
-- `PI_CONTEXT_BROKER_REWRITE_THRESHOLD_BYTES` controls when large `toolResult` / `bashExecution` payloads are rewritten in-context. The default is `8192` bytes, so small tool evidence remains inline while larger outputs are replaced by handles.
+- `PI_CONTEXT_BROKER_REWRITE_THRESHOLD_BYTES` controls when large `toolResult` / `bashExecution` payloads are rewritten in-context. The default is `8192` bytes; minimum is `2048` bytes.
 - `PI_CONTEXT_BROKER_HOT_TO_WARM_MS` controls unpinned artifact cooling from hot to warm. The default is 2 hours.
 - `PI_CONTEXT_BROKER_WARM_TO_COLD_MS` controls unpinned artifact cooling from warm/hot to cold. The default is 12 hours.
 
-For more aggressive prompt reduction, set `PI_CONTEXT_BROKER_REWRITE_THRESHOLD_BYTES=0`. For quieter sessions, set it to a higher value to only rewrite larger outputs.
+For more aggressive prompt reduction, set `PI_CONTEXT_BROKER_REWRITE_THRESHOLD_BYTES=2048` (minimum supported value).
+For quieter sessions, set it to a higher value to only rewrite larger outputs.
 
 ## Tier lifecycle policy
 
@@ -51,8 +52,8 @@ For more aggressive prompt reduction, set `PI_CONTEXT_BROKER_REWRITE_THRESHOLD_B
 
 ## Payload display policy
 
-- Hostile/binary payloads are unsafe or control-heavy. They are stored/exportable but omitted from prompt lookup output with `/context export` guidance.
-- Opaque payloads are printable but low-value/high-token, such as large base64-like blobs, hex dumps, minified single-line output, or compressed-looking text. They are also stored/exportable but omitted from prompt lookup output with `/context export` guidance.
+- Hostile/binary payloads are unsafe or control-heavy. They are stored/exportable but omitted from prompt lookup output with `/pi-rogue-context export` guidance.
+- Opaque payloads are printable but low-value/high-token, such as large base64-like blobs, hex dumps, minified single-line output, or compressed-looking text. They are also stored/exportable but omitted from prompt lookup output with `/pi-rogue-context export` guidance.
 - Normal code, logs, and test output remain visible subject to normal byte clipping.
 
 
@@ -62,11 +63,11 @@ For more aggressive prompt reduction, set `PI_CONTEXT_BROKER_REWRITE_THRESHOLD_B
 - Backfill is idempotent by session entry id, skips malformed entries instead of failing the session, and honors Pi's `excludeFromContext` bash entries.
 - Without durable mode, restarting Pi loses broker state until the current branch is backfilled again.
 - Prompt integration injects a bounded, tier-aware broker brief and lookup guidance; the LLM also gets a `context_lookup` tool for exact handle dereferencing. Payloads that hit hostile-binary heuristics are represented in prompt as handles plus short guidance to export the full content.
-- The `context` hook rewrites prompt-visible `toolResult` and `bashExecution` payloads in the LLM-bound message copy to broker handles and summaries, reducing prompt load while preserving exact `/context lookup` rehydration.
+- The `context` hook rewrites prompt-visible `toolResult` and `bashExecution` payloads in the LLM-bound message copy to broker handles and summaries, reducing prompt load while preserving exact `/pi-rogue-context lookup` rehydration.
 - Current-turn `context_lookup` results are left visible so the model can consume requested exact evidence once. Historical `context_lookup` results that already have a later assistant response are omitted from later prompt assembly to avoid recursive prompt growth.
 - Pi `excludeFromContext` bash entries are not backfilled or rewritten into broker prompts.
 - Basic secret redaction runs before broker storage and display for common token/password/API-key patterns.
-- Prompt rewrite threshold defaults to 8192 bytes. Configure it with `/context config threshold <bytes>` (autocomplete includes common presets), or set `PI_CONTEXT_BROKER_REWRITE_THRESHOLD_BYTES` before startup for an env override.
+- Prompt rewrite threshold defaults to 8192 bytes. Configure it with `/pi-rogue-context config threshold <bytes>` (autocomplete includes common presets), or set `PI_CONTEXT_BROKER_REWRITE_THRESHOLD_BYTES` before startup for an env override.
 - Optional global caps can be configured via env vars:
   - `PI_CONTEXT_BROKER_GLOBAL_MAX_RECORDS`
   - `PI_CONTEXT_BROKER_GLOBAL_MAX_BYTES`

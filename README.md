@@ -6,18 +6,16 @@
 
 Pi-Rogue is a modular Pi extension stack for **agentic session guidance** and **goal/loop-based orchestration**.
 
-## Components and release status
+## Checks and package metadata
 
-| Package | NPM Version | NPM Downloads | What it is |
-|---|---|---|---|
-| `@fiale-plus/pi-rogue` | [![version](https://img.shields.io/npm/v/%40fiale-plus%2Fpi-rogue?style=flat-square)](https://www.npmjs.com/package/@fiale-plus/pi-rogue) | [![downloads](https://img.shields.io/npm/dm/%40fiale-plus%2Fpi-rogue?style=flat-square)](https://www.npmjs.com/package/@fiale-plus/pi-rogue) | **Single consolidated artefact** for advisor, orchestration, router, context broker, and Fusion (recommended) |
+[![version](https://img.shields.io/npm/v/%40fiale-plus%2Fpi-rogue?style=flat-square)](https://www.npmjs.com/package/@fiale-plus/pi-rogue)
+[![downloads](https://img.shields.io/npm/dm/%40fiale-plus%2Fpi-rogue?style=flat-square)](https://www.npmjs.com/package/@fiale-plus/pi-rogue)
 
-Legacy/paused packages remain available for compatibility but are deprecated:
-
-- `@fiale-plus/pi-rogue-bundle` (deprecated; kept for migration)
-- `@fiale-plus/pi-rogue-advisor` (deprecated; paused)
-- `@fiale-plus/pi-rogue-orchestration` (deprecated; paused)
-
+- `@fiale-plus/pi-rogue` is the single consolidated artefact (recommended).
+- Legacy/paused install names remain for compatibility:
+  - `@fiale-plus/pi-rogue-bundle` (deprecated; kept for migration)
+  - `@fiale-plus/pi-rogue-advisor` (deprecated; paused)
+  - `@fiale-plus/pi-rogue-orchestration` (deprecated; paused)
 
 ## Install
 
@@ -57,7 +55,7 @@ This exposes all workspace packages for local development.
 
 All command surfaces below are provided by the single `@fiale-plus/pi-rogue` artefact.
 
-- `/pi-rogue status|help|doctor` — concise Pi-Rogue management root (`status` is read-only; `on` converges user-root defaults)
+- `/pi-rogue status|help|doctor` — concise Pi-Rogue management root and checks/health entrypoint
 - `/pi-rogue-advisor status||mode|model|review|pause|unpause|checkins` — advisor state/control
 - `/pi-rogue-advisor <question>` — get immediate strategic advice
 - `/pi-rogue-orchestration goal set|show|clear|list` — set or update the active goal
@@ -68,7 +66,8 @@ All command surfaces below are provided by the single `@fiale-plus/pi-rogue` art
 - `/pi-rogue-router` mode `observe` (default) keeps routing as recommendations only and does not auto-switch policy
 - `/pi-rogue-router` mode `auto_model` explicitly applies only model routing; this still requires clear user-level intent and explicit opt-in
 - `/pi-rogue-fusion status|reload|configure` — OpenRouter-style comparable-panel Fusion provider controls (models register when recipes exist)
-- `/context config threshold <bytes>` — tune context-broker prompt rewrite threshold (default 8192 bytes)
+- `/pi-rogue-context status|brief|lookup <handle|text>|pin <handle-or-id>|export <handle-or-id>|config threshold <bytes>|prune` — context broker controls (threshold minimum 2 KiB)
+- Legacy `/context` command alias is not supported.
 
 ### Fusion
 
@@ -78,12 +77,13 @@ A future agentic panel can use pi-agents/subagents plus pi-intercom under a sepa
 
 See `packages/fusion/README.md`.
 
-### What changed in 0.3.0
+### Lab packages
 
-- Added local trajectory-router persistence and sharpening workflows (offline, local-only, and upgrade-safe).
-- Added `router:sharpen` / `router:sharpen:auto` automation to generate and persist route-learning hints.
-- Added repo-scoped / shared-scope learning storage and safe re-generation behavior for background refreshes.
-- Kept a strict safety boundary: no automatic policy mutation, and no raw transcript leakage in learn artifacts.
+- `packages/guardrails/` — Shell command risk checks and approvals for Pi.
+- `packages/brain/` — Local project memory helpers.
+- `packages/repo-arch/` — Repo integration bridge for repo-arch CLI.
+
+These are experimental/internal lab surfaces and may move under `packages/lab/` as a future cleanup.
 
 ## Documentation
 
