@@ -1,35 +1,16 @@
 # Pi-Rogue
 
-[![CI](https://github.com/fiale-plus/pi-rogue/actions/workflows/check.yml/badge.svg?branch=main&style=flat-square)](https://github.com/fiale-plus/pi-rogue/actions/workflows/check.yml)
-[![License](https://img.shields.io/github/license/fiale-plus/pi-rogue?style=flat-square)](LICENSE)
-[![Tests](https://img.shields.io/github/actions/workflow/status/fiale-plus/pi-rogue/check.yml?branch=main&label=tests&style=flat-square)](https://github.com/fiale-plus/pi-rogue/actions/workflows/check.yml)
+[![CI](https://github.com/fiale-plus/pi-rogue/actions/workflows/check.yml/badge.svg?branch=main&style=flat-square)](https://github.com/fiale-plus/pi-rogue/actions/workflows/check.yml) [![Tests](https://img.shields.io/github/actions/workflow/status/fiale-plus/pi-rogue/check.yml?branch=main&label=tests&style=flat-square)](https://github.com/fiale-plus/pi-rogue/actions/workflows/check.yml) [![version](https://img.shields.io/npm/v/%40fiale-plus%2Fpi-rogue?style=flat-square)](https://www.npmjs.com/package/@fiale-plus/pi-rogue) [![downloads](https://img.shields.io/npm/dm/%40fiale-plus%2Fpi-rogue?style=flat-square)](https://www.npmjs.com/package/@fiale-plus/pi-rogue) [![License](https://img.shields.io/github/license/fiale-plus/pi-rogue?style=flat-square)](LICENSE)
 
-Pi-Rogue is a modular Pi extension stack for **agentic session guidance** and **goal/loop-based orchestration**.
-
-## Checks and package metadata
-
-[![version](https://img.shields.io/npm/v/%40fiale-plus%2Fpi-rogue?style=flat-square)](https://www.npmjs.com/package/@fiale-plus/pi-rogue)
-[![downloads](https://img.shields.io/npm/dm/%40fiale-plus%2Fpi-rogue?style=flat-square)](https://www.npmjs.com/package/@fiale-plus/pi-rogue)
-
-- `@fiale-plus/pi-rogue` is the single consolidated artefact (recommended).
-- Legacy/paused install names remain for compatibility:
-  - `@fiale-plus/pi-rogue-bundle` (deprecated; kept for migration)
-  - `@fiale-plus/pi-rogue-advisor` (deprecated; paused)
-  - `@fiale-plus/pi-rogue-orchestration` (deprecated; paused)
+Pi-Rogue is the single-install Pi extension bundle for command-first session control: advisor reviews, routing telemetry, context brokerage, Fusion model panels, and explicit goal/loop orchestration.
 
 ## Install
-
-### Recommended (and supported for new installs)
 
 ```bash
 pi install npm:@fiale-plus/pi-rogue
 ```
 
 This is the single consolidated artefact. It includes advisor, orchestration, router, context broker, and Fusion logic (bundled through package dependencies for one-install behavior).
-
-### Legacy package users
-
-Existing installs of `@fiale-plus/pi-rogue-bundle`, `@fiale-plus/pi-rogue-advisor`, and `@fiale-plus/pi-rogue-orchestration` continue to function during migration but will show deprecation notices. Update installs to `@fiale-plus/pi-rogue`.
 
 ### Local workspace / lab
 
@@ -86,16 +67,32 @@ These are experimental/internal lab surfaces and grouped under `packages/lab/`.
 
 ## Documentation
 
-- `packages/advisor/README.md` (Advisor package)
-- `packages/orchestration/README.md` (Orchestration package)
-- `packages/router/README.md` (Router package, offline workflow + sharpening)
-- `packages/fusion/README.md` (Fusion composite model provider lab)
-- `docs/pi-rogue-config-ux.md` (Pi-Rogue packaging, command, first-run, and config UX design)
-- `packages/bundle/README.md` (Canonical published package)
-- `packages/advisor/skills/advisor/SKILL.md` (Pi skill surface)
-- `packages/orchestration/skills/orchestration/SKILL.md` (Pi skill surface)
-- `AGENTS.md` (repo instructions)
-- `docs/release.md` and `.github/ISSUE_TEMPLATE/release.md` (release policy and naming)
+### For users
+
+- [Canonical package README](packages/bundle/README.md) — install scope and command surface.
+- [Repository guidance](AGENTS.md) — repository rules, maintenance policy, and release posture.
+- [Release guide](docs/release.md) — canonical release process and naming policy.
+- [Release issue template](.github/ISSUE_TEMPLATE/release.md) — standard release checklist template.
+
+### Subsystem references
+
+- [Advisor README](packages/advisor/README.md) and [advisor skill](packages/advisor/skills/advisor/SKILL.md) — strategic guidance commands and skill surface.
+- [Orchestration README](packages/orchestration/README.md) and [orchestration skill](packages/orchestration/skills/orchestration/SKILL.md) — goals, loop, autoresearch, and lab behavior.
+- [Router README](packages/router/README.md), [binary gate runbook](docs/routing-binary-gate.md), [routing dataset workflow](docs/routing-dataset.md), and [routing labels](docs/routing-labels.md) — routing telemetry and training workflow.
+- [Context broker README](packages/context-broker/README.md) and [context footprint broker proposal](docs/context-footprint-broker.md) — bounded artifact storage and lookup design.
+- [Fusion README](packages/fusion/README.md) and [skills-to-flow map](docs/skills-flow.md) — model-composition behavior and orchestration mapping.
+
+### Lab and extension docs
+
+- [Guardrails package README](packages/lab/guardrails/README.md)
+- [Brain package README](packages/lab/brain/README.md)
+- [Repo-arch package README](packages/lab/repo-arch/README.md)
+
+### Evidence and operational notes
+
+- [Config UX design](docs/pi-rogue-config-ux.md) — command/config discoverability rationale.
+- [Session savings](docs/savings.md) — runtime savings snapshot.
+- [Binary-gate benchmark evidence (2026-05-30)](docs/advisor-binary-gate-benchmark-evidence-2026-05-30.md) — benchmark/verification trail.
 
 ## Development
 
