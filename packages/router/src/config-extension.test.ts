@@ -1,12 +1,28 @@
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { routerArgumentCompletions } from "./completions.js";
-import { activeProfile, cycleRouterProfile, ensureRouterConfig, loadRouterConfig, routerConfigPath, routerEventsPath, routerGlobalConfigPath, routerSessionDir, routerStatePath, saveRouterConfig, setRouterMode, setRouterPrint, setRouterProfile } from "./config.js";
+import {
+  activeProfile,
+  cycleRouterProfile,
+  ensureRouterConfig,
+  loadRouterConfig,
+  loadRouterState,
+  routerConfigPath,
+  routerEventsPath,
+  routerGlobalConfigPath,
+  routerSessionDir,
+  routerStatePath,
+  saveRouterConfig,
+  setRouterMode,
+  setRouterPrint,
+  setRouterProfile,
+} from "./config.js";
+import type { RouterState } from "./config.js";
 import { registerRouter } from "./extension.js";
 import { decideRoute } from "./decision.js";
-import { applyModelRouting, modelsMatch, observeRouterTurn, summarizeRouterDecision } from "./observe.js";
+import { applyModelRouting, modelsMatch, observeRouterTurn, planAutoModelSwitch, summarizeRouterDecision } from "./observe.js";
 import type { RouterCheckpoint } from "./types.js";
 
 function ctxMock(sessionPath?: string) {
@@ -31,6 +47,24 @@ function writeSessionFixture(dir: string, name: string): string {
     JSON.stringify({ type: "message", id: `${name}-user`, message: { role: "user", content: [{ type: "text", text: "please implement a small fix" }] } }),
   ].join("\n") + "\n");
   return path;
+}
+
+function appendSessionEvent(path: string, event: unknown): void {
+  appendFileSync(path, `${JSON.stringify(event)}\n`);
+}
+
+function appendAutoModelTurn(path: string, model: string): void {
+  appendSessionEvent(path, {
+    type: "message",
+    id: `assistant-${Date.now()}`,
+    message: {
+      role: "assistant",
+      content: [{ type: "text", text: "progress is good" }],
+      provider: "openai-codex",
+      model,
+      usage: { input_tokens: 120_000 },
+    },
+  });
 }
 
 function piMock() {
@@ -110,6 +144,15 @@ describe("router config profiles", () => {
     expect(config.activeProfile).toBe("all-smart");
     expect(config.profileOrder).toEqual(["all-smart", "spark-smart", "local-smart"]);
     expect(config.mode).toBe("observe");
+    expect(config.autoModel).toEqual(
+      expect.objectContaining({
+        minConfidence: 0.7,
+        requiredConsecutiveMismatches: 2,
+        minCooldownSeconds: 30,
+        maxSwitchesPerWindow: 3,
+        switchWindowSeconds: 300,
+      }),
+    );
     expect(activeProfile(config).worker).toBe("openai-codex/gpt-5.5");
     expect(readFileSync(routerConfigPath(ctx), "utf8")).toContain("spark-smart");
   });
@@ -190,6 +233,58 @@ describe("router config profiles", () => {
   });
 });
 
+describe("auto-model policy planning", () => {
+  it("requires consecutive mismatches before applying auto-model switch", () => {
+    const config = { ...loadRouterConfig(ctxMock()), enabled: true, activeProfile: "spark-smart", mode: "auto_model" as const };
+    const baseSummary = summarizeRouterDecision(checkpoint(), decideRoute(checkpoint()), config);
+
+    const first = planAutoModelSwitch(checkpoint(), baseSummary, {}, config.autoModel);
+    expect(first.canApply).toBe(false);
+    expect(first.reason).toContain("need 2 consecutive mismatches");
+
+    const alreadyBuilding: RouterState = {
+      autoModelPendingTarget: baseSummary.targetModel,
+      autoModelPendingStreak: 1,
+    };
+    const second = planAutoModelSwitch(checkpoint(), baseSummary, alreadyBuilding, {
+      ...config.autoModel,
+      requiredConsecutiveMismatches: 2,
+    });
+    expect(second.canApply).toBe(true);
+  });
+
+  it("blocks auto-model switch during cooldown and window cap", () => {
+    const config = { ...loadRouterConfig(ctxMock()), enabled: true, activeProfile: "spark-smart", mode: "auto_model" as const };
+    const checkpointEvent = checkpoint();
+    const summary = summarizeRouterDecision(checkpointEvent, decideRoute(checkpoint()), config);
+    const nowMs = Date.parse(checkpointEvent.createdAt);
+    const state: RouterState = {
+      autoModelLastSwitchAt: new Date(nowMs).toISOString(),
+      autoModelPendingTarget: summary.targetModel,
+      autoModelPendingStreak: 1,
+      autoModelSwitchHistory: [new Date(nowMs - 10_000).toISOString(), new Date(nowMs - 20_000).toISOString()],
+    };
+
+    const cooldown = planAutoModelSwitch(checkpoint(), summary, state, {
+      ...config.autoModel,
+      minCooldownSeconds: 60,
+      requiredConsecutiveMismatches: 1,
+    });
+    expect(cooldown.canApply).toBe(false);
+    expect(cooldown.reason).toContain("cooldown not elapsed");
+
+    const capped = planAutoModelSwitch(checkpoint(), summary, state, {
+      ...config.autoModel,
+      maxSwitchesPerWindow: 1,
+      requiredConsecutiveMismatches: 1,
+      switchWindowSeconds: 60,
+      minCooldownSeconds: 0,
+    });
+    expect(capped.canApply).toBe(false);
+    expect(capped.reason).toContain("max auto-model flips exceeded");
+  });
+});
+
 describe("router extension", () => {
   it("registers slash command, ctrl-alt-p profile cycling, and observe hook", async () => {
     const { pi, commands, shortcuts, handlers } = piMock();
@@ -255,6 +350,90 @@ describe("router extension", () => {
     expect(verify).toMatchObject({ role: "verify", targetModel: "fast-worker" });
     expect(debug).toMatchObject({ role: "debug_diagnose", targetModel: "deep-smart" });
     expect(review).toMatchObject({ role: "review", targetModel: "deep-reviewer" });
+  });
+
+  it("waits for consecutive mismatches before auto-model switch", async () => {
+    const sessionDir = mkdtempSync(join(tmpdir(), "pi-router-autoswitch-"));
+    const sessionPath = writeSessionFixture(sessionDir, "autoswitch.jsonl");
+    appendAutoModelTurn(sessionPath, "gpt-5.3-codex-spark");
+
+    const { pi, commands, handlers } = piMock();
+    const ctx = {
+      ...ctxMock(sessionPath),
+      cwd: sessionDir,
+      modelRegistry: {
+        find: (provider: string, id: string) => provider === "openai-codex" && id === "gpt-5.5" ? { provider, id } : undefined,
+        getAll: () => [{ provider: "openai-codex", id: "gpt-5.5" }],
+      },
+    };
+
+    registerRouter(pi);
+    await commands.get("pi-rogue-router").handler("on", ctx);
+    await commands.get("pi-rogue-router").handler("mode auto_model", ctx);
+
+    const turn = handlers.get("turn_end")?.[0];
+    expect(turn).toBeTypeOf("function");
+
+    saveRouterConfig(ctx, {
+      ...loadRouterConfig(ctx),
+      autoModel: {
+        ...loadRouterConfig(ctx).autoModel,
+        requiredConsecutiveMismatches: 2,
+      },
+    });
+
+    await turn?.(null, ctx);
+    expect(pi.selectedModels).toHaveLength(0);
+    expect(loadRouterState(ctx, sessionPath).autoModelPendingStreak).toBe(1);
+
+    appendAutoModelTurn(sessionPath, "gpt-5.3-codex-spark");
+    await turn?.(null, ctx);
+
+    expect(pi.selectedModels).toEqual([{ provider: "openai-codex", id: "gpt-5.5" }]);
+    expect(loadRouterState(ctx, sessionPath).autoModelLastSwitchAt).toBeDefined();
+  });
+
+  it("caps auto-model flips within a policy window", async () => {
+    const sessionDir = mkdtempSync(join(tmpdir(), "pi-router-window-"));
+    const sessionPath = writeSessionFixture(sessionDir, "window.jsonl");
+    appendAutoModelTurn(sessionPath, "gpt-5.3-codex-spark");
+
+    const { pi, commands, handlers } = piMock();
+    const ctx = {
+      ...ctxMock(sessionPath),
+      cwd: sessionDir,
+      modelRegistry: {
+        find: (provider: string, id: string) => provider === "openai-codex" && id === "gpt-5.5" ? { provider, id } : undefined,
+        getAll: () => [{ provider: "openai-codex", id: "gpt-5.5" }],
+      },
+    };
+
+    registerRouter(pi);
+    await commands.get("pi-rogue-router").handler("on", ctx);
+    await commands.get("pi-rogue-router").handler("mode auto_model", ctx);
+
+    const turn = handlers.get("turn_end")?.[0];
+    expect(turn).toBeTypeOf("function");
+
+    saveRouterConfig(ctx, {
+      ...loadRouterConfig(ctx),
+      autoModel: {
+        ...loadRouterConfig(ctx).autoModel,
+        requiredConsecutiveMismatches: 1,
+        minCooldownSeconds: 0,
+        maxSwitchesPerWindow: 1,
+        switchWindowSeconds: 600,
+      },
+    });
+
+    await turn?.(null, ctx);
+    appendAutoModelTurn(sessionPath, "gpt-5.3-codex-spark");
+    await turn?.(null, ctx);
+
+    expect(pi.selectedModels).toHaveLength(1);
+    const events = readFileSync(routerEventsPath(ctx, sessionPath), "utf8").trim().split("\n").filter(Boolean).map((line) => JSON.parse(line));
+    expect(events).toHaveLength(2);
+    expect(events.at(-1)?.observed.followed).toBe(false);
   });
 
   it("auto_model applies only model switches for explicit target mismatches", async () => {

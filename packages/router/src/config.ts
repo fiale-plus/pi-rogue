@@ -18,6 +18,14 @@ export interface RouterProfile {
   verify?: string;
 }
 
+export interface RouterAutoModelPolicy {
+  minConfidence: number;
+  requiredConsecutiveMismatches: number;
+  minCooldownSeconds: number;
+  maxSwitchesPerWindow: number;
+  switchWindowSeconds: number;
+}
+
 export interface RouterConfig {
   enabled: boolean;
   mode: RouterMode;
@@ -25,12 +33,45 @@ export interface RouterConfig {
   activeProfile: string;
   profileOrder: string[];
   profiles: Record<string, RouterProfile>;
+  autoModel: RouterAutoModelPolicy;
 }
 
 export interface RouterState {
   lastObservedCheckpointId?: string;
   lastDecisionAction?: string;
   lastSummary?: string;
+  autoModelPendingTarget?: string;
+  autoModelPendingStreak?: number;
+  autoModelLastSwitchAt?: string;
+  autoModelSwitchHistory?: string[];
+}
+
+export const DEFAULT_ROUTER_AUTO_MODEL_POLICY: RouterAutoModelPolicy = {
+  minConfidence: 0.7,
+  requiredConsecutiveMismatches: 2,
+  minCooldownSeconds: 30,
+  maxSwitchesPerWindow: 3,
+  switchWindowSeconds: 300,
+};
+
+function clamp(value: number, min: number, max: number): number {
+  if (!Number.isFinite(value)) return min;
+  return Math.max(min, Math.min(max, value));
+}
+
+function clampInt(value: unknown, min: number, max: number, fallback: number): number {
+  const parsed = typeof value === "number" ? Math.trunc(value) : typeof value === "string" ? Number.parseInt(value, 10) : undefined;
+  return clamp(parsed ?? fallback, min, max);
+}
+
+function normalizeAutoModelPolicy(raw: Partial<RouterAutoModelPolicy> | null | undefined): RouterAutoModelPolicy {
+  return {
+    minConfidence: clamp(Number.isFinite(Number(raw?.minConfidence)) ? Number(raw?.minConfidence) : DEFAULT_ROUTER_AUTO_MODEL_POLICY.minConfidence, 0, 1),
+    requiredConsecutiveMismatches: clampInt(raw?.requiredConsecutiveMismatches, 1, 20, DEFAULT_ROUTER_AUTO_MODEL_POLICY.requiredConsecutiveMismatches),
+    minCooldownSeconds: clampInt(raw?.minCooldownSeconds, 0, 3_600, DEFAULT_ROUTER_AUTO_MODEL_POLICY.minCooldownSeconds),
+    maxSwitchesPerWindow: clampInt(raw?.maxSwitchesPerWindow, 1, 100, DEFAULT_ROUTER_AUTO_MODEL_POLICY.maxSwitchesPerWindow),
+    switchWindowSeconds: clampInt(raw?.switchWindowSeconds, 1, 86_400, DEFAULT_ROUTER_AUTO_MODEL_POLICY.switchWindowSeconds),
+  };
 }
 
 export const DEFAULT_ROUTER_CONFIG: RouterConfig = {
@@ -71,6 +112,7 @@ export const DEFAULT_ROUTER_CONFIG: RouterConfig = {
       verify: "qwen3.6-35b-a3b-128k",
     },
   },
+  autoModel: DEFAULT_ROUTER_AUTO_MODEL_POLICY,
 };
 
 export function routerGlobalDir(): string {
@@ -154,6 +196,7 @@ export function normalizeRouterConfig(raw: Partial<RouterConfig> | null | undefi
     activeProfile,
     profileOrder,
     profiles: mergedProfiles,
+    autoModel: normalizeAutoModelPolicy(raw?.autoModel),
   };
 }
 

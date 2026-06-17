@@ -28,6 +28,12 @@ npm run router:shadow -- --checkpoint-file .pi/router/checkpoints.jsonl --ledger
 # /router profile spark-smart
 # /router print mismatch_only|all|off
 # ctrl+alt+p cycles router profiles (Ctrl-P is reserved by Pi model cycling).
+# Auto-model flip policy lives in `.pi/router/config.json` under `autoModel` and currently defaults to:
+#   minConfidence: 0.7
+#   requiredConsecutiveMismatches: 2
+#   minCooldownSeconds: 30
+#   maxSwitchesPerWindow: 3
+#   switchWindowSeconds: 300
 ```
 
 ## V1 telemetry notes
