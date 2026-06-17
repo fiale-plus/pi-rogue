@@ -13,6 +13,7 @@ import {
   saveRouterState,
   type RouterConfig,
   type RouterProfile,
+  type RouterState,
 } from "./config.js";
 import type { RouteAction, RouteDecision, RouterCheckpoint } from "./types.js";
 
@@ -34,6 +35,12 @@ export interface RouterModelApplySummary {
   reason: string;
   fromModel?: string;
   toModel?: string;
+}
+
+export interface AutoModelSwitchPlan {
+  canApply: boolean;
+  reason: string;
+  statePatch: Partial<RouterState>;
 }
 
 function squish(text: unknown, max = 140): string {
@@ -193,6 +200,85 @@ export async function applyModelRouting(pi: Pick<ExtensionAPI, "setModel"> | und
   return { applied: true, reason: summary.reason, fromModel: summary.currentModel, toModel: summary.targetModel };
 }
 
+function nowFromCheckpoint(checkpoint: RouterCheckpoint): number {
+  const parsed = Date.parse(checkpoint.createdAt);
+  return Number.isFinite(parsed) ? parsed : Date.now();
+}
+
+function pruneSwitchHistory(history: string[] = [], nowMs: number, windowMs: number): string[] {
+  const cutoff = nowMs - Math.max(1, windowMs);
+  return history.filter((entry) => {
+    const parsed = Date.parse(entry);
+    return Number.isFinite(parsed) && parsed >= cutoff;
+  });
+}
+
+export function planAutoModelSwitch(checkpoint: RouterCheckpoint, summary: RouterObserveSummary, state: RouterState, policy: RouterConfig["autoModel"]): AutoModelSwitchPlan {
+  if (summary.match !== false || summary.role === "none" || summary.role === "current" || !summary.targetModel) {
+    return {
+      canApply: false,
+      reason: "no model switch action",
+      statePatch: {
+        autoModelPendingTarget: summary.targetModel,
+        autoModelPendingStreak: 0,
+        autoModelSwitchHistory: state.autoModelSwitchHistory ?? [],
+      },
+    };
+  }
+
+  const targetModel = summary.targetModel;
+  const nowMs = nowFromCheckpoint(checkpoint);
+  const existingHistory = pruneSwitchHistory(state.autoModelSwitchHistory, nowMs, policy.switchWindowSeconds * 1000);
+  const streak = state.autoModelPendingTarget === targetModel
+    ? (state.autoModelPendingStreak ?? 0) + 1
+    : 1;
+
+  const statePatch: Partial<RouterState> = {
+    autoModelPendingTarget: targetModel,
+    autoModelPendingStreak: streak,
+    autoModelSwitchHistory: existingHistory,
+  };
+
+  if (summary.confidence < policy.minConfidence) {
+    return {
+      canApply: false,
+      reason: `confidence ${summary.confidence.toFixed(2)} below auto-model threshold ${policy.minConfidence.toFixed(2)}`,
+      statePatch,
+    };
+  }
+
+  if (streak < policy.requiredConsecutiveMismatches) {
+    return {
+      canApply: false,
+      reason: `need ${policy.requiredConsecutiveMismatches} consecutive mismatches before switching (currently ${streak})`,
+      statePatch,
+    };
+  }
+
+  const lastSwitchMs = Date.parse(state.autoModelLastSwitchAt ?? "");
+  if (Number.isFinite(lastSwitchMs) && nowMs - lastSwitchMs < policy.minCooldownSeconds * 1000) {
+    return {
+      canApply: false,
+      reason: `cooldown not elapsed: ${policy.minCooldownSeconds}s`,
+      statePatch,
+    };
+  }
+
+  if (existingHistory.length >= policy.maxSwitchesPerWindow) {
+    return {
+      canApply: false,
+      reason: `max auto-model flips exceeded: ${existingHistory.length}/${policy.maxSwitchesPerWindow} in ${policy.switchWindowSeconds}s`,
+      statePatch,
+    };
+  }
+
+  return {
+    canApply: true,
+    reason: "auto-model flip policy satisfied",
+    statePatch,
+  };
+}
+
 export async function observeRouterTurn(ctx: any, pi?: Pick<ExtensionAPI, "setModel">): Promise<RouterObserveSummary | null> {
   const config = loadRouterConfig(ctx);
   if (!config.enabled || (config.print === "off" && config.mode === "observe")) return null;
@@ -212,19 +298,59 @@ export async function observeRouterTurn(ctx: any, pi?: Pick<ExtensionAPI, "setMo
   ]);
   const decision = decideRoute(liveCheckpoint);
   const summary = summarizeRouterDecision(liveCheckpoint, decision, config);
-  appendRouteEvent(routerEventsPath(ctx, String(sessionPath)), buildRouteEvent(liveCheckpoint, decision));
-  saveRouterState(ctx, {
+  const event = buildRouteEvent(liveCheckpoint, decision);
+
+  const nextState: RouterState = {
     lastObservedCheckpointId: checkpoint.checkpointId,
     lastDecisionAction: decision.action,
     lastSummary: summary.text,
-  }, String(sessionPath));
+  };
 
   if (config.mode === "auto_model") {
-    const applied = await applyModelRouting(pi, ctx, summary);
-    if (applied.applied || summary.match === false) {
-      ctx.ui?.notify?.(`router auto-model: ${applied.applied ? "APPLIED" : "SKIPPED"} ${applied.fromModel ?? "unknown"} → ${applied.toModel ?? "none"} · ${applied.reason}`, applied.applied ? "info" : "warning");
+    const plan = planAutoModelSwitch(checkpoint, summary, state, config.autoModel);
+
+    const applySummary = plan.canApply
+      ? await applyModelRouting(pi, ctx, summary)
+      : {
+          applied: false,
+          reason: plan.reason,
+          fromModel: summary.currentModel,
+          toModel: summary.targetModel,
+        };
+
+    nextState.autoModelPendingTarget = plan.statePatch.autoModelPendingTarget;
+    nextState.autoModelPendingStreak = plan.statePatch.autoModelPendingStreak;
+    nextState.autoModelSwitchHistory = plan.statePatch.autoModelSwitchHistory;
+    if (applySummary.applied) {
+      nextState.autoModelLastSwitchAt = checkpoint.createdAt;
+      nextState.autoModelPendingStreak = 0;
+      nextState.autoModelSwitchHistory = [...(plan.statePatch.autoModelSwitchHistory ?? []), checkpoint.createdAt];
+      ctx.ui?.notify?.(
+        `router auto-model: APPLIED ${applySummary.fromModel ?? "unknown"} → ${applySummary.toModel ?? "none"} · ${applySummary.reason}`,
+        "info",
+      );
+    } else if (summary.match === false) {
+      event.observed.followed = false;
+      event.observed.overriddenBy = applySummary.reason;
+      ctx.ui?.notify?.(
+        `router auto-model: SKIPPED ${applySummary.fromModel ?? "unknown"} → ${applySummary.toModel ?? "none"} · ${applySummary.reason}`,
+        "warning",
+      );
+    }
+
+    if (applySummary.applied) {
+      event.observed.followed = true;
+    } else if (summary.match === false) {
+      event.observed.followed = false;
+      event.observed.overriddenBy = applySummary.reason;
     }
   }
+
+  appendRouteEvent(routerEventsPath(ctx, String(sessionPath)), event);
+  saveRouterState(ctx, {
+    ...state,
+    ...nextState,
+  }, String(sessionPath));
 
   if (config.print === "mismatch_only" && summary.match !== false) return summary;
   if (config.print !== "off") ctx.ui?.notify?.(summary.text, summary.match === false ? "warning" : "info");

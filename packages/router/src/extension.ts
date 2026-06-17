@@ -21,12 +21,22 @@ function roleMapText(profile: ReturnType<typeof activeProfile>): string {
   return formatLiveRoleMap(profile).map((line) => `  ${line}`).join("\n");
 }
 
+function autoModelPolicyText(policy: RouterConfig["autoModel"]): string {
+  return [
+    `auto-model policy: min-conf=${policy.minConfidence.toFixed(2)}`,
+    `consecutive-mismatches>=${policy.requiredConsecutiveMismatches}`,
+    `cooldown=${policy.minCooldownSeconds}s`,
+    `window=${policy.maxSwitchesPerWindow} per ${policy.switchWindowSeconds}s`,
+  ].join(", ");
+}
+
 function statusText(ctx: any, config: RouterConfig): string {
   const profile = activeProfile(config);
   const sources = routerConfigSources(ctx);
   return [
     `router: ${config.enabled ? "on" : "off"}`,
     `model routing: ${config.mode === "auto_model" ? "auto_model (applies model switches only)" : "observe (recommendations only)"}`,
+    `auto-model policy: ${autoModelPolicyText(config.autoModel)}`,
     `print: ${config.print}`,
     `profile: ${config.activeProfile}`,
     `worker: ${profile.worker}`,
