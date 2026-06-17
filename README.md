@@ -1,6 +1,14 @@
-# Pi-Rogue
+<div align="center">
+  <img src="docs/images/banner.svg" alt="Pi-Rogue banner" width="100%">
+</div>
+
+<div align="center">
 
 [![CI](https://github.com/fiale-plus/pi-rogue/actions/workflows/check.yml/badge.svg?branch=main&style=flat-square)](https://github.com/fiale-plus/pi-rogue/actions/workflows/check.yml) [![Tests](https://img.shields.io/github/actions/workflow/status/fiale-plus/pi-rogue/check.yml?branch=main&label=tests&style=flat-square)](https://github.com/fiale-plus/pi-rogue/actions/workflows/check.yml) [![version](https://img.shields.io/npm/v/%40fiale-plus%2Fpi-rogue?style=flat-square)](https://www.npmjs.com/package/@fiale-plus/pi-rogue) [![downloads](https://img.shields.io/npm/dm/%40fiale-plus%2Fpi-rogue?style=flat-square)](https://www.npmjs.com/package/@fiale-plus/pi-rogue) [![License](https://img.shields.io/github/license/fiale-plus/pi-rogue?style=flat-square)](LICENSE)
+
+</div>
+
+# Pi-Rogue
 
 Pi-Rogue is the single-install Pi extension bundle for command-first session control: advisor reviews, routing telemetry, context brokerage, Fusion model panels, and explicit goal/loop orchestration.
 
