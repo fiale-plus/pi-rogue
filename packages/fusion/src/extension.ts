@@ -400,7 +400,7 @@ export function registerFusion(pi: ExtensionAPI): void {
   p.__piRogueFusionRegistered = true;
 
   pi.registerCommand("pi-rogue-fusion", {
-    description: "Fusion composite model provider. Usage: /pi-rogue-fusion status|reload|configure. Models register when recipes exist.",
+    description: "Fusion composite model provider. Usage: /pi-rogue-fusion status|reload|configure|on|off. Models register when recipes exist.",
     getArgumentCompletions: (prefix: string, ctx?: any) => {
       const input = prefix.trimStart();
       const parts = input.split(/\s+/).filter(Boolean);
@@ -412,7 +412,7 @@ export function registerFusion(pi: ExtensionAPI): void {
         const models = ctx ? configuredModels(ctx) : [];
         return models.filter((value) => value.toLowerCase().startsWith(q)).slice(0, 20).map((value) => ({ value, label: value }));
       }
-      return ["status", "reload", "configure"].filter((value) => value.startsWith(q)).map((value) => ({ value, label: value }));
+      return ["status", "reload", "configure", "on", "off"].filter((value) => value.startsWith(q)).map((value) => ({ value, label: value }));
     },
     handler: async (args, ctx) => {
       const parts = String(args ?? "").trim().split(/\s+/).filter(Boolean);
@@ -433,7 +433,20 @@ export function registerFusion(pi: ExtensionAPI): void {
         ctx.ui.notify(statusText(ctx), "info");
         return;
       }
-      ctx.ui.notify("Usage: /pi-rogue-fusion status|reload|configure", "error");
+      if (cmd === "off") {
+        try { pi.unregisterProvider("fusion"); } catch {}
+        ctx.ui.notify("fusion provider disabled", "info");
+        return;
+      }
+      if (cmd === "on") {
+        const loaded = registerFusionProviderForContext(pi, ctx, getRuntimeContext);
+        ctx.ui.notify(
+          loaded.errors.length ? `fusion load failed:\n${loaded.errors.join("\n")}` : `fusion provider re-enabled (loaded ${loaded.recipes.length} recipe(s))`,
+          loaded.errors.length ? "error" : "info",
+        );
+        return;
+      }
+      ctx.ui.notify("Usage: /pi-rogue-fusion status|reload|configure|on|off", "error");
     },
   });
 

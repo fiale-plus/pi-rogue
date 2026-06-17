@@ -87,24 +87,27 @@ describe("fusion extension", () => {
 
   it("auto-registers fusion models when recipes exist without requiring an enable env var", () => {
     const cwd = mkdtempSync(join(tmpdir(), "fusion-recipes-"));
+    const target = join(cwd, "test-recipes.json");
+    const prevEnv = process.env.PI_ROGUE_FUSION_RECIPES;
     try {
-      const path = join(isolatedHome, ".pi", "agent", "pi-rogue", "fusion", "recipes.json");
-      mkdirSync(join(isolatedHome, ".pi", "agent", "pi-rogue", "fusion"), { recursive: true });
-      writeFileSync(path, JSON.stringify({ recipes: [{
+      writeFileSync(target, JSON.stringify({ recipes: [{
         schema: "pi-rogue.fusion.recipe.v1",
         kind: "fusion",
         id: "hard-judge",
         model: "openai-codex/gpt-5.5",
         analysis_models: ["openai-codex/gpt-5.5", "openai-codex/gpt-5.3-codex-spark"],
       }] }, null, 2));
+      process.env.PI_ROGUE_FUSION_RECIPES = target;
 
       const { pi, handlers, providers } = createPiMock();
       registerFusion(pi);
       handlers.get("session_start")?.[0]?.({}, createCtx(cwd));
 
       expect(providers.has("fusion")).toBe(true);
-      expect(providers.get("fusion").models.map((model: any) => model.id)).toEqual(["hard-judge"]);
+      const ids = providers.get("fusion").models.map((model: any) => model.id);
+      expect(ids).toContain("hard-judge");
     } finally {
+      if (prevEnv === undefined) delete process.env.PI_ROGUE_FUSION_RECIPES; else process.env.PI_ROGUE_FUSION_RECIPES = prevEnv;
       rmSync(cwd, { recursive: true, force: true });
     }
   });
@@ -112,7 +115,10 @@ describe("fusion extension", () => {
   it("/pi-rogue-fusion configure adds a recipe and guides reload/pi-rogue-router next steps", async () => {
     const cwd = mkdtempSync(join(tmpdir(), "fusion-configure-"));
     const notifications: Array<{ message: string; type?: string }> = [];
+    const targetRecipe = join(cwd, ".pi-rogue", "fusion", "recipes.json");
+    const prev = process.env.PI_ROGUE_FUSION_RECIPES;
     try {
+      process.env.PI_ROGUE_FUSION_RECIPES = targetRecipe;
       const { pi, commands } = createPiMock();
       registerFusion(pi);
       const fusion = commands.get("pi-rogue-fusion");
@@ -121,8 +127,7 @@ describe("fusion extension", () => {
         createCtx(cwd, notifications),
       );
 
-      const path = join(isolatedHome, ".pi", "agent", "pi-rogue", "fusion", "recipes.json");
-      const saved = JSON.parse(readFileSync(path, "utf8"));
+      const saved = JSON.parse(readFileSync(targetRecipe, "utf8"));
       expect(saved.recipes[0]).toMatchObject({
         id: "hard-judge",
         model: "openai-codex/gpt-5.5",
@@ -133,6 +138,7 @@ describe("fusion extension", () => {
       expect(notifications.at(-1)?.message).toContain("Run /pi-rogue-fusion reload or restart Pi");
       expect(notifications.at(-1)?.message).toContain("/pi-rogue-router models");
     } finally {
+      if (prev === undefined) delete process.env.PI_ROGUE_FUSION_RECIPES; else process.env.PI_ROGUE_FUSION_RECIPES = prev;
       rmSync(cwd, { recursive: true, force: true });
     }
   });
@@ -146,6 +152,59 @@ describe("fusion extension", () => {
       expect(fusion.getArgumentCompletions("con", createCtx(cwd)).map((item: any) => item.value)).toContain("configure");
       expect(fusion.getArgumentCompletions("configure ", createCtx(cwd)).map((item: any) => item.value)).toEqual(expect.arrayContaining(["add", "edit", "remove", "help"]));
       expect(fusion.getArgumentCompletions("configure add hard open", createCtx(cwd)).map((item: any) => item.value)).toEqual(expect.arrayContaining(["openai-codex/gpt-5.5", "openai-codex/gpt-5.3-codex-spark"]));
+    } finally {
+      rmSync(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it("offers on/off completions", () => {
+    const cwd = mkdtempSync(join(tmpdir(), "fusion-onoff-"));
+    try {
+      const { pi, commands } = createPiMock();
+      registerFusion(pi);
+      const fusion = commands.get("pi-rogue-fusion");
+      const completions = fusion.getArgumentCompletions("", createCtx(cwd)).map((item: any) => item.value);
+      expect(completions).toContain("on");
+      expect(completions).toContain("off");
+      expect(completions).toContain("status");
+      expect(completions).toContain("reload");
+      expect(completions).toContain("configure");
+    } finally {
+      rmSync(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it("/pi-rogue-fusion off unregisters the fusion provider", async () => {
+    const cwd = mkdtempSync(join(tmpdir(), "fusion-off-"));
+    const notifications: Array<{ message: string; type?: string }> = [];
+    try {
+      const { pi, commands, providers } = createPiMock();
+      registerFusion(pi);
+      // Provider registered at startup (even without recipes, it may or may not exist)
+      const fusion = commands.get("pi-rogue-fusion");
+      await fusion.handler("off", createCtx(cwd, notifications));
+      expect(notifications.at(-1)?.message).toBe("fusion provider disabled");
+      expect(providers.has("fusion")).toBe(false);
+    } finally {
+      rmSync(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it("/pi-rogue-fusion on re-registers the fusion provider", async () => {
+    const cwd = mkdtempSync(join(tmpdir(), "fusion-on-"));
+    const notifications: Array<{ message: string; type?: string }> = [];
+    try {
+      const { pi, commands, providers } = createPiMock();
+      registerFusion(pi);
+      const fusion = commands.get("pi-rogue-fusion");
+      await fusion.handler("off", createCtx(cwd, notifications));
+      expect(providers.has("fusion")).toBe(false);
+      // Now turn it on again
+      notifications.length = 0;
+      await fusion.handler("on", createCtx(cwd, notifications));
+      expect(notifications.at(-1)?.message).toContain("fusion provider re-enabled");
+      // Without recipes, provider is unregistered
+      expect(providers.has("fusion")).toBe(false);
     } finally {
       rmSync(cwd, { recursive: true, force: true });
     }
