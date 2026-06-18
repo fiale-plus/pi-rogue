@@ -45,6 +45,14 @@ describe("bundle extension defaults", () => {
     expect(commands.has("pi-rogue-router")).toBe(true);
     expect(commands.has("pi-rogue-fusion")).toBe(true);
     expect(commands.has("pi-rogue-orchestration")).toBe(true);
+    expect([...commands.keys()]).toEqual([
+      "pi-rogue",
+      "pi-rogue-advisor",
+      "pi-rogue-router",
+      "pi-rogue-fusion",
+      "pi-rogue-orchestration",
+      "pi-rogue-context",
+    ]);
     expect(["advisor", "router", "fusion", "goal", "loop", "autoresearch", "autoresearch-lab"].some((name) => commands.has(name))).toBe(false);
   });
 

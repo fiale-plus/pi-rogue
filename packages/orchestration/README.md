@@ -30,27 +30,27 @@ npm install --workspace packages/orchestration
 
 | Command | What it does |
 |---|---|
-| `/goal set <text>` | Set/update current goal and re-arm check-ins |
-| `/goal show` | Show current goal |
-| `/goal clear` | Clear active goal |
-| `/goal list` | Show recent goal history |
-| `/loop <interval> <instruction>` | Create or reset periodic loop (`1m` minimum) |
-| `/loop status` | Show current loop state |
-| `/loop off` / `clear` / `stop` | Clear loop |
-| `/autoresearch <instruction>` | Start/update solo research flow |
-| `/autoresearch status` | Show autoresearch state |
-| `/autoresearch clear` | Clear solo research + underlying loop |
-| `/autoresearch-lab <instruction>` | Start/update parallel research mode |
-| `/autoresearch-lab status` | Show lab state |
-| `/autoresearch-lab clear` | Clear lab + underlying loop |
+| `/pi-rogue-orchestration goal set <text>` | Set/update current goal and re-arm check-ins |
+| `/pi-rogue-orchestration goal show` | Show current goal |
+| `/pi-rogue-orchestration goal clear` | Clear active goal |
+| `/pi-rogue-orchestration goal list` | Show recent goal history |
+| `/pi-rogue-orchestration loop <interval> <instruction>` | Create or reset periodic loop (`1m` minimum) |
+| `/pi-rogue-orchestration loop status` | Show current loop state |
+| `/pi-rogue-orchestration loop off` / `clear` / `stop` | Clear loop |
+| `/pi-rogue-orchestration autoresearch <instruction>` | Start/update solo research flow |
+| `/pi-rogue-orchestration autoresearch status` | Show autoresearch state |
+| `/pi-rogue-orchestration autoresearch clear` | Clear solo research + underlying loop |
+| `/pi-rogue-orchestration lab <instruction>` | Start/update parallel research mode |
+| `/pi-rogue-orchestration lab status` | Show lab state |
+| `/pi-rogue-orchestration lab clear` | Clear lab + underlying loop |
 
 ## Behavior notes
 
 - `loop` supports minimum interval `1m`.
 - Active goals can be completed with the model-callable `goal_complete` tool, which requires a summary and verification evidence; `GOAL_DONE` / `GOAL_CONTINUE` sentinel loop checks are preserved for compatibility.
-- `autoresearch` and `autoresearch-lab` are thin facades over `/goal + /loop`.
+- `autoresearch` and `lab` are thin facades over `/pi-rogue-orchestration goal + loop`.
 - A goal or loop activation enables scheduled advisor check-ins; stopping or clearing the active goal/loop disables them again.
 - Check-ins are part of orchestration lifecycle, not a standalone advisor command. They use the advisor interval, higher/advanced advisor models first, and regular model fallback by default.
 - A bounded no-progress guard detects repeated assistant output or repeated planning-only turns during active orchestration, then nudges one concrete alternative action and eventually stops retry churn instead of stacking recovery prompts.
-- There are no hidden flow budgets. Long loops run until `/loop off`, `/goal clear`, `goal_complete`, or a `GOAL_DONE` response clears the active goal and loop.
+- There are no hidden flow budgets. Long loops run until `/pi-rogue-orchestration loop off`, `/pi-rogue-orchestration goal clear`, `goal_complete`, or a `GOAL_DONE` response clears the active goal and loop.
 - Stale research state is cleared when `goal` or `loop` are cleared.

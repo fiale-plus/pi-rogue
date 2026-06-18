@@ -37,18 +37,27 @@ npm install
 
 ## Command surface
 
-- Default: `/advisor`, `/goal`, `/loop`, `/autoresearch`, `/autoresearch-lab`, `/router`, `/fusion` plus status/config/command paths (all provided via the bundle).
-- Context broker: enabled by default; `PI_CONTEXT_BROKER_ENABLED=false` disables `/pi-rogue-context status`, `/pi-rogue-context brief`, `/pi-rogue-context lookup <handle|text>`, `/pi-rogue-context pin <handle>`, `/pi-rogue-context export <handle>`, `/pi-rogue-context config threshold <bytes>`, and `/pi-rogue-context prune` with autocomplete.
-- Fusion provider: `/fusion` is available by default; configured `fusion/<recipe-id>` models register when recipes exist, or use `/fusion configure` then `/fusion reload` explicitly in a session.
+The bundle registers commands in cockpit-first order for the Pi menu:
+
+1. `/pi-rogue` — management cockpit (`status|help|doctor`)
+2. `/pi-rogue-advisor` — strategic advisor controls and one-shot questions
+3. `/pi-rogue-router` — route telemetry and explicit model-routing controls
+4. `/pi-rogue-fusion` — comparable-panel Fusion provider controls
+5. `/pi-rogue-orchestration` — goal, loop, autoresearch, and lab primitives
+6. `/pi-rogue-context` — context broker controls, registered last so it sits lower in the menu
+
+Context broker is enabled by default; `PI_CONTEXT_BROKER_ENABLED=false` disables `/pi-rogue-context status`, `/pi-rogue-context brief`, `/pi-rogue-context lookup <handle|text>`, `/pi-rogue-context pin <handle>`, `/pi-rogue-context export <handle>`, `/pi-rogue-context config threshold <bytes>`, and `/pi-rogue-context prune` with autocomplete.
+
+Fusion models register as `fusion/<recipe-id>` when recipes exist. Use `/pi-rogue-fusion configure` then `/pi-rogue-fusion reload` explicitly in a session.
 
 ### Router (offline)
 
-The `/router` surface remains offline and repo-local unless you explicitly enable routing behavior:
+The `/pi-rogue-router` surface remains offline and repo-local unless you explicitly enable routing behavior:
 
-- `/router status|help|on|off|mode|profile|models|configure|cycle`
-- `/router mode observe` (default): recommendations only, no policy mutation
-- `/router mode auto_model`: explicit future-model switching only
-- `/router profile <name>` and `print mismatch_only|all|off`
+- `/pi-rogue-router status|help|mode|profile|models|profiles|configure|cycle`
+- `/pi-rogue-router mode observe` (default): recommendations only, no policy mutation
+- `/pi-rogue-router mode auto_model`: explicit future-model switching only
+- `/pi-rogue-router profile <name>` and `print mismatch_only|all|off`
 
 For local artifact generation and sharpening:
 
@@ -59,7 +68,7 @@ See `packages/router/README.md` for full usage, safety policy, schema, and autos
 
 ### Fusion
 
-The `/fusion` surface loads OpenRouter-style comparable-panel recipes. It keeps the language explicit:
+The `/pi-rogue-fusion` surface loads OpenRouter-style comparable-panel recipes. It keeps the language explicit:
 
 - panel: `analysis_models` answer the same task independently as analysis-only/no-side-effect attempts;
 - judge: structured comparison (`consensus`, `contradictions`, `partial_coverage`, `unique_insights`, `blind_spots`);

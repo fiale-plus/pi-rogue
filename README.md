@@ -10,121 +10,90 @@
 
 # Pi-Rogue
 
-Pi-Rogue is the single-install Pi extension bundle for command-first session control: advisor reviews, routing telemetry, context brokerage, Fusion model panels, and explicit goal/loop orchestration.
-
-## Install
+**A command center for sharper Pi sessions.** Pi-Rogue adds the missing control layer around coding agents: route the right model, ask for strategic review at the right time, preserve exact context without flooding prompts, compare model panels, and keep long work anchored to explicit goals.
 
 ```bash
 pi install npm:@fiale-plus/pi-rogue
 ```
 
-This is the single consolidated artefact. It includes advisor, orchestration, router, context broker, and Fusion logic (bundled through package dependencies for one-install behavior).
+One public package. One install. Explicit commands only.
 
-### Local workspace / lab
+## Why it exists
 
-```bash
-# from repo root
-npm install
-```
+Pi-Rogue is built for agent sessions that should compound instead of drift:
 
-This exposes all workspace packages for local development.
+- **Spend intelligence where it matters** — use router/advisor signals to escalate hard turns and stay lightweight for routine work.
+- **Keep evidence retrievable** — large tool outputs become compact handles, not prompt sludge.
+- **Compare before committing** — Fusion runs independent model attempts, judges them, then synthesizes a stronger answer.
+- **Make autonomy visible** — goals, loops, and autoresearch are explicit, inspectable, and stoppable.
+
+## Subsystems at a glance
+
+Start with `/pi-rogue` for the cockpit, then jump into the subsystem you need.
+
+| Subsystem | Command | What it gives you |
+|---|---|---|
+| **Pi-Rogue** | `/pi-rogue` | The cockpit: status, health checks, and pointers to every subsystem. Start here. |
+| **Advisor** | `/pi-rogue-advisor` | Low-friction strategic review. A tiny local trained gate learns from examples when to escalate, then calls a strong advisor model only when the turn deserves it. |
+| **Router** | `/pi-rogue-router` | Capability-aware routing telemetry and opt-in model switching. It is the multi-model layer: use whatever model fits the current turn or sequence instead of pretending one model is always best. |
+| **Fusion** | `/pi-rogue-fusion` | OpenRouter-style model panels: independent analysis models answer the same task, a judge compares consensus/contradictions/blind spots, and a synthesis model writes the final answer. |
+| **Goal / loop / autoresearch** | `/pi-rogue-orchestration` | Visible session orchestration: define success, run periodic work, or start solo/parallel research flows without hidden budgets or background mystery. |
+| **Context broker** | `/pi-rogue-context` | Bounded context memory for tool outputs, diffs, snapshots, subagent results, advisor briefs, and Fusion summaries. Prompts stay small; exact evidence stays one lookup away. |
 
 ## Quick start
 
-1. Install `@fiale-plus/pi-rogue` (the single consolidated artefact).
-2. Start a Pi session.
-3. Run `/pi-rogue` first for the concise management cockpit.
-4. Then use canonical subsystem roots:
-   - `/pi-rogue-advisor` — strategic guidance
-   - `/pi-rogue-router` — route telemetry/model-routing controls
-   - `/pi-rogue-fusion` — comparable-panel Fusion provider controls
-   - `/pi-rogue-orchestration` — goal, loop, and autoresearch primitives
+```text
+/pi-rogue status                         # cockpit: health and command pointers
+/pi-rogue-advisor <question>             # ask for strategic guidance
+/pi-rogue-router status                  # inspect route telemetry and mode
+/pi-rogue-fusion configure               # create comparable-panel model recipes
+/pi-rogue-orchestration goal set <goal>  # anchor long-running work
+/pi-rogue-orchestration loop 5m <task>   # run an explicit periodic loop
+/pi-rogue-context brief                  # see compact stored context handles
+```
 
-## Published command surfaces
+Router defaults to observe-only recommendations. `auto_model` is explicit and limited to future model switches; it does not spawn agents or mutate tools.
 
-All command surfaces below are provided by the single `@fiale-plus/pi-rogue` artefact.
+## What ships in the package
 
-- `/pi-rogue status|help|doctor` — concise Pi-Rogue management root and checks/health entrypoint
-- `/pi-rogue-advisor status||mode|model|review|pause|unpause|checkins` — advisor state/control
-- `/pi-rogue-advisor <question>` — get immediate strategic advice
-- `/pi-rogue-orchestration goal set|show|clear|list` — set or update the active goal
-- `/pi-rogue-orchestration loop status|off|clear|stop|<interval> <instruction>`
-- `/pi-rogue-orchestration autoresearch status|clear|<instruction>` — goal+loop-driven solo research flow
-- `/pi-rogue-orchestration lab status|clear|<instruction>` — goal+loop-driven parallel research flow
-- `/pi-rogue-router status|help||mode|profile|models|profiles|configure|cycle` — local route telemetry controls
-- `/pi-rogue-router` mode `observe` (default) keeps routing as recommendations only and does not auto-switch policy
-- `/pi-rogue-router` mode `auto_model` explicitly applies only model routing; this still requires clear user-level intent and explicit opt-in
-- `/pi-rogue-fusion status|reload|configure` — OpenRouter-style comparable-panel Fusion provider controls (models register when recipes exist)
-- `/pi-rogue-context status|brief|lookup <handle|text>|pin <handle-or-id>|export <handle-or-id>|config threshold <bytes>|prune` — context broker controls (threshold minimum 2 KiB). Legacy `/context` alias is not supported.
+`@fiale-plus/pi-rogue` is the single consolidated public artefact. It bundles:
 
-### Fusion
+- `packages/advisor/` — advisor routing, binary gate, review/check-in behavior.
+- `packages/router/` — local trajectory telemetry, model cards, training/evaluation workflows.
+- `packages/context-broker/` — bounded broker runtime and `context_lookup` tool integration.
+- `packages/fusion/` — composite model provider and recipe runner.
+- `packages/orchestration/` — goal, loop, autoresearch, and lab primitives.
+- `packages/core/` — shared contracts/helpers.
 
-Fusion recipes register `fusion/<recipe-id>` as normal models when recipes exist. The v1 recipe shape is OpenRouter-style and roleless: `analysis_models` are comparable independent analysis-only attempts, then a judge produces structured analysis, then the synthesis model writes the final answer. Role-based critic/researcher/verifier passes are intentionally not part of the Fusion schema.
+Workspace-only lab helpers live under `packages/lab/`; they are not part of the public single-install artefact.
 
-A future agentic panel can use pi-agents/subagents plus pi-intercom under a separate `agent_fusion` family (`analysis_agents`), preserving the same judge-and-synthesis language without overloading model refs.
+## Command cheat sheet
 
-See `packages/fusion/README.md`.
+| Surface | Common commands |
+|---|---|
+| Pi-Rogue | `/pi-rogue status`, `/pi-rogue help`, `/pi-rogue doctor` |
+| Advisor | `/pi-rogue-advisor status`, `mode`, `model`, `review light\|strict\|off`, `<question>` |
+| Router | `/pi-rogue-router status`, `mode observe`, `mode auto_model`, `profile <name>`, `models`, `configure` |
+| Fusion | `/pi-rogue-fusion status`, `configure`, `reload` |
+| Orchestration | `/pi-rogue-orchestration goal set/show/clear/list`, `loop status/off/<interval> <instruction>`, `autoresearch status/clear/<instruction>`, `lab status/clear/<instruction>` |
+| Context | `/pi-rogue-context status`, `brief`, `lookup <handle\|text>`, `pin <handle>`, `export <handle>`, `prune` |
 
-### Lab packages
+## Learn more
 
-- `packages/lab/guardrails/` — Shell command risk checks and approvals for Pi.
-- `packages/lab/brain/` — Local project memory helpers.
-- `packages/lab/repo-arch/` — Repo integration bridge for repo-arch CLI.
+- [Canonical package README](packages/bundle/README.md) — install scope and bundled command surface.
+- [Advisor README](packages/advisor/README.md) and [binary gate runbook](docs/routing-binary-gate.md) — escalation policy, trained gate, and evaluation workflow.
+- [Router README](packages/router/README.md), [routing dataset workflow](docs/routing-dataset.md), and [routing labels](docs/routing-labels.md) — route telemetry and learning loop.
+- [Context broker README](packages/context-broker/README.md) and [context footprint proposal](docs/context-footprint-broker.md) — prompt-safe artifact storage and lookup.
+- [Fusion README](packages/fusion/README.md) and [skills-to-flow map](docs/skills-flow.md) — comparable-panel model composition.
+- [Orchestration README](packages/orchestration/README.md) — goal, loop, autoresearch, and lab behavior.
+- [Release guide](docs/release.md) — canonical `pi-rogue-<semver>` release process.
 
-These are experimental/internal lab surfaces and grouped under `packages/lab/`.
-
-## Documentation
-
-### For users
-
-- [Canonical package README](packages/bundle/README.md) — install scope and command surface.
-- [Repository guidance](AGENTS.md) — repository rules, maintenance policy, and release posture.
-- [Release guide](docs/release.md) — canonical release process and naming policy.
-- [Release issue template](.github/ISSUE_TEMPLATE/release.md) — standard release checklist template.
-
-### Subsystem references
-
-- [Advisor README](packages/advisor/README.md) and [advisor skill](packages/advisor/skills/advisor/SKILL.md) — strategic guidance commands and skill surface.
-- [Orchestration README](packages/orchestration/README.md) and [orchestration skill](packages/orchestration/skills/orchestration/SKILL.md) — goals, loop, autoresearch, and lab behavior.
-- [Router README](packages/router/README.md), [binary gate runbook](docs/routing-binary-gate.md), [routing dataset workflow](docs/routing-dataset.md), and [routing labels](docs/routing-labels.md) — routing telemetry and training workflow.
-- [Context broker README](packages/context-broker/README.md) and [context footprint broker proposal](docs/context-footprint-broker.md) — bounded artifact storage and lookup design.
-- [Fusion README](packages/fusion/README.md) and [skills-to-flow map](docs/skills-flow.md) — model-composition behavior and orchestration mapping.
-
-### Lab and extension docs
-
-- [Guardrails package README](packages/lab/guardrails/README.md)
-- [Brain package README](packages/lab/brain/README.md)
-- [Repo-arch package README](packages/lab/repo-arch/README.md)
-
-### Evidence and operational notes
-
-- [Config UX design](docs/pi-rogue-config-ux.md) — command/config discoverability rationale.
-- [Session savings](docs/savings.md) — runtime savings snapshot.
-- [Binary-gate benchmark evidence (2026-05-30)](docs/advisor-binary-gate-benchmark-evidence-2026-05-30.md) — benchmark/verification trail.
-
-## Development
+## Local development
 
 ```bash
 npm install
 npm run check
 npm test
-```
-
-## Repo layout
-
-```txt
-packages/
-  advisor/
-  core/
-  context-broker/
-  lab/
-    guardrails/
-    brain/
-    repo-arch/
-  orchestration/
-  router/
-  fusion/
-  bundle/
 ```
 
 Legacy `.autoresearch` scratch data is archived at `~/.pi/archived-autoresearch/pi-rogue/`.

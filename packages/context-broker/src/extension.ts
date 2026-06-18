@@ -6,7 +6,7 @@ import type { AgentToolResult } from "@earendil-works/pi-coding-agent";
 import type { AutocompleteItem } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import type { ExtensionAPI, ExtensionContext, ToolResultEvent } from "@earendil-works/pi-coding-agent";
-import type { ContextArtifact } from "@fiale-plus/pi-core";
+import type { BoundedContextBroker, ContextArtifact } from "@fiale-plus/pi-core";
 import { createFileContextBroker } from "./file.js";
 import { createInMemoryContextBroker } from "./index.js";
 
@@ -398,11 +398,18 @@ export async function registerContextBrokerBeta(pi: ExtensionAPI, options: Conte
     briefBytes,
   };
   const durableBackend = String(process.env.PI_CONTEXT_BROKER_BACKEND ?? "sqlite").trim().toLowerCase();
-  const broker = durable
-    ? durableBackend === "jsonl"
-      ? createFileContextBroker({ ...brokerOptions, dir: options.storeDir ?? process.env.PI_CONTEXT_BROKER_STORE_DIR })
-      : (await import("./sqlite.js")).createSqliteContextBroker({ ...brokerOptions, dir: options.storeDir ?? process.env.PI_CONTEXT_BROKER_STORE_DIR })
-    : createInMemoryContextBroker(brokerOptions);
+  let broker: BoundedContextBroker;
+  try {
+    broker = durable
+      ? durableBackend === "jsonl"
+        ? createFileContextBroker({ ...brokerOptions, dir: options.storeDir ?? process.env.PI_CONTEXT_BROKER_STORE_DIR })
+        : (await import("./sqlite.js")).createSqliteContextBroker({ ...brokerOptions, dir: options.storeDir ?? process.env.PI_CONTEXT_BROKER_STORE_DIR })
+      : createInMemoryContextBroker(brokerOptions);
+  } catch (error) {
+    p.__piRogueContextBrokerBetaRegistered = false;
+    throw error;
+  }
+
   const seenSourceIds = new Set<string>();
   const sourceHandles = new Map<string, string>();
   let activeSessionId = process.cwd();
