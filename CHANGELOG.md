@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.3.8
+
+### Summary
+
+This release refreshes the repository frontpage and installed command menu ergonomics so Pi-Rogue opens with the `/pi-rogue` cockpit and keeps context-broker controls lower in the menu.
+
+### Changes
+
+- Rewrite the root README as a crisp frontpage with hero copy, quick value bullets, and subsystem-at-a-glance guidance.
+- Align subsystem docs around the canonical `/pi-rogue-*` command surfaces.
+- Register bundle commands in cockpit-first order: `/pi-rogue`, advisor, router, fusion, orchestration, then `/pi-rogue-context`.
+- Keep context-broker startup optional/resilient so core Pi-Rogue commands still load if the broker backend fails.
+
+### Validation
+
+- `npm run check`
+- `npm test`
+- README local link check
+- `git diff --check`
+- PR #163 review loop and CI
+
 ## 0.3.5
 
 ### Summary
