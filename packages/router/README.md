@@ -22,11 +22,11 @@ npm run router:sharpen -- --events .pi/router/events.jsonl --outcomes .pi/router
 npm run router:shadow -- --checkpoint-file .pi/router/checkpoints.jsonl --ledger .pi/router/events.jsonl --output .pi/router/shadow-report.json
 
 # Live router extension commands:
-# /router status|help|on|off|mode|profile|print|profiles|models|configure|cycle
-# /router mode observe      # default: recommendations only
-# /router mode auto_model   # explicit: apply model switches only
-# /router profile spark-smart
-# /router print mismatch_only|all|off
+# /pi-rogue-router status|help|on|off|mode|profile|print|profiles|models|configure|cycle
+# /pi-rogue-router mode observe      # default: recommendations only
+# /pi-rogue-router mode auto_model   # explicit: apply model switches only
+# /pi-rogue-router profile spark-smart
+# /pi-rogue-router print mismatch_only|all|off
 # ctrl+alt+p cycles router profiles (Ctrl-P is reserved by Pi model cycling).
 # Auto-model flip policy lives in `.pi/router/config.json` under `autoModel` and currently defaults to:
 #   minConfidence: 0.7

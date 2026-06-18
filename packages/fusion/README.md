@@ -14,24 +14,24 @@ Pi agents/subagents and pi-intercom fit this concept well, but they should not b
 
 ## Configure
 
-The `/fusion` command is available by default. Fusion models register when recipes exist; if no recipes are present, no `fusion/*` models are added.
+The `/pi-rogue-fusion` command is available by default. Fusion models register when recipes exist; if no recipes are present, no `fusion/*` models are added.
 
 Start with:
 
 ```text
-/fusion status
-/fusion configure
+/pi-rogue-fusion status
+/pi-rogue-fusion configure
 ```
 
-`/fusion configure` shows scoped text models visible to the current Pi session and supports explicit add/edit/remove commands:
+`/pi-rogue-fusion configure` shows scoped text models visible to the current Pi session and supports explicit add/edit/remove commands:
 
 ```text
-/fusion configure add hard-judge openai-codex/gpt-5.5 openai-codex/gpt-5.5 openai-codex/gpt-5.3-codex-spark --tokens 1200
-/fusion configure edit hard-judge openai-codex/gpt-5.5 openai-codex/gpt-5.5 local/qwen3.6-35b-a3b-128k --temperature 0.4
-/fusion configure remove hard-judge
+/pi-rogue-fusion configure add hard-judge openai-codex/gpt-5.5 openai-codex/gpt-5.5 openai-codex/gpt-5.3-codex-spark --tokens 1200
+/pi-rogue-fusion configure edit hard-judge openai-codex/gpt-5.5 openai-codex/gpt-5.5 local/qwen3.6-35b-a3b-128k --temperature 0.4
+/pi-rogue-fusion configure remove hard-judge
 ```
 
-After changing recipes, run `/fusion reload` or restart Pi so `fusion/<recipe-id>` models are registered. Then try those model refs in `/router models` or a router profile.
+After changing recipes, run `/pi-rogue-fusion reload` or restart Pi so `fusion/<recipe-id>` models are registered. Then try those model refs in `/pi-rogue-router models` or a router profile.
 
 ## Recipe file
 

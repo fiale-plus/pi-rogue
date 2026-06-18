@@ -33,11 +33,12 @@ Start with `/pi-rogue` for the cockpit, then jump into the subsystem you need.
 
 | Subsystem | Command | What it gives you |
 |---|---|---|
-| **Router** | `/pi-rogue-router` | Capability-aware routing telemetry and opt-in model switching. It is the multi-model layer: use whatever model fits the current turn or sequence instead of pretending one model is always best. |
+| **Pi-Rogue** | `/pi-rogue` | The cockpit: status, health checks, and pointers to every subsystem. Start here. |
 | **Advisor** | `/pi-rogue-advisor` | Low-friction strategic review. A tiny local trained gate learns from examples when to escalate, then calls a strong advisor model only when the turn deserves it. |
-| **Context broker** | `/pi-rogue-context` | Bounded context memory for tool outputs, diffs, snapshots, subagent results, advisor briefs, and Fusion summaries. Prompts stay small; exact evidence stays one lookup away. |
+| **Router** | `/pi-rogue-router` | Capability-aware routing telemetry and opt-in model switching. It is the multi-model layer: use whatever model fits the current turn or sequence instead of pretending one model is always best. |
 | **Fusion** | `/pi-rogue-fusion` | OpenRouter-style model panels: independent analysis models answer the same task, a judge compares consensus/contradictions/blind spots, and a synthesis model writes the final answer. |
 | **Goal / loop / autoresearch** | `/pi-rogue-orchestration` | Visible session orchestration: define success, run periodic work, or start solo/parallel research flows without hidden budgets or background mystery. |
+| **Context broker** | `/pi-rogue-context` | Bounded context memory for tool outputs, diffs, snapshots, subagent results, advisor briefs, and Fusion summaries. Prompts stay small; exact evidence stays one lookup away. |
 
 ## Quick start
 
@@ -45,10 +46,10 @@ Start with `/pi-rogue` for the cockpit, then jump into the subsystem you need.
 /pi-rogue status                         # cockpit: health and command pointers
 /pi-rogue-advisor <question>             # ask for strategic guidance
 /pi-rogue-router status                  # inspect route telemetry and mode
-/pi-rogue-context brief                  # see compact stored context handles
 /pi-rogue-fusion configure               # create comparable-panel model recipes
 /pi-rogue-orchestration goal set <goal>  # anchor long-running work
 /pi-rogue-orchestration loop 5m <task>   # run an explicit periodic loop
+/pi-rogue-context brief                  # see compact stored context handles
 ```
 
 Router defaults to observe-only recommendations. `auto_model` is explicit and limited to future model switches; it does not spawn agents or mutate tools.
@@ -70,12 +71,12 @@ Workspace-only lab helpers live under `packages/lab/`; they are not part of the 
 
 | Surface | Common commands |
 |---|---|
-| Cockpit | `/pi-rogue status`, `/pi-rogue help`, `/pi-rogue doctor` |
+| Pi-Rogue | `/pi-rogue status`, `/pi-rogue help`, `/pi-rogue doctor` |
 | Advisor | `/pi-rogue-advisor status`, `mode`, `model`, `review light\|strict\|off`, `<question>` |
 | Router | `/pi-rogue-router status`, `mode observe`, `mode auto_model`, `profile <name>`, `models`, `configure` |
-| Context | `/pi-rogue-context status`, `brief`, `lookup <handle\|text>`, `pin <handle>`, `export <handle>`, `prune` |
 | Fusion | `/pi-rogue-fusion status`, `configure`, `reload` |
 | Orchestration | `/pi-rogue-orchestration goal set/show/clear/list`, `loop status/off/<interval> <instruction>`, `autoresearch status/clear/<instruction>`, `lab status/clear/<instruction>` |
+| Context | `/pi-rogue-context status`, `brief`, `lookup <handle\|text>`, `pin <handle>`, `export <handle>`, `prune` |
 
 ## Learn more
 

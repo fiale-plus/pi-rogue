@@ -17,18 +17,23 @@ export async function registerBundle(pi: ExtensionAPI): Promise<void> {
   if (p.__piRogueBundleRegistered) return;
   p.__piRogueBundleRegistered = true;
 
-  if (contextBrokerEnabled()) {
-    const { registerContextBrokerBeta } = await import("@fiale-plus/pi-rogue-context-broker/extension");
-    await registerContextBrokerBeta(pi, {
-      durable: true,
-      storeDir: join(homedir(), ".pi", "agent", "pi-rogue", "context-broker"),
-    });
-  }
-
   registerAdvisor(pi);
-  registerOrchestration(pi);
   registerRouter(pi);
   registerFusion(pi);
+  registerOrchestration(pi);
+
+  if (contextBrokerEnabled()) {
+    try {
+      const { registerContextBrokerBeta } = await import("@fiale-plus/pi-rogue-context-broker/extension");
+      await registerContextBrokerBeta(pi, {
+        durable: true,
+        storeDir: join(homedir(), ".pi", "agent", "pi-rogue", "context-broker"),
+      });
+    } catch (error) {
+      p.__piRogueContextBrokerError = error;
+      console.warn("[pi-rogue] context broker registration failed; continuing without /pi-rogue-context", error);
+    }
+  }
 }
 
 export default function bundleExtension(pi: ExtensionAPI): Promise<void> {
