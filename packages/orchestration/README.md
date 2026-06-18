@@ -30,16 +30,16 @@ npm install --workspace packages/orchestration
 
 | Command | What it does |
 |---|---|
-| `/pi-rogue-orchestration goal set <text>` | Set/update current goal and re-arm check-ins |
-| `/pi-rogue-orchestration goal show` | Show current goal |
-| `/pi-rogue-orchestration goal clear` | Clear active goal |
-| `/pi-rogue-orchestration goal list` | Show recent goal history |
-| `/pi-rogue-orchestration loop <interval> <instruction>` | Create or reset periodic loop (`1m` minimum) |
-| `/pi-rogue-orchestration loop status` | Show current loop state |
-| `/pi-rogue-orchestration loop off` / `clear` / `stop` | Clear loop |
-| `/pi-rogue-orchestration autoresearch <instruction>` | Start/update solo research flow |
-| `/pi-rogue-orchestration autoresearch status` | Show autoresearch state |
-| `/pi-rogue-orchestration autoresearch clear` | Clear solo research + underlying loop |
+| `/pi-rogue-orchestration goal set <text>` (or `/goal set <text>`) | Set/update current goal and re-arm check-ins |
+| `/pi-rogue-orchestration goal show` (or `/goal show`) | Show current goal |
+| `/pi-rogue-orchestration goal clear` (or `/goal clear`) | Clear active goal |
+| `/pi-rogue-orchestration goal list` (or `/goal list`) | Show recent goal history |
+| `/pi-rogue-orchestration loop <interval> <instruction>` (or `/loop <interval> <instruction>`) | Create or reset periodic loop (`1m` minimum) |
+| `/pi-rogue-orchestration loop status` (or `/loop status`) | Show current loop state |
+| `/pi-rogue-orchestration loop off` / `clear` / `stop` (or `/loop off` / `/loop clear` / `/loop stop`) | Clear loop |
+| `/pi-rogue-orchestration autoresearch <instruction>` (or `/autoresearch <instruction>`) | Start/update solo research flow |
+| `/pi-rogue-orchestration autoresearch status` (or `/autoresearch status`) | Show autoresearch state |
+| `/pi-rogue-orchestration autoresearch clear` (or `/autoresearch clear`) | Clear solo research + underlying loop |
 | `/pi-rogue-orchestration lab <instruction>` | Start/update parallel research mode |
 | `/pi-rogue-orchestration lab status` | Show lab state |
 | `/pi-rogue-orchestration lab clear` | Clear lab + underlying loop |
