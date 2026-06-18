@@ -53,7 +53,35 @@ function orchestrationHelp(): string {
     "  /pi-rogue-orchestration loop [status|off|clear|stop|<interval> <instruction>]",
     "  /pi-rogue-orchestration autoresearch [status|clear|<instruction>]",
     "  /pi-rogue-orchestration lab [status|clear|<instruction>]",
+    "Aliases (same behavior): /goal, /loop, /autoresearch",
   ].join("\n");
+}
+
+function registerAliasCommands(pi: ExtensionAPI): void {
+  const p = pi as any;
+  if (!p.__piRogueOrchestrationAliasRegistered) {
+    p.__piRogueOrchestrationAliasRegistered = true;
+
+    pi.registerCommand("goal", {
+      description: "Orchestration goal management. Alias for /pi-rogue-orchestration goal.",
+      getArgumentCompletions: goalArgumentCompletions,
+      handler: (args, ctx) => handleGoalCommand(pi, args, ctx),
+    });
+
+    pi.registerCommand("loop", {
+      description: "Orchestration loop management. Alias for /pi-rogue-orchestration loop.",
+      getArgumentCompletions: loopArgumentCompletions,
+      handler: (args, ctx) => handleLoopCommand(pi, args, ctx),
+    });
+
+    pi.registerCommand("autoresearch", {
+      description: "Orchestration autoresearch. Alias for /pi-rogue-orchestration autoresearch.",
+      getArgumentCompletions: autoresearchArgumentCompletions,
+      handler: async (args, ctx) => {
+        await handleResearchCommand(pi, "autoresearch", args, ctx);
+      },
+    });
+  }
 }
 
 export function registerOrchestration(pi: ExtensionAPI): void {
@@ -66,6 +94,7 @@ export function registerOrchestration(pi: ExtensionAPI): void {
   registerLoop(pi);
   registerAutoresearch(pi);
   registerAutoresearchLab(pi);
+  registerAliasCommands(pi);
 
   pi.registerCommand("pi-rogue-orchestration", {
     description: "Pi-Rogue orchestration. Usage: /pi-rogue-orchestration status|help|goal|loop|autoresearch|lab",
