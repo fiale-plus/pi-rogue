@@ -4,7 +4,7 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { appendText, featureFile, truncate } from "./internal.js";
 import { extractBinaryGateFeatureCounts } from "./binary-gate-features.js";
-import { applyCalibration, type Calibration } from "./binary-gate-eval.js";
+import { applyCalibration, trajectoryFeatureVector, type Calibration, type TrajectoryFeatures } from "./binary-gate-eval.js";
 
 export type AdvisorPhase = "preflight" | "review" | "closeout";
 export type PreflightLabel = "continue" | "escalate_to_advisor" | "need_more_context" | "low_confidence";
@@ -71,6 +71,26 @@ export interface BinaryGateModel {
   config?: Record<string, unknown>;
   calibration?: Calibration;
   thresholds?: GateThresholds;
+  /** Optional v4 stacked second-stage model over [textGateProb, ...trajectoryFeatures]. */
+  stacked?: StackedGateModel;
+}
+
+/**
+ * v4 stacked second-stage logistic regression. Input vector is
+ * [textGateProbEscalate, ...normalized trajectory features] (ordered by
+ * TRAJECTORY_FEATURE_NAMES). Output is the final P(escalate) used for the
+ * decision. Only active when the artifact has `stacked` AND the caller passes
+ * trajectory features; otherwise the text-only calibrated probability is used.
+ */
+export interface StackedGateModel {
+  /** Ordered trajectory feature names this model was trained on. */
+  trajectoryFeatures: string[];
+  /** Bias for the escalate logit. */
+  bias: number;
+  /** Weights for [textGateProb, ...trajectoryFeatures]. */
+  weights: number[];
+  /** Optional second-stage calibration. */
+  calibration?: Calibration;
 }
 
 let _binaryGateCache: BinaryGateModel | null | undefined = undefined;
@@ -138,7 +158,7 @@ function thresholdFor(model: BinaryGateModel, phase?: AdvisorPhase): number {
   return 0.5;
 }
 
-export function predictWithModel(model: BinaryGateModel, text: string, phase?: AdvisorPhase): BinaryGatePrediction {
+export function predictWithModel(model: BinaryGateModel, text: string, phase?: AdvisorPhase, trajectory?: TrajectoryFeatures): BinaryGatePrediction {
   const vec = binaryGateFeatures(text, model);
   const scores = model.bias.slice();
   for (let c = 0; c < model.weights.length; c++) {
@@ -148,7 +168,14 @@ export function predictWithModel(model: BinaryGateModel, text: string, phase?: A
   }
   // labels are ["continue","escalate"]; escalate is index 1.
   const escalateLogit = scores[1] - scores[0];
-  const probEscalate = applyCalibration(escalateLogit, model.calibration);
+  let probEscalate = applyCalibration(escalateLogit, model.calibration);
+  if (model.stacked && trajectory) {
+    const trajVec = trajectoryFeatureVector(trajectory);
+    // Input: [textGateProb, ...trajectoryFeatures]. Weights must align.
+    const input = [probEscalate, ...trajVec];
+    const stackedLogit = model.stacked.bias + model.stacked.weights.reduce((acc, wj, j) => acc + wj * (input[j] ?? 0), 0);
+    probEscalate = applyCalibration(stackedLogit, model.stacked.calibration);
+  }
   const threshold = thresholdFor(model, phase);
   const decision: "continue" | "escalate" = probEscalate >= threshold ? "escalate" : "continue";
   const confidence = Math.max(probEscalate, 1 - probEscalate);
@@ -157,10 +184,10 @@ export function predictWithModel(model: BinaryGateModel, text: string, phase?: A
   return { decision, confidence, probability: probEscalate, threshold, trusted, source: isV2 ? "model-v2" : "model-v1-legacy" };
 }
 
-export function binaryGatePredict(text: string, phase?: AdvisorPhase): BinaryGatePrediction | null {
+export function binaryGatePredict(text: string, phase?: AdvisorPhase, trajectory?: TrajectoryFeatures): BinaryGatePrediction | null {
   const model = loadBinaryGate();
   if (!model) return null;
-  return predictWithModel(model, text, phase);
+  return predictWithModel(model, text, phase, trajectory);
 }
 
 const QUICK_EDIT_RE = /\b(quick edit|small edit|tiny edit|rename|format(?:ting)?|lint|style|doc(?:s)?|comment|typo|readme|spell|spacing|cleanup|one[- ]?liner)\b/i;

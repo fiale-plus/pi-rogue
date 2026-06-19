@@ -1572,7 +1572,12 @@ async function doReview(pi: ExtensionAPI, ctx: any, trigger: string, delta: stri
       failed: meta.failed,
     };
     const reviewHeuristic = heuristicRoute(reviewInput);
-    const gatePrediction = binaryGatePredict(reviewInput.text, "review");
+    const gatePrediction = binaryGatePredict(reviewInput.text, phase, {
+      phase,
+      turns: state.turns,
+      fileChanged: meta.fileChanged,
+      failed: meta.failed,
+    });
     let reviewRoute = reviewHeuristic;
     if (gatePrediction && gatePrediction.trusted && !reviewHeuristic.safety) {
       const gateContinues = gatePrediction.decision === "continue";
@@ -1812,7 +1817,14 @@ export function registerAdvisor(pi: ExtensionAPI): void {
     const routeInput: AdvisorRouteInput = { phase: "preflight", text: enrichedText || prompt || event.systemPrompt || briefText || brokerBrief || intentTag || modeTag || "", brief: [briefText, brokerBrief].filter(Boolean).join("\n\n") };
 
     // Binary gate model — fast local classifier for continue/escalate decisions
-    const gatePrediction = binaryGatePredict(routeInput.text, "preflight");
+    // Trajectory features available at preflight are limited (the turn has not
+    // run yet): phase + session turn count. Full router trajectory signals
+    // (loopScore/progressScore/...) are wired in a follow-up once the router
+    // exposes them to the advisor event context.
+    const gatePrediction = binaryGatePredict(routeInput.text, "preflight", {
+      phase: "preflight",
+      turns: state.turns,
+    });
     const heuristic = heuristicRoute(routeInput);
     let route: AdvisorRouteDecision;
     if (gatePrediction && gatePrediction.trusted) {

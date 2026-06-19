@@ -42,6 +42,33 @@ the unconstrained cost-weighted optimum is emitted with `thresholdFeasible: fals
 The runtime call sites pass the phase explicitly: `binaryGatePredict(text, "preflight")`
 and `binaryGatePredict(text, "review")`, and gate on `prediction.trusted`.
 
+## v4 stacked trajectory model (infrastructure)
+
+A v2 artifact may optionally include a `stacked` second-stage logistic regression
+that combines the text-gate calibrated probability with trajectory features:
+
+```json
+"stacked": {
+  "trajectoryFeatures": ["loopScore", "progressScore", ...],
+  "bias": 0,
+  "weights": [w_textGateProb, w_loopScore, ...],
+  "calibration": { "method": "platt", "a": 1, "b": 0 }
+}
+```
+
+Input vector is `[textGateProbEscalate, ...normalized trajectory features]` ordered
+by `TRAJECTORY_FEATURE_NAMES`. The stacked path is only active when the artifact
+has `stacked` AND the caller passes `TrajectoryFeatures`; otherwise the text-only
+calibrated probability is used (zero regression for text-only assets).
+
+`binaryGatePredict(text, phase, trajectory?)` accepts an optional trajectory
+context. The extension call sites pass the trajectory signals available at each
+phase (preflight: phase + turns; review: phase + turns + fileChanged + failed).
+Full router trajectory signals (`loopScore`, `progressScore`,
+`sameErrorRepeatedCount`, `diffLines`, `contextTokensApprox`) require router→advisor
+event plumbing and an enriched training dataset, which is the follow-up v4 slice.
+Until a `stacked` model is trained and promoted, the shipped asset remains text-only.
+
 ## Training data
 
 Rows are JSONL objects with at least:

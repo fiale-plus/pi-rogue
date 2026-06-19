@@ -204,6 +204,71 @@ export function selectConstrainedThreshold(
 
 export type GuardSlice = "safety" | "stuck" | "debug";
 
+// ── Trajectory features (v4) ───────────────────────────────────────────────
+// Optional second-stage signals from the router/session trajectory. All fields
+// are optional so callers can pass whatever subset is available; missing fields
+// are normalized to neutral values (see trajectoryFeatureVector).
+
+export interface TrajectoryFeatures {
+  /** Router loop score in [0,1]; higher = more repetitive/stuck. */
+  loopScore?: number;
+  /** Router progress score in [0,1]; higher = more forward progress. */
+  progressScore?: number;
+  /** Count of repeated identical errors in the recent trajectory. */
+  sameErrorRepeatedCount?: number;
+  /** Approximate diff size of the last material change. */
+  diffLines?: number;
+  /** Approximate context window token usage. */
+  contextTokensApprox?: number;
+  /** Advisor phase (preflight/review/closeout). */
+  phase?: "preflight" | "review" | "closeout";
+  /** True if the last turn's tool result was a failure. */
+  failed?: boolean;
+  /** True if the last turn changed a file. */
+  fileChanged?: boolean;
+  /** Session turn count. */
+  turns?: number;
+}
+
+/** Ordered trajectory feature names supported by the stacked second-stage model. */
+export const TRAJECTORY_FEATURE_NAMES = [
+  "loopScore",
+  "progressScore",
+  "sameErrorRepeatedCount",
+  "diffLines",
+  "contextTokensApprox",
+  "failed",
+  "fileChanged",
+  "turns",
+] as const;
+
+/**
+ * Build an ordered, normalized trajectory feature vector from a (possibly
+ * sparse) TrajectoryFeatures object. Missing fields become neutral values.
+ * Numeric signals are scaled to roughly [0,1]: counts/log-lines use log1p caps,
+ * booleans become 0/1. The phase field is handled separately by the caller
+ * (it selects the operating threshold, not a stacked feature).
+ */
+export function trajectoryFeatureVector(features: TrajectoryFeatures | undefined): number[] {
+  const f = features ?? {};
+  const clamp01 = (v: number) => Number.isFinite(v) ? Math.max(0, Math.min(1, v)) : 0;
+  const log1pCap = (v: number, cap: number) => {
+    const n = Number(v);
+    if (!Number.isFinite(n) || n <= 0) return 0;
+ return Math.min(1, Math.log1p(n) / Math.log1p(cap));
+  };
+  return [
+    clamp01(f.loopScore ?? 0),
+    clamp01(f.progressScore ?? 0),
+    log1pCap(f.sameErrorRepeatedCount ?? 0, 8),
+    log1pCap(f.diffLines ?? 0, 400),
+    log1pCap(f.contextTokensApprox ?? 0, 200_000),
+    f.failed ? 1 : 0,
+    f.fileChanged ? 1 : 0,
+    log1pCap(f.turns ?? 0, 80),
+  ];
+}
+
 const SLICE_KEYWORDS: Record<GuardSlice, string[]> = {
   safety: [
     "rm -rf", "sudo", "shutdown", "reboot", "mkfs", "chmod -r", "chown",

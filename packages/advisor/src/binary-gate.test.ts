@@ -67,7 +67,8 @@ describe("binary gate model", () => {
 
 
 import { predictWithModel } from "./router.js";
-import type { BinaryGateModel } from "./router.js";
+import type { BinaryGateModel, StackedGateModel } from "./router.js";
+import { trajectoryFeatureVector, TRAJECTORY_FEATURE_NAMES } from "./binary-gate-eval.js";
 
 // A minimal v2 model with no features: scores are just `bias`, so the escalate
 // logit is bias[1]-bias[0]. Lets us assert calibration + threshold behavior directly.
@@ -117,5 +118,60 @@ describe("binary gate v2 calibrated predictions", () => {
     const result = predictWithModel(model, "x");
     expect(result.source).toBe("model-v1-legacy");
     expect(result.trusted).toBe(false);
+  });
+});
+
+describe("binary gate v4 stacked trajectory model", () => {
+  // Stacked second-stage: input = [textGateProb, ...8 trajectory features].
+  // weights[0] is the text-gate-prob weight; the rest align to TRAJECTORY_FEATURE_NAMES.
+  function stackedModel(over: Partial<StackedGateModel>): StackedGateModel {
+    return {
+      trajectoryFeatures: [...TRAJECTORY_FEATURE_NAMES],
+      bias: 0,
+      weights: [1, 0, 0, 0, 0, 0, 0, 0, 0], // identity on text-gate prob by default
+      ...over,
+    } as StackedGateModel;
+  }
+
+  it("falls back to text-only when no trajectory features are passed", () => {
+    const model = tinyModel({ bias: [-2, 2], stacked: stackedModel({ bias: -10, weights: [0, 5, 0, 0, 0, 0, 0, 0, 0] }) });
+    const textOnly = predictWithModel(model, "x");
+    // Without trajectory, the stacked path is skipped, so probability stays ~0.98.
+    expect(textOnly.probability).toBeGreaterThan(0.9);
+    expect(textOnly.decision).toBe("escalate");
+  });
+
+  it("applies the stacked second-stage when trajectory features are provided", () => {
+    // Text gate says escalate (prob ~0.98), but a strong negative weight on
+    // failed=false + a big negative bias should flip it to continue.
+    const model = tinyModel({
+      bias: [-2, 2],
+      stacked: stackedModel({ bias: -8, weights: [0, 0, 0, 0, 0, 0, 0, 0, 0] }),
+    });
+    const result = predictWithModel(model, "x", "review", { failed: false, fileChanged: true });
+    expect(result.probability).toBeLessThan(0.5);
+    expect(result.decision).toBe("continue");
+  });
+
+  it("trajectory features can escalate a text-continue case", () => {
+    // Text gate says continue (prob ~0.02); a positive weight on failed should escalate.
+    const model = tinyModel({
+      bias: [2, -2],
+      stacked: stackedModel({ bias: 0, weights: [0, 0, 0, 0, 0, 0, 5, 0, 0] }), // failed weight = 5
+    });
+    const result = predictWithModel(model, "x", "review", { failed: true });
+    expect(result.probability).toBeGreaterThan(0.5);
+    expect(result.decision).toBe("escalate");
+  });
+
+  it("trajectoryFeatureVector normalizes missing fields to neutral values", () => {
+    expect(trajectoryFeatureVector(undefined)).toHaveLength(TRAJECTORY_FEATURE_NAMES.length);
+    const v = trajectoryFeatureVector({ loopScore: 0.9, diffLines: 1000, failed: true, turns: 200 });
+    expect(v[0]).toBeCloseTo(0.9, 6); // loopScore clamped
+    expect(v[3]).toBeLessThanOrEqual(1); // diffLines log1p-capped
+    expect(v[5]).toBe(1); // failed boolean
+    expect(v[7]).toBeLessThanOrEqual(1); // turns log1p-capped
+    const sparse = trajectoryFeatureVector({});
+    expect(sparse.every((x) => x === 0)).toBe(true);
   });
 });
