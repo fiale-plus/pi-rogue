@@ -2,9 +2,16 @@
 import fs from "node:fs";
 import path from "node:path";
 import { homedir } from "node:os";
+import {
+  applyCalibration,
+  brierScore,
+  costWeightedLoss,
+  expectedCalibrationError,
+  type BinaryLabel,
+  type Calibration,
+} from "../packages/advisor/src/binary-gate-eval.js";
 import { extractBinaryGateFeatureCounts } from "../packages/advisor/src/binary-gate-features.js";
 
-type BinaryLabel = "continue" | "escalate";
 interface BinaryRow {
   id: string;
   text: string;
@@ -13,13 +20,15 @@ interface BinaryRow {
 }
 
 interface ModelArtifact {
-  kind: string;
+  kind: "binary-logreg-v1" | "binary-logreg-v2";
   labels: BinaryLabel[];
   features: string[];
   idf: number[];
   bias: number[];
   weights: number[][];
   config?: Record<string, unknown>;
+  calibration?: Calibration;
+  thresholds?: { default: number; preflight?: number; review?: number; closeout?: number; };
 }
 
 interface EvalResult {
@@ -34,11 +43,17 @@ interface EvalResult {
   continuePrecision: number;
   continueRecall: number;
   continueF1: number;
+  threshold: number;
+  brier: number;
+  ece10: number;
+  costWeightedLoss: number;
   confusion: Array<{ actual: BinaryLabel; predicted: Array<[BinaryLabel, number]> }>;
   misses: Array<{ text: string; source?: string; actual: BinaryLabel; predicted: BinaryLabel; conf: number }>;
 }
 
 interface Metrics { precision: number; recall: number; f1: number; support: number; }
+
+const LABELS: BinaryLabel[] = ["continue", "escalate"];
 
 const DEFAULT_INPUT = path.join(process.cwd(), "data", "routing", "binary-gate.jsonl");
 const DEFAULT_MODEL = path.join(homedir(), ".pi", "agent", "fiale-plus", "advisor", "binary-gate-model.json");
@@ -59,13 +74,22 @@ function parseArgs(argv: string[]) {
     }
   }
 
+  const num = (key: string, fallback: number) => {
+    const value = Number(args[key]);
+    return Number.isFinite(value) ? value : fallback;
+  };
+
   return {
     input: String(args.input || DEFAULT_INPUT),
     model: String(args.model || DEFAULT_MODEL),
     report: String(args.report || DEFAULT_REPORT),
-    topMisses: Number(args["top-misses"] || 10) || 10,
+    topMisses: num("top-misses", 10),
+    fnCost: num("fn-cost", 3),
+    fpCost: num("fp-cost", 1),
   };
 }
+
+type SparseVec = { I: number[]; V: number[] };
 
 function readJsonl<T>(file: string): T[] {
   if (!fs.existsSync(file)) return [];
@@ -100,16 +124,12 @@ function vectorize(counts: Map<string, number>, index: Map<string, number>, idf:
   };
 }
 
-function softmax(logits: number[]) {
-  const max = Math.max(...logits);
-  const exps = logits.map((value) => Math.exp(value - max));
-  const sum = exps.reduce((acc, value) => acc + value, 0) || 1;
-  return exps.map((value) => value / sum);
+function thresholdFor(model: ModelArtifact): number {
+  return model.thresholds?.default ?? 0.5;
 }
 
-function predict(text: string, model: ModelArtifact) {
+function predict(vec: SparseVec, model: ModelArtifact) {
   const index = new Map(model.features.map((feature, i) => [feature, i] as const));
-  const vec = vectorize(extractFeatures(text), index, model.idf);
   const scores = model.bias.slice();
 
   for (let c = 0; c < model.weights.length; c++) {
@@ -119,16 +139,21 @@ function predict(text: string, model: ModelArtifact) {
     scores[c] = score;
   }
 
-  const probs = softmax(scores);
-  const predIdx = probs[0] >= probs[1] ? 0 : 1;
+  const escalateLogit = scores[1] - scores[0];
+  const conf = applyCalibration(escalateLogit, model.calibration);
+  const threshold = thresholdFor(model);
+  const label = (conf >= threshold ? LABELS[1] : LABELS[0]);
   return {
-    label: model.labels[predIdx],
-    confidence: probs[predIdx],
+    label,
+    confidence: Math.max(conf, 1 - conf),
+    probabilityEscalate: conf,
   };
 }
 
-function metricsFor(label: BinaryLabel, rows: BinaryRow[], preds: BinaryLabel[]) {
-  let tp = 0, fp = 0, fn = 0;
+function metricsFor(label: BinaryLabel, rows: BinaryRow[], preds: BinaryLabel[]): Metrics {
+  let tp = 0;
+  let fp = 0;
+  let fn = 0;
 
   for (let i = 0; i < rows.length; i++) {
     const actual = rows[i].label;
@@ -145,10 +170,9 @@ function metricsFor(label: BinaryLabel, rows: BinaryRow[], preds: BinaryLabel[])
 }
 
 function buildConfusion(rows: BinaryRow[], preds: BinaryLabel[]) {
-  const labels: BinaryLabel[] = ["continue", "escalate"];
-  return labels.map((actual) => ({
+  return LABELS.map((actual) => ({
     actual,
-    predicted: labels.map((predicted) => [
+    predicted: LABELS.map((predicted) => [
       predicted,
       rows.filter((r, i) => r.label === actual && preds[i] === predicted).length,
     ] as [BinaryLabel, number]),
@@ -168,12 +192,13 @@ function main() {
     throw new Error(`No rows in input: ${args.input}`);
   }
 
-  const preds = rows.map((row) => predict(row.text, model));
-  const predLabels = preds.map((p) => p.label);
-  const confs = preds.map((p) => p.confidence);
-
-  const actual = rows.map((row) => row.label);
-  const correct = predLabels.filter((label, i) => label === actual[i]).length;
+  const index = new Map(model.features.map((feature, i) => [feature, i] as const));
+  const predictions = rows.map((row) => {
+    const vec = vectorize(extractFeatures(row.text), index, model.idf);
+    return predict(vec, model);
+  });
+  const predLabels = predictions.map((p) => p.label);
+  const escalateProbs = predictions.map((p) => p.probabilityEscalate);
 
   const continueM = metricsFor("continue", rows, predLabels);
   const escalateM = metricsFor("escalate", rows, predLabels);
@@ -183,19 +208,38 @@ function main() {
     return acc;
   }, { continue: 0, escalate: 0 } as Record<BinaryLabel, number>);
 
-  const misses: EvalResult["misses"] = [];
+  let tp = 0;
+  let fp = 0;
+  let fn = 0;
+  let tn = 0;
   for (let i = 0; i < rows.length; i++) {
-    if (predLabels[i] !== actual[i] && misses.length < args.topMisses) {
+    const actualEscalate = rows[i].label === "escalate";
+    const predEscalate = predLabels[i] === "escalate";
+    if (actualEscalate && predEscalate) tp++;
+    else if (!actualEscalate && predEscalate) fp++;
+    else if (actualEscalate && !predEscalate) fn++;
+    else tn++;
+  }
+
+  const threshold = thresholdFor(model);
+  const cwl = costWeightedLoss(tp, fp, fn, tn, args.fnCost, args.fpCost);
+  const brier = brierScore(escalateProbs, rows.map((row) => row.label));
+  const ece10 = expectedCalibrationError(escalateProbs, rows.map((row) => row.label), 10);
+
+  const misses: EvalResult["misses"] = [];
+  for (let i = 0; i < rows.length && misses.length < args.topMisses; i++) {
+    if (predLabels[i] !== rows[i].label) {
       misses.push({
         text: rows[i].text,
         source: rows[i].source,
-        actual: actual[i],
+        actual: rows[i].label,
         predicted: predLabels[i],
-        conf: confs[i],
+        conf: predictions[i].confidence,
       });
     }
   }
 
+  const correct = predLabels.filter((label, i) => label === rows[i].label).length;
   const report: EvalResult = {
     input: args.input,
     model: args.model,
@@ -208,6 +252,10 @@ function main() {
     continuePrecision: continueM.precision,
     continueRecall: continueM.recall,
     continueF1: continueM.f1,
+    threshold,
+    brier,
+    ece10,
+    costWeightedLoss: cwl,
     confusion: buildConfusion(rows, predLabels),
     misses,
   };
@@ -217,8 +265,10 @@ function main() {
 
   console.log(`rows: ${rows.length}`);
   console.log(`accuracy: ${(report.accuracy * 100).toFixed(1)}%`);
+  console.log(`threshold: ${threshold.toFixed(4)} (fnCost=${args.fnCost}, fpCost=${args.fpCost})`);
   console.log(`escalate precision: ${report.escalatePrecision.toFixed(3)} recall: ${report.escalateRecall.toFixed(3)} f1: ${report.escalateF1.toFixed(3)}`);
   console.log(`continue precision: ${report.continuePrecision.toFixed(3)} recall: ${report.continueRecall.toFixed(3)} f1: ${report.continueF1.toFixed(3)}`);
+  console.log(`brier: ${report.brier.toFixed(6)} ece10: ${report.ece10.toFixed(6)} costWeightedLoss: ${report.costWeightedLoss.toFixed(4)}`);
   console.log(`model: ${args.model}`);
   console.log(`report: ${args.report}`);
 }

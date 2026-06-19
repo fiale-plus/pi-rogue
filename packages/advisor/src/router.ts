@@ -4,6 +4,7 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { appendText, featureFile, truncate } from "./internal.js";
 import { extractBinaryGateFeatureCounts } from "./binary-gate-features.js";
+import { applyCalibration, type Calibration } from "./binary-gate-eval.js";
 
 export type AdvisorPhase = "preflight" | "review" | "closeout";
 export type PreflightLabel = "continue" | "escalate_to_advisor" | "need_more_context" | "low_confidence";
@@ -47,15 +48,29 @@ const ROUTER_VERSION = 1;
 // ── Binary gate model (trained from local session data) ──────────────────
 const BINARY_GATE_PATH = featureFile("advisor", "binary-gate-model.json");
 const BINARY_GATE_SOURCE_PATH = resolve(dirname(fileURLToPath(import.meta.url)), "../assets/binary-gate-model.json");
-const BINARY_GATE_THRESHOLD = 0.55;
+// v1 assets have no `thresholds`/`calibration`; this legacy trust gate preserves
+// their pre-v2 behavior (do not act on low-confidence predictions). v2 assets are
+// calibrated and governed by artifact thresholds, so they are always trusted when
+// present. Superseded once a v2 model is promoted into assets/.
+const LEGACY_V1_TRUST_THRESHOLD = 0.55;
 
-interface BinaryGateModel {
-  kind: string;
+type GateThresholds = {
+  default: number;
+  preflight?: number;
+  review?: number;
+  closeout?: number;
+};
+
+export interface BinaryGateModel {
+  kind: "binary-logreg-v1" | "binary-logreg-v2";
   labels: string[];
   features: string[];
   idf: number[];
   bias: number[];
   weights: number[][];
+  config?: Record<string, unknown>;
+  calibration?: Calibration;
+  thresholds?: GateThresholds;
 }
 
 let _binaryGateCache: BinaryGateModel | null | undefined = undefined;
@@ -81,7 +96,7 @@ function loadBinaryGate(): BinaryGateModel | null {
     ensureBinaryGateSeeded();
     if (!existsSync(BINARY_GATE_PATH)) return null;
     _binaryGateCache = JSON.parse(readFileSync(BINARY_GATE_PATH, "utf8")) as BinaryGateModel;
-    if (_binaryGateCache.kind !== "binary-logreg-v1") { _binaryGateCache = null; return null; }
+    if (_binaryGateCache.kind !== "binary-logreg-v1" && _binaryGateCache.kind !== "binary-logreg-v2") { _binaryGateCache = null; return null; }
     return _binaryGateCache;
   } catch { _binaryGateCache = null; return null; }
 }
@@ -103,9 +118,27 @@ function binaryGateFeatures(text: string, model: BinaryGateModel) {
   return { I: pairs.map(([i]) => i), V: pairs.map(([, v]) => v * scale) };
 }
 
-export function binaryGatePredict(text: string): { decision: "continue" | "escalate"; confidence: number } | null {
-  const model = loadBinaryGate();
-  if (!model) return null;
+export interface BinaryGatePrediction {
+  decision: "continue" | "escalate";
+  /** Probability mass on the chosen class. Back-compat with the old return shape. */
+  confidence: number;
+  /** Calibrated P(escalate). */
+  probability: number;
+  /** Operating threshold used for this decision. */
+  threshold: number;
+  /** Whether the caller should act on this prediction. v2 = true; v1 = legacy confidence gate. */
+  trusted: boolean;
+  source: "model-v2" | "model-v1-legacy";
+}
+
+function thresholdFor(model: BinaryGateModel, phase?: AdvisorPhase): number {
+  const t = model.thresholds;
+  if (t) return t[phase ?? "default"] ?? t.default ?? 0.5;
+  // v1 assets: argmax-equivalent decision boundary.
+  return 0.5;
+}
+
+export function predictWithModel(model: BinaryGateModel, text: string, phase?: AdvisorPhase): BinaryGatePrediction {
   const vec = binaryGateFeatures(text, model);
   const scores = model.bias.slice();
   for (let c = 0; c < model.weights.length; c++) {
@@ -113,12 +146,21 @@ export function binaryGatePredict(text: string): { decision: "continue" | "escal
     for (let i = 0; i < vec.I.length; i++) score += w[vec.I[i]] * vec.V[i];
     scores[c] = score;
   }
-  const maxS = Math.max(...scores);
-  const exps = scores.map((v) => Math.exp(v - maxS));
-  const sum = exps.reduce((a, b) => a + b, 0) || 1;
-  const probs = exps.map((v) => v / sum);
-  const idx = probs[0] >= probs[1] ? 0 : 1;
-  return { decision: model.labels[idx] as "continue" | "escalate", confidence: probs[idx] };
+  // labels are ["continue","escalate"]; escalate is index 1.
+  const escalateLogit = scores[1] - scores[0];
+  const probEscalate = applyCalibration(escalateLogit, model.calibration);
+  const threshold = thresholdFor(model, phase);
+  const decision: "continue" | "escalate" = probEscalate >= threshold ? "escalate" : "continue";
+  const confidence = Math.max(probEscalate, 1 - probEscalate);
+  const isV2 = model.kind === "binary-logreg-v2";
+  const trusted = isV2 || confidence >= LEGACY_V1_TRUST_THRESHOLD;
+  return { decision, confidence, probability: probEscalate, threshold, trusted, source: isV2 ? "model-v2" : "model-v1-legacy" };
+}
+
+export function binaryGatePredict(text: string, phase?: AdvisorPhase): BinaryGatePrediction | null {
+  const model = loadBinaryGate();
+  if (!model) return null;
+  return predictWithModel(model, text, phase);
 }
 
 const QUICK_EDIT_RE = /\b(quick edit|small edit|tiny edit|rename|format(?:ting)?|lint|style|doc(?:s)?|comment|typo|readme|spell|spacing|cleanup|one[- ]?liner)\b/i;

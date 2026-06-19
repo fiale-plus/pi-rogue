@@ -1572,9 +1572,9 @@ async function doReview(pi: ExtensionAPI, ctx: any, trigger: string, delta: stri
       failed: meta.failed,
     };
     const reviewHeuristic = heuristicRoute(reviewInput);
-    const gatePrediction = binaryGatePredict(reviewInput.text);
+    const gatePrediction = binaryGatePredict(reviewInput.text, "review");
     let reviewRoute = reviewHeuristic;
-    if (gatePrediction && gatePrediction.confidence >= 0.55 && !reviewHeuristic.safety) {
+    if (gatePrediction && gatePrediction.trusted && !reviewHeuristic.safety) {
       const gateContinues = gatePrediction.decision === "continue";
       reviewRoute = {
         ...reviewHeuristic,
@@ -1592,7 +1592,7 @@ async function doReview(pi: ExtensionAPI, ctx: any, trigger: string, delta: stri
     state.router.review = reviewRoute;
     persistReviewState(state, true);
 
-    if (gatePrediction && gatePrediction.confidence >= 0.55 && gatePrediction.decision === "continue" && !reviewHeuristic.safety) {
+    if (gatePrediction && gatePrediction.trusted && gatePrediction.decision === "continue" && !reviewHeuristic.safety) {
       finalDecision = "continue";
       finalReason = "local gate continue";
       markReviewApplied(state, signature, trigger, finalDecision, finalReason, true);
@@ -1812,10 +1812,10 @@ export function registerAdvisor(pi: ExtensionAPI): void {
     const routeInput: AdvisorRouteInput = { phase: "preflight", text: enrichedText || prompt || event.systemPrompt || briefText || brokerBrief || intentTag || modeTag || "", brief: [briefText, brokerBrief].filter(Boolean).join("\n\n") };
 
     // Binary gate model — fast local classifier for continue/escalate decisions
-    const gatePrediction = binaryGatePredict(routeInput.text);
+    const gatePrediction = binaryGatePredict(routeInput.text, "preflight");
     const heuristic = heuristicRoute(routeInput);
     let route: AdvisorRouteDecision;
-    if (gatePrediction && gatePrediction.confidence >= 0.55) {
+    if (gatePrediction && gatePrediction.trusted) {
       const binLabel = gatePrediction.decision === "continue" ? "continue" as const : "escalate_to_advisor" as const;
       if (heuristic.safety) {
         route = heuristic;
