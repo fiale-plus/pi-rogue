@@ -64,3 +64,58 @@ describe("binary gate model", () => {
     }
   });
 });
+
+
+import { predictWithModel } from "./router.js";
+import type { BinaryGateModel } from "./router.js";
+
+// A minimal v2 model with no features: scores are just `bias`, so the escalate
+// logit is bias[1]-bias[0]. Lets us assert calibration + threshold behavior directly.
+function tinyModel(over: Partial<BinaryGateModel>): BinaryGateModel {
+  return {
+    kind: "binary-logreg-v2",
+    labels: ["continue", "escalate"],
+    features: [],
+    idf: [],
+    bias: [0, 0],
+    weights: [[], []],
+    ...over,
+  } as BinaryGateModel;
+}
+
+describe("binary gate v2 calibrated predictions", () => {
+  it("returns calibrated probability, threshold, and trusted source for a v2 model", () => {
+    const model = tinyModel({ bias: [-2, 2] }); // escalate logit 4 -> p~0.98
+    const result = predictWithModel(model, "anything");
+    expect(result.source).toBe("model-v2");
+    expect(result.trusted).toBe(true);
+    expect(result.probability).toBeGreaterThan(0.9);
+    expect(result.decision).toBe("escalate");
+    expect(result.threshold).toBe(0.5);
+    expect(result.confidence).toBeCloseTo(result.probability, 6);
+  });
+
+  it("respects per-phase thresholds so the same input can escalate or continue by phase", () => {
+    const model = tinyModel({
+      bias: [-2, 2], // p~0.982
+      thresholds: { default: 0.5, preflight: 0.99, review: 0.5 },
+    });
+    expect(predictWithModel(model, "x", "preflight").decision).toBe("continue");
+    expect(predictWithModel(model, "x", "review").decision).toBe("escalate");
+  });
+
+  it("applies Platt calibration to the escalate logit", () => {
+    const model = tinyModel({ bias: [0, 0], calibration: { method: "platt", a: 1, b: -2 } });
+    // logit 0 -> sigmoid(-2) ~ 0.12 -> continue at default threshold 0.5
+    const result = predictWithModel(model, "x");
+    expect(result.probability).toBeCloseTo(0.1192, 2);
+    expect(result.decision).toBe("continue");
+  });
+
+  it("v1 assets keep the legacy trust gate (low confidence is not trusted)", () => {
+    const model = tinyModel({ kind: "binary-logreg-v1", bias: [0, 0] }); // p=0.5, conf=0.5
+    const result = predictWithModel(model, "x");
+    expect(result.source).toBe("model-v1-legacy");
+    expect(result.trusted).toBe(false);
+  });
+});

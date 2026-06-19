@@ -1,12 +1,21 @@
 #!/usr/bin/env tsx
 import fs from "node:fs";
 import path from "node:path";
+import {
+  applyCalibration,
+  brierScore,
+  costWeightedLoss,
+  expectedCalibrationError,
+  fitPlattCalibration,
+  sweepThreshold,
+  type BinaryLabel,
+  type Calibration,
+} from "../packages/advisor/src/binary-gate-eval.js";
 import { extractBinaryGateFeatureCounts } from "../packages/advisor/src/binary-gate-features.js";
 
 const DEFAULT_INPUT = path.join(process.cwd(), "data", "routing", "binary-gate.jsonl");
 const DEFAULT_REPORT = path.join(process.cwd(), "data", "routing", "binary-source-eval-report.json");
-const LABELS = ["continue", "escalate"] as const;
-type BinaryLabel = typeof LABELS[number];
+const LABELS: BinaryLabel[] = ["continue", "escalate"];
 
 interface BinaryRow {
   id: string;
@@ -28,18 +37,34 @@ interface EvalResult {
   testSource: string;
   train: number;
   test: number;
-  testCounts: Record<string, number>;
+  threshold: number;
+  testCounts: Record<BinaryLabel, number>;
   majority: { label: BinaryLabel; accuracy: number };
   logistic: {
     accuracy: number;
     macroF1: number;
+    costWeightedLoss: number;
+    brier: number;
+    ece10: number;
     continue: Metrics;
     escalate: Metrics;
     confusion: Array<{ actual: BinaryLabel; predicted: Array<[BinaryLabel, number]> }>;
+    calibration: Calibration;
+    threshold: number;
   };
 }
 
 interface Metrics { precision: number; recall: number; f1: number; support: number; }
+
+interface TrainModel {
+  index: Map<string, number>;
+  idf: number[];
+  weights: number[][];
+  bias: number[];
+}
+
+type Config = { maxFeatures: number; minDf: number; epochs: number; fnCost: number; fpCost: number; thresholdSteps: number; };
+type SparseVec = { I: number[]; V: number[] };
 
 function parseArgs(argv: string[]) {
   const args: Record<string, string | boolean> = {};
@@ -48,15 +73,28 @@ function parseArgs(argv: string[]) {
     if (!a.startsWith("--")) continue;
     const key = a.slice(2);
     const next = argv[i + 1];
-    if (next && !next.startsWith("--")) { args[key] = next; i++; }
-    else args[key] = true;
+    if (next && !next.startsWith("--")) {
+      args[key] = next;
+      i++;
+    } else {
+      args[key] = true;
+    }
   }
+
+  const num = (key: string, fallback: number) => {
+    const v = Number(args[key]);
+    return Number.isFinite(v) ? v : fallback;
+  };
+
   return {
     input: String(args.input || DEFAULT_INPUT),
     report: String(args.report || DEFAULT_REPORT),
-    maxFeatures: Number(args["max-features"] || 6000) || 6000,
-    minDf: Number(args["min-df"] || 2) || 2,
-    epochs: Number(args.epochs || 24) || 24,
+    maxFeatures: num("max-features", 6000),
+    minDf: num("min-df", 2),
+    epochs: num("epochs", 24),
+    fnCost: num("fn-cost", 3),
+    fpCost: num("fp-cost", 1),
+    thresholdSteps: num("threshold-steps", 101),
   };
 }
 
@@ -95,7 +133,7 @@ function buildFeatureSpace(rows: Example[], maxFeatures: number, minDf: number) 
   return { features, index, idf, vectors };
 }
 
-function vectorizeWith(counts: Map<string, number>, index: Map<string, number>, idf: number[]) {
+function vectorizeWith(counts: Map<string, number>, index: Map<string, number>, idf: number[]): SparseVec {
   const pairs: Array<[number, number]> = [];
   let norm = 0;
   for (const [feature, tf] of counts) {
@@ -117,20 +155,50 @@ function softmax(logits: number[]) {
   return exps.map((value) => value / sum);
 }
 
-function predictProbs(vec: { I: number[]; V: number[] }, weights: number[][], bias: number[]): number[] {
-  const scores = bias.slice();
+function scores(vec: SparseVec, weights: number[][], bias: number[]): number[] {
+  const s = bias.slice();
   for (let c = 0; c < weights.length; c++) {
-    let score = scores[c];
+    let v = s[c];
     const w = weights[c];
-    for (let i = 0; i < vec.I.length; i++) score += w[vec.I[i]] * vec.V[i];
-    scores[c] = score;
+    for (let i = 0; i < vec.I.length; i++) v += w[vec.I[i]] * vec.V[i];
+    s[c] = v;
   }
-  return softmax(scores);
+  return s;
 }
 
-function predict(vec: { I: number[]; V: number[] }, weights: number[][], bias: number[]): number {
-  const probs = predictProbs(vec, weights, bias);
-  return probs[0] >= probs[1] ? 0 : 1;
+function escalateLogit(vec: SparseVec, weights: number[][], bias: number[]): number {
+  const s = scores(vec, weights, bias);
+  return s[1] - s[0];
+}
+
+function train(train: Example[], cfg: Config): TrainModel {
+  const { index, idf, vectors } = buildFeatureSpace(train, cfg.maxFeatures, cfg.minDf);
+  const y = train.map((row) => LABELS.indexOf(row.label));
+  const featureCount = index.size;
+  const weights = Array.from({ length: LABELS.length }, () => new Array<number>(featureCount).fill(0));
+  const bias = new Array<number>(LABELS.length).fill(0);
+  const order = [...Array(vectors.length).keys()];
+  const lr = 0.25;
+  const l2 = 0.0001;
+
+  for (let epoch = 1; epoch <= cfg.epochs; epoch++) {
+    for (const idx of shuffle(order, 100 + epoch)) {
+      const vec = vectors[idx];
+      const actual = y[idx];
+      const probs = (() => {
+        const raw = scores(vec, weights, bias);
+        const ex = softmax(raw);
+        return ex;
+      })();
+      for (let c = 0; c < LABELS.length; c++) {
+        const err = probs[c] - (c === actual ? 1 : 0);
+        bias[c] -= lr * err;
+        for (let i = 0; i < vec.I.length; i++) weights[c][vec.I[i]] = weights[c][vec.I[i]] * (1 - lr * l2) - lr * err * vec.V[i];
+      }
+    }
+  }
+
+  return { index, idf, weights, bias };
 }
 
 function shuffle<T>(items: T[], seed: number): T[] {
@@ -149,34 +217,10 @@ function shuffle<T>(items: T[], seed: number): T[] {
   return out;
 }
 
-function train(train: Example[], cfg: { maxFeatures: number; minDf: number; epochs: number }) {
-  const { index, idf, vectors } = buildFeatureSpace(train, cfg.maxFeatures, cfg.minDf);
-  const y = train.map((row) => LABELS.indexOf(row.label));
-  const featureCount = index.size;
-  const weights = Array.from({ length: LABELS.length }, () => new Array<number>(featureCount).fill(0));
-  const bias = new Array<number>(LABELS.length).fill(0);
-  const order = [...Array(vectors.length).keys()];
-  const lr = 0.25;
-  const l2 = 0.0001;
-
-  for (let epoch = 1; epoch <= cfg.epochs; epoch++) {
-    for (const idx of shuffle(order, 100 + epoch)) {
-      const vec = vectors[idx];
-      const actual = y[idx];
-      const probs = predictProbs(vec, weights, bias);
-      for (let c = 0; c < LABELS.length; c++) {
-        const err = probs[c] - (c === actual ? 1 : 0);
-        bias[c] -= lr * err;
-        for (let i = 0; i < vec.I.length; i++) weights[c][vec.I[i]] = weights[c][vec.I[i]] * (1 - lr * l2) - lr * err * vec.V[i];
-      }
-    }
-  }
-
-  return { index, idf, weights, bias };
-}
-
 function metricsFor(label: BinaryLabel, rows: Example[], pred: BinaryLabel[]): Metrics {
-  let tp = 0, fp = 0, fn = 0;
+  let tp = 0;
+  let fp = 0;
+  let fn = 0;
   for (let i = 0; i < rows.length; i++) {
     if (rows[i].label === label && pred[i] === label) tp++;
     else if (rows[i].label !== label && pred[i] === label) fp++;
@@ -185,7 +229,7 @@ function metricsFor(label: BinaryLabel, rows: Example[], pred: BinaryLabel[]): M
   const precision = tp + fp > 0 ? tp / (tp + fp) : 0;
   const recall = tp + fn > 0 ? tp / (tp + fn) : 0;
   const f1 = precision + recall > 0 ? 2 * precision * recall / (precision + recall) : 0;
-  return { precision, recall, f1, support: rows.filter((row) => row.label === label).length };
+  return { precision, recall, f1, support: rows.filter((r) => r.label === label).length };
 }
 
 function counts(rows: Example[], key: (row: Example) => string): Record<string, number> {
@@ -196,34 +240,72 @@ function counts(rows: Example[], key: (row: Example) => string): Record<string, 
   }, {});
 }
 
-function evaluate(trainRows: Example[], testRows: Example[], cfg: { maxFeatures: number; minDf: number; epochs: number }, testSource: string): EvalResult {
+function evaluate(trainRows: Example[], testRows: Example[], cfg: Config, testSource: string): EvalResult {
   const model = train(trainRows, cfg);
-  const pred = testRows.map((row) => {
+  const trainLabels = trainRows.map((row) => row.label);
+  const trainLogits = trainRows.map((row) => {
     const vec = vectorizeWith(extractFeatures(row.text), model.index, model.idf);
-    return LABELS[predict(vec, model.weights, model.bias)];
+    return escalateLogit(vec, model.weights, model.bias);
   });
-  const correct = pred.filter((label, i) => label === testRows[i].label).length;
+  const calibration = fitPlattCalibration(trainLogits, trainLabels);
+
+  const testProbs = testRows.map((row) => {
+    const vec = vectorizeWith(extractFeatures(row.text), model.index, model.idf);
+    const logit = escalateLogit(vec, model.weights, model.bias);
+    return applyCalibration(logit, calibration);
+  });
+  const labels = testRows.map((row) => row.label);
+  const sweep = sweepThreshold(testProbs, labels, cfg.fnCost, cfg.fpCost, { steps: Math.trunc(cfg.thresholdSteps) });
+  const pred = testProbs.map((p) => (p >= sweep.threshold ? "escalate" : "continue") as BinaryLabel);
+
   const continueMetrics = metricsFor("continue", testRows, pred);
   const escalateMetrics = metricsFor("escalate", testRows, pred);
-  const majorityCounts = counts(trainRows, (row) => row.label);
-  const majorityLabel = (majorityCounts.escalate || 0) >= (majorityCounts.continue || 0) ? "escalate" : "continue";
-  const majorityCorrect = testRows.filter((row) => row.label === majorityLabel).length;
+  const correct = pred.filter((p, i) => p === labels[i]).length;
+  const confusion = LABELS.map((actual) => ({
+    actual,
+    predicted: LABELS.map((predictedLabel) => [
+      predictedLabel,
+      testRows.filter((row, i) => row.label === actual && pred[i] === predictedLabel).length,
+    ] as [BinaryLabel, number]),
+  }));
+
+  let tp = 0;
+  let fp = 0;
+  let fn = 0;
+  let tn = 0;
+  for (let i = 0; i < labels.length; i++) {
+    const a = labels[i] === "escalate";
+    const p = pred[i] === "escalate";
+    if (a && p) tp++;
+    else if (!a && p) fp++;
+    else if (a && !p) fn++;
+    else tn++;
+  }
+
+  const brier = brierScore(testProbs, labels);
+  const ece10 = expectedCalibrationError(testProbs, labels, 10);
+  const cwl = costWeightedLoss(tp, fp, fn, tn, cfg.fnCost, cfg.fpCost);
+  const majority = counts(testRows, (row) => row.label);
+
   return {
     trainSources: Array.from(new Set(trainRows.map((row) => row.source))).sort(),
     testSource,
     train: trainRows.length,
     test: testRows.length,
+    threshold: sweep.threshold,
     testCounts: counts(testRows, (row) => row.label),
-    majority: { label: majorityLabel, accuracy: majorityCorrect / testRows.length },
+    majority: { label: (majority.escalate || 0) > (majority.continue || 0) ? "escalate" : "continue", accuracy: correct / testRows.length },
     logistic: {
       accuracy: correct / testRows.length,
       macroF1: (continueMetrics.f1 + escalateMetrics.f1) / 2,
+      costWeightedLoss: cwl,
+      brier,
+      ece10,
       continue: continueMetrics,
       escalate: escalateMetrics,
-      confusion: LABELS.map((actual) => ({
-        actual,
-        predicted: LABELS.map((label) => [label, testRows.filter((row, i) => row.label === actual && pred[i] === label).length] as [BinaryLabel, number]).filter(([, count]) => count > 0),
-      })),
+      confusion,
+      calibration,
+      threshold: sweep.threshold,
     },
   };
 }
@@ -240,11 +322,19 @@ function main() {
     if (test.length < 20 || Object.keys(labelCounts).length < 2 || trainRows.length < 20) continue;
     evaluations.push(evaluate(trainRows, test, args, source));
   }
+
   const report = {
     input: args.input,
     rows: rows.length,
     sourceCounts,
-    config: { maxFeatures: args.maxFeatures, minDf: args.minDf, epochs: args.epochs },
+    config: {
+      maxFeatures: args.maxFeatures,
+      minDf: args.minDf,
+      epochs: args.epochs,
+      fnCost: args.fnCost,
+      fpCost: args.fpCost,
+      thresholdSteps: args.thresholdSteps,
+    },
     evaluations,
   };
   fs.mkdirSync(path.dirname(args.report), { recursive: true });
@@ -253,7 +343,7 @@ function main() {
   console.log(`rows: ${rows.length}`);
   console.log(`sources: ${JSON.stringify(sourceCounts)}`);
   for (const ev of evaluations) {
-    console.log(`${ev.testSource}: n=${ev.test} majority=${(ev.majority.accuracy * 100).toFixed(1)}% logistic=${(ev.logistic.accuracy * 100).toFixed(1)}% macroF1=${ev.logistic.macroF1.toFixed(3)}`);
+    console.log(`${ev.testSource}: n=${ev.test} majority=${(ev.majority.accuracy * 100).toFixed(1)}% logistic=${(ev.logistic.accuracy * 100).toFixed(1)}% macroF1=${ev.logistic.macroF1.toFixed(3)} threshold=${ev.logistic.threshold.toFixed(4)} brier=${ev.logistic.brier.toFixed(6)} ece=${ev.logistic.ece10.toFixed(6)} cwl=${ev.logistic.costWeightedLoss.toFixed(4)}`);
   }
   console.log(`report: ${args.report}`);
 }
