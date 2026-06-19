@@ -107,6 +107,19 @@ export function applyCalibration(logit: number, calibration: Calibration | undef
   return sigmoid(calibration.a * logit + calibration.b);
 }
 
+function confusionAt(probabilities: number[], labels: BinaryLabel[], threshold: number): { tp: number; fp: number; fn: number; tn: number } {
+  let tp = 0, fp = 0, fn = 0, tn = 0;
+  for (let i = 0; i < probabilities.length; i++) {
+    const predEscalate = probabilities[i] >= threshold;
+    const actualEscalate = labels[i] === "escalate";
+    if (actualEscalate && predEscalate) tp++;
+    else if (actualEscalate && !predEscalate) fn++;
+    else if (!actualEscalate && predEscalate) fp++;
+    else tn++;
+  }
+  return { tp, fp, fn, tn };
+}
+
 /** Sweep operating thresholds on a cost-weighted objective. Returns the best threshold. */
 export function sweepThreshold(
   probabilities: number[],
@@ -121,19 +134,67 @@ export function sweepThreshold(
   let best = { threshold: 0.5, costWeightedLoss: Infinity };
   for (let s = 0; s <= steps; s++) {
     const threshold = lo + (hi - lo) * (s / steps);
-    let tp = 0, fp = 0, fn = 0, tn = 0;
-    for (let i = 0; i < probabilities.length; i++) {
-      const predEscalate = probabilities[i] >= threshold;
-      const actualEscalate = labels[i] === "escalate";
-      if (actualEscalate && predEscalate) tp++;
-      else if (actualEscalate && !predEscalate) fn++;
-      else if (!actualEscalate && predEscalate) fp++;
-      else tn++;
-    }
+    const { tp, fp, fn, tn } = confusionAt(probabilities, labels, threshold);
     const loss = costWeightedLoss(tp, fp, fn, tn, fnCost, fpCost);
     if (loss < best.costWeightedLoss) best = { threshold, costWeightedLoss: loss };
   }
   return best;
+}
+
+export interface ConstrainedThresholdResult {
+  threshold: number;
+  costWeightedLoss: number;
+  accuracy: number;
+  escalationRate: number;
+  feasible: boolean;
+  guardSlices: GuardSliceResult[];
+}
+
+export function selectConstrainedThreshold(
+  rows: Array<{ text: string; label: BinaryLabel }>,
+  probabilities: number[],
+  fnCost: number,
+  fpCost: number,
+  options?: {
+    steps?: number;
+    min?: number;
+    max?: number;
+    minAccuracy?: number;
+    maxEscalationRate?: number;
+    guardFloors?: Partial<Record<GuardSlice, number>>;
+    minGuardSupport?: number;
+  },
+): ConstrainedThresholdResult {
+  const labels = rows.map((row) => row.label);
+  const steps = options?.steps ?? 101;
+  const lo = options?.min ?? 0;
+  const hi = options?.max ?? 1;
+  const minAccuracy = options?.minAccuracy ?? 0;
+  const maxEscalationRate = options?.maxEscalationRate ?? 1;
+  const guardFloors = options?.guardFloors ?? {};
+  const minGuardSupport = options?.minGuardSupport ?? 5;
+  let best: ConstrainedThresholdResult | null = null;
+  let bestUnconstrained: ConstrainedThresholdResult | null = null;
+  for (let s = 0; s <= steps; s++) {
+    const threshold = lo + (hi - lo) * (s / steps);
+    const { tp, fp, fn, tn } = confusionAt(probabilities, labels, threshold);
+    const total = tp + fp + fn + tn || 1;
+    const result: ConstrainedThresholdResult = {
+      threshold,
+      costWeightedLoss: costWeightedLoss(tp, fp, fn, tn, fnCost, fpCost),
+      accuracy: (tp + tn) / total,
+      escalationRate: (tp + fp) / total,
+      feasible: false,
+      guardSlices: guardSliceRecall(rows, probabilities, threshold, guardFloors),
+    };
+    if (!bestUnconstrained || result.costWeightedLoss < bestUnconstrained.costWeightedLoss) bestUnconstrained = result;
+    const guardsPass = result.guardSlices.every((slice) => slice.support < minGuardSupport || slice.passed);
+    const feasible = result.accuracy >= minAccuracy && result.escalationRate <= maxEscalationRate && guardsPass;
+    if (!feasible) continue;
+    result.feasible = true;
+    if (!best || result.costWeightedLoss < best.costWeightedLoss) best = result;
+  }
+  return best ?? { ...bestUnconstrained!, feasible: false };
 }
 
 // ── Guard slices ─────────────────────────────────────────────────────────

@@ -8,7 +8,7 @@ import {
   expectedCalibrationError,
   fitPlattCalibration,
   guardSliceRecall,
-  sweepThreshold,
+  selectConstrainedThreshold,
   type BinaryLabel,
   type Calibration,
 } from "../packages/advisor/src/binary-gate-eval.js";
@@ -49,7 +49,12 @@ function parseArgs(argv: string[]) {
     fnCost: num("fn-cost", 3),
     fpCost: num("fp-cost", 1),
     thresholdSteps: num("threshold-steps", 101),
-    safetyFloor: num("safety-floor", 0),
+    minAccuracy: num("min-accuracy", 0.87),
+    maxEscalationRate: num("max-escalation-rate", 0.65),
+    minGuardSupport: num("min-guard-support", 5),
+    safetyFloor: num("safety-floor", 1.0),
+    stuckFloor: num("stuck-floor", 0.9),
+    debugFloor: num("debug-floor", 0.9),
   };
 }
 
@@ -71,7 +76,13 @@ interface ModelArtifact {
     fnCost: number;
     fpCost: number;
     thresholdSteps: number;
+    minAccuracy: number;
+    maxEscalationRate: number;
+    minGuardSupport: number;
     safetyFloor: number;
+    stuckFloor: number;
+    debugFloor: number;
+    thresholdFeasible: boolean;
     bestEpoch: number;
     trainRows: number;
     validationRows: number;
@@ -103,6 +114,15 @@ interface Report {
       preflight: number;
       review: number;
       closeout: number;
+    };
+    thresholdSelection: {
+      feasible: boolean;
+      minAccuracy: number;
+      maxEscalationRate: number;
+      minGuardSupport: number;
+      validationAccuracy: number;
+      validationEscalationRate: number;
+      validationCostWeightedLoss: number;
     };
     costWeightedLoss: number;
   };
@@ -239,10 +259,6 @@ function metricsFor(label: BinaryLabel, rows: BinaryLabel[], pred: BinaryLabel[]
   return { precision, recall, f1, support: rows.filter((l) => l === label).length };
 }
 
-function thresholdFromCosts(probabilities: number[], labels: BinaryLabel[], fnCost: number, fpCost: number, steps: number) {
-  const threshold = sweepThreshold(probabilities, labels, fnCost, fpCost, { steps: Math.max(11, steps) });
-  return threshold.threshold;
-}
 
 function main() {
   const args = parseArgs(process.argv.slice(2));
@@ -314,7 +330,20 @@ function main() {
   const validationLogits = validationVecs.map((v) => escalateLogit(v, w, b));
   const calibration = fitPlattCalibration(validationLogits, validationLabels);
   const validationCalProbs = validationLogits.map((logit) => applyCalibration(logit, calibration));
-  const threshold = thresholdFromCosts(validationCalProbs, validationLabels, args.fnCost, args.fpCost, Math.trunc(args.thresholdSteps));
+  const thresholdSelection = selectConstrainedThreshold(
+    validation.map((row, i) => ({ text: row.text, label: validationLabels[i] })),
+    validationCalProbs,
+    args.fnCost,
+    args.fpCost,
+    {
+      steps: Math.trunc(args.thresholdSteps),
+      minAccuracy: args.minAccuracy,
+      maxEscalationRate: args.maxEscalationRate,
+      guardFloors: { safety: args.safetyFloor, stuck: args.stuckFloor, debug: args.debugFloor },
+      minGuardSupport: args.minGuardSupport,
+    },
+  );
+  const threshold = thresholdSelection.threshold;
 
   const testLogits = testVecs.map((v) => escalateLogit(v, w, b));
   const testCalProbs = testLogits.map((logit) => applyCalibration(logit, calibration));
@@ -372,7 +401,13 @@ function main() {
       fnCost: args.fnCost,
       fpCost: args.fpCost,
       thresholdSteps: args.thresholdSteps,
+      minAccuracy: args.minAccuracy,
+      maxEscalationRate: args.maxEscalationRate,
+      minGuardSupport: args.minGuardSupport,
       safetyFloor: args.safetyFloor,
+      stuckFloor: args.stuckFloor,
+      debugFloor: args.debugFloor,
+      thresholdFeasible: thresholdSelection.feasible,
       bestEpoch: be,
       trainRows: train.length,
       validationRows: validation.length,
@@ -418,6 +453,15 @@ function main() {
       continue: testContinue,
       confusion,
       threshold: { default: threshold, preflight: threshold, review: reviewThreshold, closeout: threshold },
+      thresholdSelection: {
+        feasible: thresholdSelection.feasible,
+        minAccuracy: args.minAccuracy,
+        maxEscalationRate: args.maxEscalationRate,
+        minGuardSupport: args.minGuardSupport,
+        validationAccuracy: thresholdSelection.accuracy,
+        validationEscalationRate: thresholdSelection.escalationRate,
+        validationCostWeightedLoss: thresholdSelection.costWeightedLoss,
+      },
       costWeightedLoss: cwl,
     },
     calibration: {
@@ -448,7 +492,7 @@ function main() {
   console.log(`continue recall: ${(testContinue.recall * 100).toFixed(1)}%`);
   console.log(`continue F1: ${(testContinue.f1).toFixed(3)}`);
   console.log(`best epoch: ${be}`);
-  console.log(`validation-selected threshold: ${threshold.toFixed(4)} (review=${reviewThreshold.toFixed(4)}) (fnCost=${args.fnCost}, fpCost=${args.fpCost})`);
+  console.log(`validation-selected threshold: ${threshold.toFixed(4)} (review=${reviewThreshold.toFixed(4)}, feasible=${thresholdSelection.feasible}) (fnCost=${args.fnCost}, fpCost=${args.fpCost})`);
   console.log(`model: ${args.model}`);
   console.log(`report: ${args.report}`);
 }

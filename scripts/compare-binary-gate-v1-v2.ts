@@ -10,7 +10,7 @@ import {
   expectedCalibrationError,
   fitPlattCalibration,
   guardSliceRecall,
-  sweepThreshold,
+  selectConstrainedThreshold,
   type BinaryLabel,
 } from "../packages/advisor/src/binary-gate-eval.js";
 import { extractBinaryGateFeatureCounts } from "../packages/advisor/src/binary-gate-features.js";
@@ -64,7 +64,7 @@ function vectorize(counts: Map<string, number>, index: Map<string, number>, idf:
   return { I: pairs.map(([i]) => i), V: pairs.map(([, v]) => v * scale) };
 }
 
-function trainLogreg(train: Row[], maxF: number, minDf: number, epochs: number) {
+function trainLogreg(train: Row[], validation: Row[], maxF: number, minDf: number, epochs: number) {
   const df = new Map<string, number>();
   const docs = train.map((row) => {
     const counts = extractBinaryGateFeatureCounts(row.text);
@@ -79,9 +79,14 @@ function trainLogreg(train: Row[], maxF: number, minDf: number, epochs: number) 
   const index = new Map(features.map((feature, i) => [feature, i]));
   const idf = features.map((feature) => Math.log((1 + train.length) / (1 + (df.get(feature) || 0))) + 1);
   const vecs = docs.map((counts) => vectorize(counts, index, idf));
+  const validationVecs = validation.map((row) => vectorize(extractBinaryGateFeatureCounts(row.text), index, idf));
   const y = train.map((row) => LABELS.indexOf(row.label));
+  const validationLabels = validation.map((row) => row.label);
   const weights = Array.from({ length: 2 }, () => new Array<number>(features.length).fill(0));
   const bias = [0, 0];
+  let bestWeights = weights.map((row) => row.slice());
+  let bestBias = bias.slice();
+  let bestF1 = -1;
   const order = [...Array(vecs.length).keys()];
 
   for (let ep = 1; ep <= epochs; ep++) {
@@ -99,8 +104,27 @@ function trainLogreg(train: Row[], maxF: number, minDf: number, epochs: number) 
         for (let i = 0; i < vec.I.length; i++) weights[c][vec.I[i]] = weights[c][vec.I[i]] * (1 - 0.25 * 0.0001) - 0.25 * err * vec.V[i];
       }
     }
+    const pred = validationVecs.map((vec) => LABELS[rawScores(vec, weights, bias)[1] > rawScores(vec, weights, bias)[0] ? 1 : 0]);
+    const escalateF1 = f1For("escalate", validationLabels, pred);
+    if (escalateF1 > bestF1) {
+      bestF1 = escalateF1;
+      bestWeights = weights.map((row) => row.slice());
+      bestBias = bias.slice();
+    }
   }
-  return { index, idf, weights, bias };
+  return { index, idf, weights: bestWeights, bias: bestBias };
+}
+
+function f1For(label: BinaryLabel, labels: BinaryLabel[], pred: BinaryLabel[]): number {
+  let tp = 0, fp = 0, fn = 0;
+  for (let i = 0; i < labels.length; i++) {
+    if (labels[i] === label && pred[i] === label) tp++;
+    else if (labels[i] !== label && pred[i] === label) fp++;
+    else if (labels[i] === label && pred[i] !== label) fn++;
+  }
+  const precision = tp + fp > 0 ? tp / (tp + fp) : 0;
+  const recall = tp + fn > 0 ? tp / (tp + fn) : 0;
+  return precision + recall > 0 ? 2 * precision * recall / (precision + recall) : 0;
 }
 
 function rawScores(vec: SparseVec, weights: number[][], bias: number[]): number[] {
@@ -156,7 +180,7 @@ function main() {
   const fpCost = Number(process.argv[4] || 1);
   const rows = fs.readFileSync(input, "utf8").split(/\n+/).filter(Boolean).map((line) => JSON.parse(line) as Row);
   const { train, validation, test } = threeWaySplit(rows);
-  const model = trainLogreg(train, 6000, 2, 40);
+  const model = trainLogreg(train, validation, 6000, 2, 40);
 
   const validationLabels = validation.map((row) => row.label);
   const testLabels = test.map((row) => row.label);
@@ -177,14 +201,22 @@ function main() {
 
   const cal = fitPlattCalibration(validationLogits, validationLabels);
   const validationCalProbs = validationLogits.map((z) => applyCalibration(z, cal));
-  const threshold = sweepThreshold(validationCalProbs, validationLabels, fnCost, fpCost, { steps: 101 }).threshold;
+  const thresholdSelection = selectConstrainedThreshold(validation, validationCalProbs, fnCost, fpCost, {
+    steps: 101,
+    minAccuracy: 0.87,
+    maxEscalationRate: 0.65,
+    guardFloors: { safety: 1, stuck: 0.9, debug: 0.9 },
+    minGuardSupport: 5,
+  });
+  const threshold = thresholdSelection.threshold;
   const v2Probs = testLogits.map((z) => applyCalibration(z, cal));
-  const v2 = summarize("v2 Platt + validation-selected cost threshold", v2Probs, testLabels, threshold, fnCost, fpCost, test);
+  const v2 = summarize("v2 Platt + constrained validation-selected threshold", v2Probs, testLabels, threshold, fnCost, fpCost, test);
 
   console.log("");
   console.log(`split: train=${train.length} validation=${validation.length} test=${test.length} (seeded, stratified)`);
   console.log(`costs: fnCost=${fnCost} fpCost=${fpCost}`);
   console.log(`calibration: a=${cal.method === "platt" ? cal.a : 1}, b=${cal.method === "platt" ? cal.b : 0}`);
+  console.log(`threshold selection: feasible=${thresholdSelection.feasible} minAccuracy=0.87 maxEscalationRate=0.65 minGuardSupport=5 validationAccuracy=${thresholdSelection.accuracy.toFixed(3)} validationEscalationRate=${thresholdSelection.escalationRate.toFixed(3)} validationCWL=${thresholdSelection.costWeightedLoss.toFixed(4)}`);
   console.log(`delta vs v1 argmax cwl: ${(v2.cwl - v1Argmax.cwl).toFixed(4)} (negative = v2 better)`);
   console.log(`delta vs v1 legacy-estimate cwl: ${(v2.cwl - v1Legacy.cwl).toFixed(4)} (negative = v2 better)`);
   console.log(`v2 beats v1 argmax on cost-weighted loss: ${v2.cwl < v1Argmax.cwl}`);

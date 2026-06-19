@@ -31,6 +31,14 @@ Current shipped artifact thresholds: `default/preflight/closeout=0.2673`,
 `review=0.05`. The lower review threshold keeps the advisor loop-convergence smoke
 tests stable while leaving preflight less spammy.
 
+Threshold selection is **constrained**: the validation-selected threshold must
+satisfy `minAccuracy` (default 0.87), `maxEscalationRate` (default 0.65), and guard
+recall floors before it is accepted. `minGuardSupport` (default 5) ensures guard
+floors only hard-gate feasibility when a slice has enough support; low-support
+slices (e.g. stuck with support 1) are still reported but do not block selection,
+so a single held-out example cannot veto a candidate. If no threshold is feasible,
+the unconstrained cost-weighted optimum is emitted with `thresholdFeasible: false`.
+
 The runtime call sites pass the phase explicitly: `binaryGatePredict(text, "preflight")`
 and `binaryGatePredict(text, "review")`, and gate on `prediction.trusted`.
 
@@ -112,7 +120,9 @@ The comparison reports both a v1 argmax ablation (`probability >= 0.5`) and a
 binary-only estimate of the legacy v1 trust gate (`confidence >= 0.55`; untrusted
 predictions treated as no model escalation). The full historical extension also had
 heuristic fallback, so do not describe the legacy-trust row as the complete shipped
-runtime unless that fallback is modeled too.
+runtime unless that fallback is modeled too. Compare outputs are strictly post-hoc:
+they are not consumed by training or threshold selection, so re-running compare
+cannot leak test signal back into the artifact.
 
 Benchmark latency/throughput:
 

@@ -6,6 +6,7 @@ import {
   expectedCalibrationError,
   fitPlattCalibration,
   guardSliceRecall,
+  selectConstrainedThreshold,
   sliceMembership,
   sweepThreshold,
   type BinaryLabel,
@@ -88,6 +89,81 @@ describe("sweepThreshold", () => {
     const fpAverse = sweepThreshold(probs, labs, 1, 10);  // prefer high threshold (accept FN, avoid FP)
     const fnAverse = sweepThreshold(probs, labs, 10, 1); // prefer low threshold (accept FP, avoid FN)
     expect(fnAverse.threshold).toBeLessThan(fpAverse.threshold);
+  });
+});
+
+describe("selectConstrainedThreshold", () => {
+  it("chooses a feasible threshold under accuracy and escalation-rate constraints", () => {
+    const rows = [
+      { text: "safe docs", label: "continue" as const },
+      { text: "format readme", label: "continue" as const },
+      { text: "debug failing crash", label: "escalate" as const },
+      { text: "rm -rf production", label: "escalate" as const },
+    ];
+    const result = selectConstrainedThreshold(rows, [0.1, 0.2, 0.8, 0.9], 3, 1, {
+      steps: 10,
+      minAccuracy: 1,
+      maxEscalationRate: 0.5,
+      guardFloors: { safety: 1, debug: 1 },
+    });
+    expect(result.feasible).toBe(true);
+    expect(result.accuracy).toBe(1);
+    expect(result.escalationRate).toBe(0.5);
+    expect(result.guardSlices.every((slice) => slice.passed)).toBe(true);
+  });
+
+  it("falls back to the unconstrained cost optimum when no threshold is feasible", () => {
+    const rows = [
+      { text: "debug failing crash", label: "escalate" as const },
+      { text: "safe docs", label: "continue" as const },
+    ];
+    const result = selectConstrainedThreshold(rows, [0.9, 0.8], 3, 1, {
+      steps: 10,
+      minAccuracy: 1,
+      maxEscalationRate: 0,
+      guardFloors: { debug: 1 },
+    });
+    expect(result.feasible).toBe(false);
+    expect(result.costWeightedLoss).toBeGreaterThanOrEqual(0);
+  });
+
+  it("reports low-support guard slices without making them hard constraints", () => {
+    const rows = [
+      { text: "debug failing crash", label: "escalate" as const },
+      { text: "safe docs", label: "continue" as const },
+    ];
+    const result = selectConstrainedThreshold(rows, [0.2, 0.1], 3, 1, {
+      steps: 10,
+      minAccuracy: 1,
+      maxEscalationRate: 0.5,
+      guardFloors: { debug: 1 },
+      minGuardSupport: 5,
+    });
+    expect(result.feasible).toBe(true);
+    const debug = result.guardSlices.find((slice) => slice.slice === "debug");
+    expect(debug?.support).toBe(1);
+    expect(debug?.passed).toBe(true);
+  });
+
+  it("makes supported guard floors hard feasibility constraints", () => {
+    const rows = [
+      { text: "debug crash one", label: "escalate" as const },
+      { text: "debug crash two", label: "escalate" as const },
+      { text: "debug crash three", label: "escalate" as const },
+      { text: "safe docs", label: "continue" as const },
+    ];
+    const result = selectConstrainedThreshold(rows, [0.2, 0.2, 0.2, 0.1], 3, 1, {
+      steps: 10,
+      minAccuracy: 1,
+      maxEscalationRate: 0.25,
+      guardFloors: { debug: 1 },
+      minGuardSupport: 3,
+    });
+    // Satisfying debug recall requires escalating 3/4 rows, which violates maxEscalationRate=0.25.
+    // Therefore no constrained threshold is feasible even though the fallback result is still reported.
+    expect(result.feasible).toBe(false);
+    const debug = result.guardSlices.find((slice) => slice.slice === "debug");
+    expect(debug?.support).toBe(3);
   });
 });
 
