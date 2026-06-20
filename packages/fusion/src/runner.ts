@@ -100,6 +100,30 @@ function stringArray(value: unknown): string[] {
   return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string" && item.trim().length > 0) : [];
 }
 
+function isLikelyIntentOnlyPanelText(content: string): boolean {
+  const lower = responseText(content).toLowerCase();
+  if (!lower) return true;
+  const firstSentence = lower.split(/[.!?\n]/)[0] ?? "";
+  const intentOnlyPattern = /^(?:i\s*(?:'ll|\u2019ll)?\s*(?:read|open|inspect|check|review|analyze|analyse|look|start|take|try)|i\s*(?:will|would)\s+(?:read|open|inspect|check|review|analyze|analyse|look|start|take|try)|i\s+(?:can\s+only|cannot|can't|won't|do not|can not)\b)/;
+  if (intentOnlyPattern.test(firstSentence)) return true;
+  return false;
+}
+
+function buildPanelOnlyText(context: Context, responses: FusionPanelResponse[], reason: string, failed: FusionFailedModel[]): string {
+  const failedText = failed.length > 0
+    ? failed.map((item) => `${item.model}: ${item.error}`).join("\n")
+    : "none";
+
+  return [
+    `Fusion bypassed judge/synthesis because panel output was not substantive: ${reason}`,
+    "",
+    `Original task:\n${renderConversation(context)}`,
+    "",
+    ...responses.map((response) => `## ${response.model}\n${response.content}`),
+    failed.length > 0 ? `\nPanel failures:\n${failedText}` : "\nPanel failures: none",
+  ].join("\n");
+}
+
 export function parseJudgeAnalysis(text: string): FusionJudgeAnalysis | null {
   const parsed = parseJsonObject(text);
   if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return null;
@@ -263,10 +287,31 @@ export async function runFusionCompletion(recipe: FusionRecipe, context: Context
     return result;
   }
 
+  const substantiveResponses = responses.filter((response) => !isLikelyIntentOnlyPanelText(response.content));
+  const nonSubstantivePanel = responses.length - substantiveResponses.length;
+  if (nonSubstantivePanel > 0 && substantiveResponses.length === 0) {
+    const final_text = buildPanelOnlyText(context, responses, "all panel responses were non-substantive", failed_models);
+    const result: FusionRunResult = {
+      status: "ok",
+      recipe_id: recipe.id,
+      run_id,
+      final_text,
+      responses,
+      failed_models,
+      degraded: failed_models.length > 0 ? "panel_partial" : "panel_only",
+      requested_params,
+      effective_params: requested_params,
+    };
+    result.trace_path = options.traceStore?.write(result);
+    options.broker?.publish(result, compactSummary(result));
+    return result;
+  }
+
   let analysis: FusionJudgeAnalysis | undefined;
   let judge_raw: string | undefined;
   let judge_error: string | undefined;
   let degraded: FusionRunResult["degraded"] = failed_models.length > 0 ? "panel_partial" : undefined;
+  let judgeUsageLimit = false;
   try {
     const judgeText = await options.completer.complete({
       model: recipe.model,
@@ -285,27 +330,35 @@ export async function runFusionCompletion(recipe: FusionRecipe, context: Context
   } catch (error) {
     degraded = "judge_failed";
     judge_error = error instanceof Error ? error.message : String(error);
+    if (/usage_limit_reached/i.test(judge_error)) {
+      judgeUsageLimit = true;
+    }
   }
 
   let final_text: string | undefined;
-  try {
-    final_text = responseText(await options.completer.complete({
-      model: recipe.model,
-      context: buildSynthesisContext(context, responses, failed_models, analysis),
-      maxTokens: recipe.max_completion_tokens,
-      temperature: recipe.temperature,
-      reasoning: recipe.reasoning?.effort,
-      timeoutMs: recipe.timeout_ms,
-      signal: mergedSignal(options.signal, recipe.timeout_ms),
-    }));
-  } catch (error) {
-    degraded = "synthesis_failed";
-    final_text = [
-      "Fusion synthesis failed; returning panel-only result.",
-      error instanceof Error ? error.message : String(error),
-      "",
-      responses.map((response, index) => `## ${index + 1}. ${response.model}\n${response.content}`).join("\n\n"),
-    ].join("\n");
+  if (judgeUsageLimit) {
+    final_text = buildPanelOnlyText(context, responses, "judge usage limit reached", failed_models);
+    degraded = "judge_failed";
+  } else {
+    try {
+      final_text = responseText(await options.completer.complete({
+        model: recipe.model,
+        context: buildSynthesisContext(context, responses, failed_models, analysis),
+        maxTokens: recipe.max_completion_tokens,
+        temperature: recipe.temperature,
+        reasoning: recipe.reasoning?.effort,
+        timeoutMs: recipe.timeout_ms,
+        signal: mergedSignal(options.signal, recipe.timeout_ms),
+      }));
+    } catch (error) {
+      degraded = "synthesis_failed";
+      final_text = [
+        "Fusion synthesis failed; returning panel-only result.",
+        error instanceof Error ? error.message : String(error),
+        "",
+        responses.map((response, index) => `## ${index + 1}. ${response.model}\n${response.content}`).join("\n\n"),
+      ].join("\n");
+    }
   }
 
   const result: FusionRunResult = {

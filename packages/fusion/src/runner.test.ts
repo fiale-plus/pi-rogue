@@ -37,7 +37,7 @@ describe("fusion runner", () => {
             });
           }
           if (request.model === "judge/model") return "Final synthesized answer";
-          return `answer from ${request.model}`;
+          return `answer from ${request.model}: reviewed the diff and found one concrete migration risk in auth handling.`;
         },
       },
     });
@@ -70,6 +70,47 @@ describe("fusion runner", () => {
     expect(result.failed_models).toEqual([{ model: "panel/b", error: "rate limited" }]);
     expect(result.degraded).toBe("judge_failed");
     expect(result.final_text).toBe("Panel-only final");
+  });
+
+  it("skips judge and synthesis when all panel responses are non-substantive", async () => {
+    const calls: string[] = [];
+    const result = await runFusionCompletion(recipe, context, {
+      runId: "run-2b",
+      completer: {
+        async complete(request) {
+          calls.push(request.model);
+          if (request.model.startsWith("panel/")) return "I’ll read the file and report back.";
+          return "should not run";
+        },
+      },
+    });
+
+    expect(result.status).toBe("ok");
+    expect(result.degraded).toBe("panel_only");
+    expect(result.responses).toHaveLength(2);
+    expect(result.final_text).toContain("Fusion bypassed judge/synthesis");
+    expect(calls.filter((call) => call === "judge/model").length).toBe(0);
+  });
+
+  it("skips synthesis when judge hits usage limit", async () => {
+    const calls: string[] = [];
+    const result = await runFusionCompletion(recipe, context, {
+      runId: "run-2c",
+      completer: {
+        async complete(request) {
+          calls.push(request.model);
+          if (request.model.startsWith("panel/")) return "Reviewed the change and found one risk around input validation.";
+          if (request.model === "judge/model") throw new Error("usage_limit_reached");
+          return "synthesis should be skipped";
+        },
+      },
+    });
+
+    expect(result.status).toBe("ok");
+    expect(result.degraded).toBe("judge_failed");
+    expect(result.judge_error).toContain("usage_limit_reached");
+    expect(result.final_text).toContain("judge usage limit reached");
+    expect(calls.filter((call) => call === "judge/model")).toHaveLength(1);
   });
 
   it("fails when all panel models fail", async () => {

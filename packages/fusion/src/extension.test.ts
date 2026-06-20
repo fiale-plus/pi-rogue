@@ -57,6 +57,8 @@ describe("fusion extension", () => {
   beforeEach(() => {
     isolatedHome = mkdtempSync(join(tmpdir(), "fusion-home-"));
     process.env.HOME = isolatedHome;
+    delete process.env.PI_ROGUE_FUSION_RECIPES;
+    delete process.env.PI_ROGUE_FUSION_TRACE_DIR;
   });
 
   afterEach(() => {

@@ -87,7 +87,8 @@ function textStream(model: Model<Api>, promise: Promise<{ text: string; result?:
       stream.end();
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      output = makeOutput(model, "", usageZero(), signal?.aborted ? "aborted" : "error", message);
+      const failedText = signal?.aborted ? `Fusion aborted: ${message}` : `Fusion failed: ${message}`;
+      output = makeOutput(model, failedText, usageZero(), signal?.aborted ? "aborted" : "error", message);
       stream.push({ type: "error", reason: output.stopReason as "error" | "aborted", error: output });
       stream.end();
     }
@@ -158,6 +159,18 @@ function cwdOf(ctx: any): string {
 function traceDir(_ctx: any): string {
   const configured = process.env.PI_ROGUE_FUSION_TRACE_DIR;
   return configured ? resolve(configured) : join(homedir(), ".pi", "agent", "pi-rogue", "fusion", "runs");
+}
+
+function fusionFailureMessage(result: FusionRunResult): string {
+  const failed = result.failed_models
+    .slice(0, 3)
+    .map((item) => `${item.model}: ${item.error}`)
+    .join("; ");
+  return [
+    result.error ?? "fusion failed",
+    failed ? `failed models: ${failed}` : "",
+    result.trace_path ? `trace: ${result.trace_path}` : "",
+  ].filter(Boolean).join("\n");
 }
 
 function recipePathFor(ctx: any): string {
@@ -362,7 +375,7 @@ function registerFusionProviderForContext(pi: ExtensionAPI, ctx: any, getCtx: ()
         broker: createBrokerPublisher(pi),
         signal: options?.signal,
       }).then((result) => {
-        if (result.status === "error") throw new Error(result.error ?? "fusion failed");
+        if (result.status === "error") throw new Error(fusionFailureMessage(result));
         return { text: result.final_text || "(empty fusion response)", result, usage: usageSink.usage };
       });
       return textStream(model, promise, options?.signal);
