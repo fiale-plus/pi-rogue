@@ -24050,5 +24050,63 @@
     "preflight": 0.26732673267326734,
     "review": 0.05,
     "closeout": 0.26732673267326734
+  },
+  "stacked": {
+    "trajectoryFeatures": [
+      "loopScore",
+      "progressScore",
+      "sameErrorRepeatedCount",
+      "diffLines",
+      "contextTokensApprox",
+      "failed",
+      "fileChanged",
+      "turns"
+    ],
+    "bias": -5.222847133537154,
+    "weights": [
+      10.842368439778655,
+      -0.07685868533111273,
+      0.0058843168310495535,
+      0.011918254465087085,
+      0,
+      0.0490472692456675,
+      -0.06537085762694378,
+      -0.2160743207460246,
+      -0.04585920290332786
+    ],
+    "calibration": {
+      "method": "platt",
+      "a": 0.5968969223046103,
+      "b": -0.07004893503425318
+    },
+    "thresholds": {
+      "default": 0.18811881188118812,
+      "preflight": 0.18811881188118812,
+      "review": 0.05,
+      "closeout": 0.18811881188118812
+    },
+    "metrics": {
+      "coverage": {
+        "train": 0.5250752256770311,
+        "validation": 0.5620608899297423,
+        "test": 0.4976635514018692
+      },
+      "validation": {
+        "accuracy": 0.8758782201405152,
+        "costWeightedLoss": 0.16159250585480095,
+        "brier": 0.09072147155837897,
+        "ece10": 0.03882404048361417,
+        "threshold": 0.18811881188118812,
+        "feasible": true
+      },
+      "test": {
+        "accuracy": 0.8598130841121495,
+        "costWeightedLoss": 0.1822429906542056,
+        "brier": 0.09073237302025805,
+        "ece10": 0.049586493807429945,
+        "threshold": 0.18811881188118812,
+        "feasible": true
+      }
+    }
   }
 }

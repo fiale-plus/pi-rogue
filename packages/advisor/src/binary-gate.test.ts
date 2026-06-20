@@ -141,6 +141,21 @@ describe("binary gate v4 stacked trajectory model", () => {
     expect(textOnly.decision).toBe("escalate");
   });
 
+  it("ignores stacked thresholds when trajectory is missing", () => {
+    const model = tinyModel({
+      bias: [-2, 2],
+      thresholds: { default: 0.99, preflight: 0.99, review: 0.99 },
+      stacked: stackedModel({
+        bias: -10,
+        weights: [0, 0, 0, 0, 0, 0, 0, 0, 0],
+        thresholds: { default: 0.01, preflight: 0.01, review: 0.01, closeout: 0.01 },
+      }),
+    });
+    const result = predictWithModel(model, "x", "review");
+    expect(result.threshold).toBe(0.99);
+    expect(result.decision).toBe("continue");
+  });
+
   it("applies the stacked second-stage when trajectory features are provided", () => {
     // Text gate says escalate (prob ~0.98), but a strong negative weight on
     // failed=false + a big negative bias should flip it to continue.
@@ -162,6 +177,17 @@ describe("binary gate v4 stacked trajectory model", () => {
     const result = predictWithModel(model, "x", "review", { failed: true });
     expect(result.probability).toBeGreaterThan(0.5);
     expect(result.decision).toBe("escalate");
+  });
+
+  it("falls back to text-only when stacked weights are malformed", () => {
+    const model = tinyModel({
+      bias: [-2, 2],
+      stacked: stackedModel({ bias: -8, weights: [1, 2, 3] }),
+    });
+    const textOnly = predictWithModel(model, "x", "review");
+    const withTrajectory = predictWithModel(model, "x", "review", { failed: true, fileChanged: true });
+    expect(withTrajectory.probability).toBeCloseTo(textOnly.probability, 6);
+    expect(withTrajectory.decision).toBe(textOnly.decision);
   });
 
   it("trajectoryFeatureVector normalizes missing fields to neutral values", () => {

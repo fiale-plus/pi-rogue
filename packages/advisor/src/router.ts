@@ -4,7 +4,7 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { appendText, featureFile, truncate } from "./internal.js";
 import { extractBinaryGateFeatureCounts } from "./binary-gate-features.js";
-import { applyCalibration, trajectoryFeatureVector, type Calibration, type TrajectoryFeatures } from "./binary-gate-eval.js";
+import { applyCalibration, TRAJECTORY_FEATURE_NAMES, trajectoryFeatureVector, type Calibration, type TrajectoryFeatures } from "./binary-gate-eval.js";
 
 export type AdvisorPhase = "preflight" | "review" | "closeout";
 export type PreflightLabel = "continue" | "escalate_to_advisor" | "need_more_context" | "low_confidence";
@@ -34,6 +34,7 @@ export interface AdvisorRouteDecision {
   promptHash: string;
   promptSummary: string;
   briefSummary?: string;
+  trajectory?: TrajectoryFeatures;
 }
 
 export interface RouterResponse {
@@ -91,6 +92,8 @@ export interface StackedGateModel {
   weights: number[];
   /** Optional second-stage calibration. */
   calibration?: Calibration;
+  /** Optional stacked-specific thresholds; otherwise fall back to text thresholds. */
+  thresholds?: GateThresholds;
 }
 
 let _binaryGateCache: BinaryGateModel | null | undefined = undefined;
@@ -169,14 +172,20 @@ export function predictWithModel(model: BinaryGateModel, text: string, phase?: A
   // labels are ["continue","escalate"]; escalate is index 1.
   const escalateLogit = scores[1] - scores[0];
   let probEscalate = applyCalibration(escalateLogit, model.calibration);
-  if (model.stacked && trajectory) {
+  const stacked = model.stacked;
+  const stackedUsable = Boolean(
+    stacked && trajectory &&
+    stacked.weights.length === 1 + TRAJECTORY_FEATURE_NAMES.length &&
+    stacked.trajectoryFeatures.length === TRAJECTORY_FEATURE_NAMES.length &&
+    stacked.trajectoryFeatures.every((feature, index) => feature === TRAJECTORY_FEATURE_NAMES[index]),
+  );
+  if (stackedUsable && stacked) {
     const trajVec = trajectoryFeatureVector(trajectory);
-    // Input: [textGateProb, ...trajectoryFeatures]. Weights must align.
     const input = [probEscalate, ...trajVec];
-    const stackedLogit = model.stacked.bias + model.stacked.weights.reduce((acc, wj, j) => acc + wj * (input[j] ?? 0), 0);
-    probEscalate = applyCalibration(stackedLogit, model.stacked.calibration);
+    const stackedLogit = stacked.bias + stacked.weights.reduce((acc, wj, j) => acc + wj * (input[j] ?? 0), 0);
+    probEscalate = applyCalibration(stackedLogit, stacked.calibration);
   }
-  const threshold = thresholdFor(model, phase);
+  const threshold = stackedUsable && stacked?.thresholds ? (stacked.thresholds[phase ?? "default"] ?? stacked.thresholds.default ?? thresholdFor(model, phase)) : thresholdFor(model, phase);
   const decision: "continue" | "escalate" = probEscalate >= threshold ? "escalate" : "continue";
   const confidence = Math.max(probEscalate, 1 - probEscalate);
   const isV2 = model.kind === "binary-logreg-v2";
@@ -584,6 +593,7 @@ export function routeLogEntry(route: AdvisorRouteDecision): Record<string, unkno
     promptHash: route.promptHash,
     prompt: route.promptSummary,
     brief: route.briefSummary,
+    trajectory: route.trajectory,
   };
 }
 

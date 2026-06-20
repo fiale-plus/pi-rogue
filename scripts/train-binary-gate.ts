@@ -9,8 +9,12 @@ import {
   fitPlattCalibration,
   guardSliceRecall,
   selectConstrainedThreshold,
+  sigmoid,
+  trajectoryFeatureVector,
+  TRAJECTORY_FEATURE_NAMES,
   type BinaryLabel,
   type Calibration,
+  type TrajectoryFeatures,
 } from "../packages/advisor/src/binary-gate-eval.js";
 import { extractBinaryGateFeatureCounts } from "../packages/advisor/src/binary-gate-features.js";
 
@@ -55,11 +59,42 @@ function parseArgs(argv: string[]) {
     safetyFloor: num("safety-floor", 1.0),
     stuckFloor: num("stuck-floor", 0.9),
     debugFloor: num("debug-floor", 0.9),
+    stacked: Boolean(args.stacked),
+    stackedEpochs: num("stacked-epochs", 40),
+    stackedLr: num("stacked-lr", 0.2),
+    stackedL2: num("stacked-l2", 0.0005),
+    minStackedRows: num("min-stacked-rows", 80),
   };
 }
 
-interface BinaryRow { id: string; text: string; label: BinaryLabel; source: string; sourceLabel?: string; cwd?: string; weight?: number; }
-interface Example { text: string; label: BinaryLabel; weight: number; source: string; }
+interface BinaryRow { id: string; text: string; label: BinaryLabel; source: string; sourceLabel?: string; cwd?: string; weight?: number; trajectory?: TrajectoryFeatures; }
+interface Example { text: string; label: BinaryLabel; weight: number; source: string; trajectory?: TrajectoryFeatures; }
+interface StackedModelArtifact {
+  trajectoryFeatures: string[];
+  bias: number;
+  weights: number[];
+  calibration?: Calibration;
+  thresholds?: { default: number; preflight?: number; review?: number; closeout?: number; };
+  metrics?: {
+    coverage: { train: number; validation: number; test: number; };
+    validation?: {
+      accuracy: number;
+      costWeightedLoss: number;
+      brier: number;
+      ece10: number;
+      threshold: number;
+      feasible: boolean;
+    };
+    test?: {
+      accuracy: number;
+      costWeightedLoss: number;
+      brier: number;
+      ece10: number;
+      threshold: number;
+      feasible: boolean;
+    };
+  };
+}
 interface ModelArtifact {
   kind: "binary-logreg-v2";
   labels: BinaryLabel[];
@@ -91,6 +126,7 @@ interface ModelArtifact {
   };
   calibration: Calibration;
   thresholds: { default: number; preflight?: number; review?: number; closeout?: number; };
+  stacked?: StackedModelArtifact;
 }
 
 interface Report {
@@ -131,6 +167,42 @@ interface Report {
     brier: number;
     ece10: number;
     guardSlices: { slice: string; support: number; escalateRecall: number; passed: boolean; }[];
+  };
+  stacked?: {
+    enabled: boolean;
+    rows: number;
+    train: number;
+    validation: number;
+    test: number;
+    bestEpoch: number;
+    textBaseline: {
+      accuracy: number;
+      costWeightedLoss: number;
+      brier: number;
+      ece10: number;
+      threshold: number;
+      feasible: boolean;
+    };
+    validation: {
+      accuracy: number;
+      costWeightedLoss: number;
+      brier: number;
+      ece10: number;
+      threshold: number;
+      feasible: boolean;
+      guardSlices: { slice: string; support: number; escalateRecall: number; passed: boolean; }[];
+    };
+    test: {
+      accuracy: number;
+      costWeightedLoss: number;
+      brier: number;
+      ece10: number;
+      threshold: number;
+      feasible: boolean;
+      guardSlices: { slice: string; support: number; escalateRecall: number; passed: boolean; }[];
+    };
+    promoted: boolean;
+    reason: string;
   };
 }
 
@@ -259,11 +331,199 @@ function metricsFor(label: BinaryLabel, rows: BinaryLabel[], pred: BinaryLabel[]
   return { precision, recall, f1, support: rows.filter((l) => l === label).length };
 }
 
+type GuardFloors = Partial<Record<"safety" | "stuck" | "debug", number>>;
+
+interface DenseStackedExample {
+  text: string;
+  label: BinaryLabel;
+  weight: number;
+  values: number[];
+  trajectory?: TrajectoryFeatures;
+}
+
+interface DenseEvalResult {
+  accuracy: number;
+  costWeightedLoss: number;
+  brier: number;
+  ece10: number;
+  threshold: number;
+  feasible: boolean;
+  guardSlices: { slice: string; support: number; escalateRecall: number; passed: boolean; }[];
+}
+
+function denseDot(weights: number[], values: number[]): number {
+  let sum = 0;
+  for (let i = 0; i < weights.length; i++) sum += weights[i] * (values[i] ?? 0);
+  return sum;
+}
+
+function denseProb(weights: number[], bias: number, values: number[]): number {
+  return sigmoid(bias + denseDot(weights, values));
+}
+
+function stackedValues(textProb: number, trajectory: TrajectoryFeatures | undefined): number[] {
+  return [textProb, ...trajectoryFeatureVector(trajectory)];
+}
+
+function evaluateDense(rows: DenseStackedExample[], probabilities: number[], threshold: number, fnCost: number, fpCost: number, guardFloors: GuardFloors, minGuardSupport: number): DenseEvalResult {
+  const labels = rows.map((row) => row.label);
+  const predictions = probabilities.map((p) => (p >= threshold ? "escalate" : "continue") as BinaryLabel);
+  let tp = 0;
+  let fp = 0;
+  let fn = 0;
+  let tn = 0;
+  for (let i = 0; i < labels.length; i++) {
+    const actualEscalate = labels[i] === "escalate";
+    const predictedEscalate = predictions[i] === "escalate";
+    if (actualEscalate && predictedEscalate) tp++;
+    else if (actualEscalate && !predictedEscalate) fn++;
+    else if (!actualEscalate && predictedEscalate) fp++;
+    else tn++;
+  }
+  const total = tp + fp + fn + tn || 1;
+  const guardSlices = guardSliceRecall(rows.map((row) => ({ text: row.text, label: row.label })), probabilities, threshold, guardFloors).map((slice) => ({ ...slice }));
+  const feasible = guardSlices.every((slice) => slice.support < minGuardSupport || slice.passed);
+  return {
+    accuracy: (tp + tn) / total,
+    costWeightedLoss: costWeightedLoss(tp, fp, fn, tn, fnCost, fpCost),
+    brier: brierScore(probabilities, labels),
+    ece10: expectedCalibrationError(probabilities, labels, 10),
+    threshold,
+    feasible,
+    guardSlices,
+  };
+}
+
+function trainStackedModel(rows: DenseStackedExample[], validationRows: DenseStackedExample[], testRows: DenseStackedExample[], args: {
+  stackedEpochs: number;
+  stackedLr: number;
+  stackedL2: number;
+  fnCost: number;
+  fpCost: number;
+  thresholdSteps: number;
+  minAccuracy: number;
+  maxEscalationRate: number;
+  minGuardSupport: number;
+  safetyFloor: number;
+  stuckFloor: number;
+  debugFloor: number;
+}): {
+  bias: number;
+  weights: number[];
+  bestEpoch: number;
+  calibration: Calibration;
+  validationSelection: ReturnType<typeof selectConstrainedThreshold>;
+  validation: DenseEvalResult;
+  test: DenseEvalResult;
+  thresholds: { default: number; preflight?: number; review?: number; closeout?: number; };
+} | null {
+  if (rows.length === 0 || validationRows.length === 0 || testRows.length === 0) return null;
+
+  const dim = 1 + TRAJECTORY_FEATURE_NAMES.length;
+  let weights = new Array<number>(dim).fill(0);
+  let bias = 0;
+  const guardFloors: GuardFloors = { safety: args.safetyFloor, stuck: args.stuckFloor, debug: args.debugFloor };
+  const indices = [...rows.keys()];
+
+  let bestAnyLoss = Number.POSITIVE_INFINITY;
+  let bestAnyWeights = weights.slice();
+  let bestAnyBias = bias;
+  let bestAnyEpoch = 0;
+
+  let bestFeasibleLoss = Number.POSITIVE_INFINITY;
+  let bestFeasibleWeights = weights.slice();
+  let bestFeasibleBias = bias;
+  let bestFeasibleEpoch = 0;
+  let bestFeasibleSelection: ReturnType<typeof selectConstrainedThreshold> | null = null;
+
+  for (let epoch = 1; epoch <= args.stackedEpochs; epoch++) {
+    for (const idx of shuffle(indices, epoch + 101)) {
+      const row = rows[idx];
+      const y = row.label === "escalate" ? 1 : 0;
+      const p = denseProb(weights, bias, row.values);
+      const err = (p - y) * row.weight;
+      bias -= args.stackedLr * err;
+      for (let i = 0; i < weights.length; i++) {
+        weights[i] = weights[i] * (1 - args.stackedLr * args.stackedL2) - args.stackedLr * err * row.values[i];
+      }
+    }
+
+    const valProb = validationRows.map((row) => denseProb(weights, bias, row.values));
+    const selection = selectConstrainedThreshold(
+      validationRows.map((row) => ({ text: row.text, label: row.label })),
+      valProb,
+      args.fnCost,
+      args.fpCost,
+      {
+        steps: args.thresholdSteps,
+        minAccuracy: args.minAccuracy,
+        maxEscalationRate: args.maxEscalationRate,
+        guardFloors,
+        minGuardSupport: args.minGuardSupport,
+      },
+    );
+    const evaluated = evaluateDense(validationRows, valProb, selection.threshold, args.fnCost, args.fpCost, guardFloors, args.minGuardSupport);
+    if (evaluated.costWeightedLoss < bestAnyLoss) {
+      bestAnyLoss = evaluated.costWeightedLoss;
+      bestAnyWeights = weights.slice();
+      bestAnyBias = bias;
+      bestAnyEpoch = epoch;
+    }
+    if (selection.feasible && evaluated.costWeightedLoss < bestFeasibleLoss) {
+      bestFeasibleLoss = evaluated.costWeightedLoss;
+      bestFeasibleWeights = weights.slice();
+      bestFeasibleBias = bias;
+      bestFeasibleEpoch = epoch;
+      bestFeasibleSelection = selection;
+    }
+  }
+
+  const chosenWeights = bestFeasibleSelection ? bestFeasibleWeights : bestAnyWeights;
+  const chosenBias = bestFeasibleSelection ? bestFeasibleBias : bestAnyBias;
+  const chosenEpoch = bestFeasibleSelection ? bestFeasibleEpoch : bestAnyEpoch;
+  const validationLogits = validationRows.map((row) => denseDot(chosenWeights, row.values) + chosenBias);
+  const calibration = fitPlattCalibration(validationLogits, validationRows.map((row) => row.label));
+  const validationProbs = validationLogits.map((logit) => applyCalibration(logit, calibration));
+  const validationSelection = selectConstrainedThreshold(
+    validationRows.map((row) => ({ text: row.text, label: row.label })),
+    validationProbs,
+    args.fnCost,
+    args.fpCost,
+    {
+      steps: args.thresholdSteps,
+      minAccuracy: args.minAccuracy,
+      maxEscalationRate: args.maxEscalationRate,
+      guardFloors,
+      minGuardSupport: args.minGuardSupport,
+    },
+  );
+  const validation = evaluateDense(validationRows, validationProbs, validationSelection.threshold, args.fnCost, args.fpCost, guardFloors, args.minGuardSupport);
+
+  const testLogits = testRows.map((row) => denseDot(chosenWeights, row.values) + chosenBias);
+  const testProbs = testLogits.map((logit) => applyCalibration(logit, calibration));
+  const test = evaluateDense(testRows, testProbs, validationSelection.threshold, args.fnCost, args.fpCost, guardFloors, args.minGuardSupport);
+
+  return {
+    bias: chosenBias,
+    weights: chosenWeights,
+    bestEpoch: chosenEpoch,
+    calibration,
+    validationSelection,
+    validation,
+    test,
+    thresholds: {
+      default: validationSelection.threshold,
+      preflight: validationSelection.threshold,
+      review: Math.min(validationSelection.threshold, 0.05),
+      closeout: validationSelection.threshold,
+    },
+  };
+}
 
 function main() {
   const args = parseArgs(process.argv.slice(2));
   const rows = fs.readFileSync(args.input, "utf8").split(/\n+/).filter(Boolean).map((line) => JSON.parse(line) as BinaryRow);
-  const examples: Example[] = rows.map((r) => ({ text: r.text, label: r.label, weight: normalizeWeight(r.weight), source: r.source }));
+  const examples: Example[] = rows.map((r) => ({ text: r.text, label: r.label, weight: normalizeWeight(r.weight), source: r.source, trajectory: r.trajectory }));
   // Three-way split: train fits logreg weights; validation fits calibration + threshold;
   // test is untouched until final reporting. This avoids threshold selection on test.
   const firstSplit = stratifiedSplit(examples, 0.7, 42);
@@ -347,6 +607,7 @@ function main() {
 
   const testLogits = testVecs.map((v) => escalateLogit(v, w, b));
   const testCalProbs = testLogits.map((logit) => applyCalibration(logit, calibration));
+  const trainCalProbs = trainVecs.map((v) => applyCalibration(escalateLogit(v, w, b), calibration));
   // Review-phase routing is more safety-sensitive than the default/preflight gate,
   // so keep it slightly more recall-biased than the global threshold. This also
   // preserves the advisor loop-convergence smoke tests without making preflight spammy.
@@ -385,7 +646,7 @@ function main() {
     return acc;
   }, {});
 
-  const model: ModelArtifact = {
+  let model: ModelArtifact = {
     kind: "binary-logreg-v2",
     labels: [...LABELS],
     features,
@@ -475,6 +736,150 @@ function main() {
       guardSlices: guard.map((item) => ({ ...item, slice: item.slice })),
     },
   };
+
+  let stackedReport: Report["stacked"] | undefined;
+  if (args.stacked) {
+    const toDense = (splitRows: Example[], textProbs: number[]): DenseStackedExample[] => splitRows.map((row, i) => ({
+      text: row.text,
+      label: row.label,
+      weight: row.weight,
+      values: stackedValues(textProbs[i] ?? 0, row.trajectory),
+      trajectory: row.trajectory,
+    }));
+
+    const stackedTrain = toDense(train, trainCalProbs);
+    const stackedValidation = toDense(validation, validationCalProbs);
+    const stackedTest = toDense(test, testCalProbs);
+    const stackedCoverage = {
+      train: stackedTrain.filter((row) => Boolean(row.trajectory)).length / Math.max(1, train.length),
+      validation: stackedValidation.filter((row) => Boolean(row.trajectory)).length / Math.max(1, validation.length),
+      test: stackedTest.filter((row) => Boolean(row.trajectory)).length / Math.max(1, test.length),
+    };
+    const stackedBaselineTest = evaluateDense(stackedTest, stackedTest.map((row) => row.values[0]), threshold, args.fnCost, args.fpCost, { safety: args.safetyFloor, stuck: args.stuckFloor, debug: args.debugFloor }, args.minGuardSupport);
+    const stackedFit = stackedTrain.length >= args.minStackedRows && stackedValidation.length > 0 && stackedTest.length > 0
+      ? trainStackedModel(stackedTrain, stackedValidation, stackedTest, {
+          stackedEpochs: args.stackedEpochs,
+          stackedLr: args.stackedLr,
+          stackedL2: args.stackedL2,
+          fnCost: args.fnCost,
+          fpCost: args.fpCost,
+          thresholdSteps: args.thresholdSteps,
+          minAccuracy: args.minAccuracy,
+          maxEscalationRate: args.maxEscalationRate,
+          minGuardSupport: args.minGuardSupport,
+          safetyFloor: args.safetyFloor,
+          stuckFloor: args.stuckFloor,
+          debugFloor: args.debugFloor,
+        })
+      : null;
+
+    const stackedValidationThreshold = stackedFit?.validationSelection.threshold ?? threshold;
+    const stackedValidationFeasible = Boolean(stackedFit?.validationSelection.feasible);
+    const stackedValidationReport = stackedFit ? {
+      accuracy: stackedFit.validation.accuracy,
+      costWeightedLoss: stackedFit.validation.costWeightedLoss,
+      brier: stackedFit.validation.brier,
+      ece10: stackedFit.validation.ece10,
+      threshold: stackedValidationThreshold,
+      feasible: stackedValidationFeasible,
+      guardSlices: stackedFit.validation.guardSlices,
+    } : {
+      accuracy: 0,
+      costWeightedLoss: Infinity,
+      brier: 0,
+      ece10: 0,
+      threshold: stackedValidationThreshold,
+      feasible: false,
+      guardSlices: [],
+    };
+    const stackedTestReport = stackedFit ? {
+      accuracy: stackedFit.test.accuracy,
+      costWeightedLoss: stackedFit.test.costWeightedLoss,
+      brier: stackedFit.test.brier,
+      ece10: stackedFit.test.ece10,
+      threshold: stackedValidationThreshold,
+      feasible: stackedFit.test.guardSlices.every((slice) => slice.support < args.minGuardSupport || slice.passed),
+      guardSlices: stackedFit.test.guardSlices,
+    } : {
+      accuracy: 0,
+      costWeightedLoss: Infinity,
+      brier: 0,
+      ece10: 0,
+      threshold: stackedValidationThreshold,
+      feasible: false,
+      guardSlices: [],
+    };
+    const promoted = Boolean(
+      stackedFit
+      && stackedFit.validationSelection.feasible
+      && stackedFit.validation.feasible
+      && stackedFit.test.guardSlices.every((slice) => slice.support < args.minGuardSupport || slice.passed)
+      && stackedFit.test.costWeightedLoss < stackedBaselineTest.costWeightedLoss,
+    );
+    const reason = !stackedFit
+      ? `insufficient stacked rows (train=${stackedTrain.length}, validation=${stackedValidation.length}, test=${stackedTest.length})`
+      : !stackedFit.validationSelection.feasible
+        ? "stacked validation threshold infeasible"
+        : !stackedFit.validation.feasible
+          ? "stacked validation guard floors failed"
+          : !stackedFit.test.guardSlices.every((slice) => slice.support < args.minGuardSupport || slice.passed)
+            ? "stacked test guard floors failed"
+            : stackedFit.test.costWeightedLoss >= stackedBaselineTest.costWeightedLoss
+              ? "stacked test cost-weighted loss does not beat text baseline"
+              : "stacked candidate promoted";
+
+    stackedReport = {
+      enabled: true,
+      rows: stackedTrain.length + stackedValidation.length + stackedTest.length,
+      train: stackedTrain.length,
+      validation: stackedValidation.length,
+      test: stackedTest.length,
+      bestEpoch: stackedFit?.bestEpoch ?? 0,
+      textBaseline: {
+        accuracy: stackedBaselineTest.accuracy,
+        costWeightedLoss: stackedBaselineTest.costWeightedLoss,
+        brier: stackedBaselineTest.brier,
+        ece10: stackedBaselineTest.ece10,
+        threshold,
+        feasible: thresholdSelection.feasible,
+      },
+      validation: stackedValidationReport,
+      test: stackedTestReport,
+      promoted,
+      reason,
+    };
+
+    if (promoted && stackedFit) {
+      model.stacked = {
+        trajectoryFeatures: [...TRAJECTORY_FEATURE_NAMES],
+        bias: stackedFit.bias,
+        weights: stackedFit.weights,
+        calibration: stackedFit.calibration,
+        thresholds: stackedFit.thresholds,
+        metrics: {
+          coverage: stackedCoverage,
+          validation: {
+            accuracy: stackedValidationReport.accuracy,
+            costWeightedLoss: stackedValidationReport.costWeightedLoss,
+            brier: stackedValidationReport.brier,
+            ece10: stackedValidationReport.ece10,
+            threshold: stackedValidationReport.threshold,
+            feasible: stackedValidationReport.feasible,
+          },
+          test: {
+            accuracy: stackedTestReport.accuracy,
+            costWeightedLoss: stackedTestReport.costWeightedLoss,
+            brier: stackedTestReport.brier,
+            ece10: stackedTestReport.ece10,
+            threshold: stackedTestReport.threshold,
+            feasible: stackedTestReport.feasible,
+          },
+        },
+      };
+    }
+  }
+
+  report.stacked = stackedReport;
 
   fs.mkdirSync(path.dirname(args.model), { recursive: true });
   fs.writeFileSync(args.model, JSON.stringify(model, null, 2) + "\n", "utf8");
