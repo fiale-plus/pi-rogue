@@ -71,10 +71,10 @@ baseline and passes guard floors.
 
 Current local promotion snapshot:
 
-- Stacked validation: accuracy **87.6%**, costWeightedLoss **0.1616**, Brier **0.090721**, ECE10 **0.038824**, threshold **0.1881**, feasible **true**.
-- Stacked test: accuracy **86.0%**, costWeightedLoss **0.182243**, Brier **0.090732**, ECE10 **0.049586**, threshold **0.1881**, feasible **true**.
+- Stacked validation: accuracy **87.6%**, costWeightedLoss **0.1616**, Brier **0.090551**, ECE10 **0.042367**, threshold **0.1881**, feasible **true**.
+- Stacked test: accuracy **86.2%**, costWeightedLoss **0.179907**, Brier **0.090332**, ECE10 **0.052218**, threshold **0.1881**, feasible **true**.
 - Text-only v3 baseline (same split): test accuracy **85.3%**, costWeightedLoss **0.189252**, Brier **0.087686**, ECE10 **0.040397**, threshold **0.2673**, feasible **true**.
-- Trajectory coverage: **52.7%** (1500/2849 label rows).
+- Trajectory coverage: **100%** total (1500/2849 real Pi router telemetry + 1349/2849 Claude-history trajectory proxy).
 
 
 ## Training data
