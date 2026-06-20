@@ -1,5 +1,13 @@
 import { describe, expect, it } from "vitest";
-import { formatAdvisorDisplay, heuristicRoute, routeNote, shouldQueryClassifier, summarizeRoute, type AdvisorRouteInput } from "./router.js";
+import {
+  formatAdvisorDisplay,
+  heuristicRoute,
+  routeLogEntry,
+  routeNote,
+  shouldQueryClassifier,
+  summarizeRoute,
+  type AdvisorRouteInput,
+} from "./router.js";
 
 describe("advisor router heuristics", () => {
   it("keeps tiny edits in continue mode", () => {
@@ -148,5 +156,25 @@ describe("advisor router heuristics", () => {
 
   it("formats llm advisor messages with the llm tag", () => {
     expect(formatAdvisorDisplay("advisor:llm", "review", "All set and reviewed")).toBe("[advisor:llm: review, reason: all set and reviewed]");
+  });
+
+  it("persists optional trajectory in route logs", () => {
+    const input: AdvisorRouteInput = { phase: "preflight", text: "what would you choose as a strategy for this decision" };
+    const trajectory = {
+      loopScore: 0.72,
+      progressScore: 0.1,
+      sameErrorRepeatedCount: 2,
+      diffLines: 44,
+      contextTokensApprox: 3000,
+      phase: "preflight" as const,
+      turns: 15,
+      fileChanged: false,
+      failed: false,
+    };
+
+    const route = { ...heuristicRoute(input), trajectory };
+    const row = routeLogEntry(route);
+
+    expect(row.trajectory).toEqual(trajectory);
   });
 });

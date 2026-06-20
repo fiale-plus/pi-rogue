@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { existsSync, statSync } from "node:fs";
 import { homedir } from "node:os";
-import { basename, join } from "node:path";
+import { basename, join, resolve } from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Box, Text } from "@earendil-works/pi-tui";
 import { completeSimple, type ThinkingLevel } from "@earendil-works/pi-ai";
@@ -20,6 +20,7 @@ import {
   type AdvisorRouteInput,
   type ReviewPolicy,
 } from "./router.js";
+import { type TrajectoryFeatures } from "./binary-gate-eval.js";
 import { classifyIntent, classifyMode } from "./preflight-signals.js";
 
 // ── Config: 3 optional fields ────────────────────────────────────────────
@@ -336,6 +337,85 @@ function contextBrokerBrief(pi: ExtensionAPI): string {
   } catch {
     return "";
   }
+}
+
+function safeNumber(value: unknown): number | undefined {
+  if (value == null) return undefined;
+  const num = Number(value);
+  return Number.isFinite(num) ? num : undefined;
+}
+
+function advisorRouterSessionKey(sessionPath: string): string {
+  const resolved = resolve(sessionPath);
+  const base = basename(resolved).replace(/\.jsonl$/i, "");
+  const safe = base.replace(/[^a-zA-Z0-9._-]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 96) || "session";
+  const hash = createHash("sha256").update(resolved).digest("hex").slice(0, 8);
+  return `${safe}-${hash}`;
+}
+
+function advisorRouterEventsPath(ctx: any): string | undefined {
+  const sessionPath = String(ctx?.sessionManager?.getSessionFile?.() || "");
+  if (!sessionPath) return undefined;
+  const key = advisorRouterSessionKey(sessionPath);
+  return join(homedir(), ".pi", "agent", "pi-rogue", "router", "sessions", key, "events.jsonl");
+}
+
+function readLatestRouterRouteTrajectory(ctx: any): TrajectoryFeatures | undefined {
+  const eventsPath = advisorRouterEventsPath(ctx);
+  if (!eventsPath) return undefined;
+
+  const raw = readText(eventsPath);
+  if (!raw.trim()) return undefined;
+
+  const lines = raw.split(/\r?\n/);
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const line = lines[i]?.trim();
+    if (!line) continue;
+    let parsed: Record<string, unknown>;
+    try {
+      parsed = JSON.parse(line) as Record<string, unknown>;
+    } catch {
+      continue;
+    }
+    if (parsed.schema !== "pi-router.route-event.v1") continue;
+
+    const metrics = parsed.metrics as Record<string, unknown> | undefined;
+    const runtime = parsed.runtime as Record<string, unknown> | undefined;
+
+    const trajectory: TrajectoryFeatures = {
+      loopScore: safeNumber(metrics?.loopScore),
+      progressScore: safeNumber(metrics?.progressScore),
+      sameErrorRepeatedCount: safeNumber(metrics?.sameErrorRepeatedCount),
+      diffLines: safeNumber(metrics?.diffLines),
+      contextTokensApprox: safeNumber(runtime?.contextTokensApprox),
+    };
+
+    return trajectory.loopScore === undefined
+      && trajectory.progressScore === undefined
+      && trajectory.sameErrorRepeatedCount === undefined
+      && trajectory.diffLines === undefined
+      && trajectory.contextTokensApprox === undefined
+      ? undefined
+      : trajectory;
+  }
+
+  return undefined;
+}
+
+function buildTrajectoryContext(ctx: any, input: {
+  phase: AdvisorRouteInput["phase"];
+  turns?: number;
+  fileChanged?: boolean;
+  failed?: boolean;
+}): TrajectoryFeatures {
+  const latest = readLatestRouterRouteTrajectory(ctx) ?? {};
+  return {
+    ...latest,
+    phase: input.phase,
+    turns: typeof input.turns === "number" && Number.isFinite(input.turns) ? input.turns : undefined,
+    fileChanged: input.fileChanged,
+    failed: input.failed,
+  };
 }
 
 const CLIPBOARD_IMAGE_PATH_RE = /(?:\/(?:private\/)?var\/folders\/[^\s"'`<>]+\/T|\/(?:tmp|var\/tmp))\/clipboard-\d{4}-\d{2}-\d{2}-[A-Za-z0-9-]+\.(?:png|jpe?g|gif|webp)\b/g;
@@ -1564,6 +1644,12 @@ async function doReview(pi: ExtensionAPI, ctx: any, trigger: string, delta: stri
 
   try {
     const phase: AdvisorRouteInput["phase"] = meta.isAgentEnd ? "closeout" : "review";
+    const trajectory = buildTrajectoryContext(ctx, {
+      phase,
+      turns: state.turns,
+      fileChanged: meta.fileChanged,
+      failed: meta.failed,
+    });
     const reviewInput: AdvisorRouteInput = {
       phase,
       text: delta || "(none)",
@@ -1571,8 +1657,8 @@ async function doReview(pi: ExtensionAPI, ctx: any, trigger: string, delta: stri
       fileChanged: meta.fileChanged,
       failed: meta.failed,
     };
-    const reviewHeuristic = heuristicRoute(reviewInput);
-    const gatePrediction = binaryGatePredict(reviewInput.text, "review");
+    const reviewHeuristic = { ...heuristicRoute(reviewInput), trajectory };
+    const gatePrediction = binaryGatePredict(reviewInput.text, phase, trajectory);
     let reviewRoute = reviewHeuristic;
     if (gatePrediction && gatePrediction.trusted && !reviewHeuristic.safety) {
       const gateContinues = gatePrediction.decision === "continue";
@@ -1811,9 +1897,12 @@ export function registerAdvisor(pi: ExtensionAPI): void {
     const enrichedText = [prompt, event.systemPrompt || "", briefText ? `Brief: ${briefText}` : "", brokerBrief ? `Context broker: ${brokerBrief}` : "", intentTag, modeTag].filter(Boolean).join(" ");
     const routeInput: AdvisorRouteInput = { phase: "preflight", text: enrichedText || prompt || event.systemPrompt || briefText || brokerBrief || intentTag || modeTag || "", brief: [briefText, brokerBrief].filter(Boolean).join("\n\n") };
 
-    // Binary gate model — fast local classifier for continue/escalate decisions
-    const gatePrediction = binaryGatePredict(routeInput.text, "preflight");
-    const heuristic = heuristicRoute(routeInput);
+    const trajectory = buildTrajectoryContext(ctx, {
+      phase: "preflight",
+      turns: state.turns,
+    });
+    const gatePrediction = binaryGatePredict(routeInput.text, "preflight", trajectory);
+    const heuristic = { ...heuristicRoute(routeInput), trajectory };
     let route: AdvisorRouteDecision;
     if (gatePrediction && gatePrediction.trusted) {
       const binLabel = gatePrediction.decision === "continue" ? "continue" as const : "escalate_to_advisor" as const;

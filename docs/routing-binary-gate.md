@@ -42,6 +42,41 @@ the unconstrained cost-weighted optimum is emitted with `thresholdFeasible: fals
 The runtime call sites pass the phase explicitly: `binaryGatePredict(text, "preflight")`
 and `binaryGatePredict(text, "review")`, and gate on `prediction.trusted`.
 
+## v4 stacked trajectory model (shipped)
+
+The shipped advisor asset now carries an optional `stacked` second stage that
+combines the text-gate calibrated probability with router trajectory features:
+
+```json
+"stacked": {
+  "trajectoryFeatures": ["loopScore", "progressScore", ...],
+  "bias": 0,
+  "weights": [w_textGateProb, w_loopScore, ...],
+  "calibration": { "method": "platt", "a": 1, "b": 0 },
+  "thresholds": { "default": 0.1881, "preflight": 0.1881, "review": 0.05, "closeout": 0.1881 }
+}
+```
+
+Input vector is `[textGateProbEscalate, ...normalized trajectory features]` ordered
+by `TRAJECTORY_FEATURE_NAMES`. The stacked path is only active when the artifact
+has `stacked` and the caller passes a matching `TrajectoryFeatures`; otherwise the
+text-only calibrated probability and threshold are used unchanged.
+
+`binaryGatePredict(text, phase, trajectory?)` accepts an optional trajectory
+context. The extension call sites pass the trajectory signals available at each
+phase (preflight/review). The local trajectory-enrichment script joins the shipped
+binary-gate labels with router `route-event` telemetry from raw session files, then
+`train-binary-gate.ts` promotes the stacked model only when it beats the text
+baseline and passes guard floors.
+
+Current local promotion snapshot:
+
+- Stacked validation: accuracy **87.6%**, costWeightedLoss **0.1616**, Brier **0.090551**, ECE10 **0.042367**, threshold **0.1881**, feasible **true**.
+- Stacked test: accuracy **86.2%**, costWeightedLoss **0.179907**, Brier **0.090332**, ECE10 **0.052218**, threshold **0.1881**, feasible **true**.
+- Text-only v3 baseline (same split): test accuracy **85.3%**, costWeightedLoss **0.189252**, Brier **0.087686**, ECE10 **0.040397**, threshold **0.2673**, feasible **true**.
+- Trajectory coverage: **100%** total (1500/2849 real Pi router telemetry + 1349/2849 Claude-history trajectory proxy).
+
+
 ## Training data
 
 Rows are JSONL objects with at least:
@@ -50,7 +85,13 @@ Rows are JSONL objects with at least:
 { "id": "row-id", "text": "user turn", "label": "escalate", "source": "manual" }
 ```
 
-Optional `weight` can upweight a row without duplicating it:
+Trajectory-enriched rows add the optional router trace:
+
+```json
+{ "id": "row-id", "trajectory": { "loopScore": 0.1, "progressScore": 0.9, "sameErrorRepeatedCount": 1, "diffLines": 42, "contextTokensApprox": 3000 } }
+```
+
+Use `scripts/build-binary-gate-trajectory-dataset.ts --labels <binary-gate.jsonl> --output /tmp/binary-gate-trajectory.jsonl` to enrich the shipped labels with local router telemetry. Optional `weight` can upweight a row without duplicating it:
 
 ```json
 { "id": "row-id", "text": "review this before release", "label": "escalate", "source": "manual", "weight": 2 }
@@ -63,15 +104,19 @@ Use `/tmp` for generated combined datasets and reports unless the user explicitl
 `scripts/train-binary-gate.ts` trains a cost-sensitive, calibrated v2 model with a
 three-way split: train fits the logreg weights, validation fits Platt scaling and
 selects the operating threshold on a cost-weighted objective (`fnCost` vs `fpCost`),
-and the untouched test split is used only for final reporting. It writes a
-`binary-logreg-v2` artifact with `calibration` + `thresholds`. The report includes
-Brier, ECE, cost-weighted loss, and guard-slice recall.
+and the untouched test split is used only for final reporting. With `--stacked`, the
+same trainer also fits the optional second-stage trajectory model and only promotes
+it when validation is feasible and the test cost-weighted loss beats the text-only
+baseline. It writes a `binary-logreg-v2` artifact with `calibration` + `thresholds`
+and (when promoted) `stacked`. The report includes Brier, ECE, cost-weighted loss,
+guard-slice recall, and stacked coverage.
 
 ```bash
 npx tsx scripts/train-binary-gate.ts \
-  --input /tmp/binary-gate-train.jsonl \
+  --input /tmp/binary-gate-trajectory.jsonl \
   --model /tmp/binary-gate-model.json \
   --report /tmp/binary-gate-train-report.json \
+  --stacked --min-stacked-rows 100 \
   --epochs 40 --fn-cost 3 --fp-cost 1 --safety-floor 1.0
 ```
 

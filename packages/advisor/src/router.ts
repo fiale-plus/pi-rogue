@@ -4,7 +4,7 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { appendText, featureFile, truncate } from "./internal.js";
 import { extractBinaryGateFeatureCounts } from "./binary-gate-features.js";
-import { applyCalibration, type Calibration } from "./binary-gate-eval.js";
+import { applyCalibration, TRAJECTORY_FEATURE_NAMES, trajectoryFeatureVector, type Calibration, type TrajectoryFeatures } from "./binary-gate-eval.js";
 
 export type AdvisorPhase = "preflight" | "review" | "closeout";
 export type PreflightLabel = "continue" | "escalate_to_advisor" | "need_more_context" | "low_confidence";
@@ -34,6 +34,7 @@ export interface AdvisorRouteDecision {
   promptHash: string;
   promptSummary: string;
   briefSummary?: string;
+  trajectory?: TrajectoryFeatures;
 }
 
 export interface RouterResponse {
@@ -70,6 +71,28 @@ export interface BinaryGateModel {
   weights: number[][];
   config?: Record<string, unknown>;
   calibration?: Calibration;
+  thresholds?: GateThresholds;
+  /** Optional v4 stacked second-stage model over [textGateProb, ...trajectoryFeatures]. */
+  stacked?: StackedGateModel;
+}
+
+/**
+ * v4 stacked second-stage logistic regression. Input vector is
+ * [textGateProbEscalate, ...normalized trajectory features] (ordered by
+ * TRAJECTORY_FEATURE_NAMES). Output is the final P(escalate) used for the
+ * decision. Only active when the artifact has `stacked` AND the caller passes
+ * trajectory features; otherwise the text-only calibrated probability is used.
+ */
+export interface StackedGateModel {
+  /** Ordered trajectory feature names this model was trained on. */
+  trajectoryFeatures: string[];
+  /** Bias for the escalate logit. */
+  bias: number;
+  /** Weights for [textGateProb, ...trajectoryFeatures]. */
+  weights: number[];
+  /** Optional second-stage calibration. */
+  calibration?: Calibration;
+  /** Optional stacked-specific thresholds; otherwise fall back to text thresholds. */
   thresholds?: GateThresholds;
 }
 
@@ -138,7 +161,7 @@ function thresholdFor(model: BinaryGateModel, phase?: AdvisorPhase): number {
   return 0.5;
 }
 
-export function predictWithModel(model: BinaryGateModel, text: string, phase?: AdvisorPhase): BinaryGatePrediction {
+export function predictWithModel(model: BinaryGateModel, text: string, phase?: AdvisorPhase, trajectory?: TrajectoryFeatures): BinaryGatePrediction {
   const vec = binaryGateFeatures(text, model);
   const scores = model.bias.slice();
   for (let c = 0; c < model.weights.length; c++) {
@@ -148,8 +171,21 @@ export function predictWithModel(model: BinaryGateModel, text: string, phase?: A
   }
   // labels are ["continue","escalate"]; escalate is index 1.
   const escalateLogit = scores[1] - scores[0];
-  const probEscalate = applyCalibration(escalateLogit, model.calibration);
-  const threshold = thresholdFor(model, phase);
+  let probEscalate = applyCalibration(escalateLogit, model.calibration);
+  const stacked = model.stacked;
+  const stackedUsable = Boolean(
+    stacked && trajectory &&
+    stacked.weights.length === 1 + TRAJECTORY_FEATURE_NAMES.length &&
+    stacked.trajectoryFeatures.length === TRAJECTORY_FEATURE_NAMES.length &&
+    stacked.trajectoryFeatures.every((feature, index) => feature === TRAJECTORY_FEATURE_NAMES[index]),
+  );
+  if (stackedUsable && stacked) {
+    const trajVec = trajectoryFeatureVector(trajectory);
+    const input = [probEscalate, ...trajVec];
+    const stackedLogit = stacked.bias + stacked.weights.reduce((acc, wj, j) => acc + wj * (input[j] ?? 0), 0);
+    probEscalate = applyCalibration(stackedLogit, stacked.calibration);
+  }
+  const threshold = stackedUsable && stacked?.thresholds ? (stacked.thresholds[phase ?? "default"] ?? stacked.thresholds.default ?? thresholdFor(model, phase)) : thresholdFor(model, phase);
   const decision: "continue" | "escalate" = probEscalate >= threshold ? "escalate" : "continue";
   const confidence = Math.max(probEscalate, 1 - probEscalate);
   const isV2 = model.kind === "binary-logreg-v2";
@@ -157,10 +193,10 @@ export function predictWithModel(model: BinaryGateModel, text: string, phase?: A
   return { decision, confidence, probability: probEscalate, threshold, trusted, source: isV2 ? "model-v2" : "model-v1-legacy" };
 }
 
-export function binaryGatePredict(text: string, phase?: AdvisorPhase): BinaryGatePrediction | null {
+export function binaryGatePredict(text: string, phase?: AdvisorPhase, trajectory?: TrajectoryFeatures): BinaryGatePrediction | null {
   const model = loadBinaryGate();
   if (!model) return null;
-  return predictWithModel(model, text, phase);
+  return predictWithModel(model, text, phase, trajectory);
 }
 
 const QUICK_EDIT_RE = /\b(quick edit|small edit|tiny edit|rename|format(?:ting)?|lint|style|doc(?:s)?|comment|typo|readme|spell|spacing|cleanup|one[- ]?liner)\b/i;
@@ -557,6 +593,7 @@ export function routeLogEntry(route: AdvisorRouteDecision): Record<string, unkno
     promptHash: route.promptHash,
     prompt: route.promptSummary,
     brief: route.briefSummary,
+    trajectory: route.trajectory,
   };
 }
 
