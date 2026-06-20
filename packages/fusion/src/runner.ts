@@ -78,6 +78,11 @@ function responseText(value: unknown): string {
   return String(value ?? "").trim();
 }
 
+function isContextLengthExceeded(error: unknown): boolean {
+  const message = error instanceof Error ? `${error.message} ${String((error as any).code ?? "")}` : String(error ?? "");
+  return /context_length_exceeded|exceeds the context window|input exceeds the context window/i.test(message);
+}
+
 function parseJsonObject(text: string): unknown | null {
   const raw = text.trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/i, "");
   try {
@@ -140,15 +145,18 @@ export function parseJudgeAnalysis(text: string): FusionJudgeAnalysis | null {
   };
 }
 
-function panelPrompt(context: Context): Context {
+function panelPrompt(context: Context, maxChars = 8_000): Context {
   return {
-    ...context,
     systemPrompt: [
-      context.systemPrompt,
       "Fusion panel mode: provide an independent analysis-only answer.",
       "Do not call tools, edit files, write state, run commands, or take side-effecting actions. If the task asks for changes, describe the recommended changes and risks rather than attempting to apply them.",
       "The judge and synthesis stages will compare this advice with other panel answers before a final response is produced.",
     ].filter(Boolean).join("\n"),
+    messages: [{
+      role: "user",
+      timestamp: Date.now(),
+      content: renderConversation(context, maxChars),
+    }],
   };
 }
 
@@ -252,21 +260,27 @@ export async function runFusionCompletion(recipe: FusionRecipe, context: Context
 
   const panelResults = await Promise.all(recipe.analysis_models.map(async (model): Promise<FusionPanelResponse | FusionFailedModel> => {
     const started = performance.now();
-    try {
-      const content = responseText(await options.completer.complete({
-        model,
-        context: panelPrompt(context),
-        maxTokens: recipe.max_completion_tokens,
-        temperature: recipe.temperature,
-        reasoning: recipe.reasoning?.effort,
-        timeoutMs: recipe.per_model_timeout_ms ?? recipe.timeout_ms,
-        signal: mergedSignal(options.signal, recipe.per_model_timeout_ms ?? recipe.timeout_ms),
-      }));
-      if (!content) throw new Error("empty panel response");
-      return { model, content, wall_ms: Math.round(performance.now() - started) };
-    } catch (error) {
-      return { model, error: error instanceof Error ? error.message : String(error) };
+    const panelBudgets = [8_000, 4_000];
+    let lastError: unknown;
+    for (const budget of panelBudgets) {
+      try {
+        const content = responseText(await options.completer.complete({
+          model,
+          context: panelPrompt(context, budget),
+          maxTokens: recipe.max_completion_tokens,
+          temperature: recipe.temperature,
+          reasoning: recipe.reasoning?.effort,
+          timeoutMs: recipe.per_model_timeout_ms ?? recipe.timeout_ms,
+          signal: mergedSignal(options.signal, recipe.per_model_timeout_ms ?? recipe.timeout_ms),
+        }));
+        if (!content) throw new Error("empty panel response");
+        return { model, content, wall_ms: Math.round(performance.now() - started) };
+      } catch (error) {
+        lastError = error;
+        if (!isContextLengthExceeded(error) || budget === panelBudgets.at(-1)) break;
+      }
     }
+    return { model, error: lastError instanceof Error ? lastError.message : String(lastError) };
   }));
 
   const responses = panelResults.filter((item): item is FusionPanelResponse => "content" in item);

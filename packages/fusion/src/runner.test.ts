@@ -72,6 +72,42 @@ describe("fusion runner", () => {
     expect(result.final_text).toBe("Panel-only final");
   });
 
+  it("retries a panel with a shorter context when the first attempt exceeds the window", async () => {
+    const panelCalls: Record<string, number> = { "panel/a": 0, "panel/b": 0 };
+    const result = await runFusionCompletion(recipe, context, {
+      runId: "run-2a",
+      completer: {
+        async complete(request) {
+          if (request.model.startsWith("panel/")) {
+            panelCalls[request.model] += 1;
+            if (request.model === "panel/a" && panelCalls[request.model] === 1) {
+              throw new Error('{"type":"error","error":{"type":"invalid_request_error","code":"context_length_exceeded","message":"Your input exceeds the context window of this model.","param":"input"}}');
+            }
+            return `answer from ${request.model}`;
+          }
+          if (request.model === "judge/model" && request.context.systemPrompt?.includes("Return ONLY valid JSON")) {
+            return JSON.stringify({
+              consensus: ["Fusion helps expensive architecture decisions"],
+              contradictions: [],
+              partial_coverage: [],
+              unique_insights: [],
+              blind_spots: [],
+              confidence: "medium",
+            });
+          }
+          if (request.model === "judge/model") return "Final synthesized answer";
+          return "should not happen";
+        },
+      },
+    });
+
+    expect(result.status).toBe("ok");
+    expect(result.responses).toHaveLength(2);
+    expect(panelCalls["panel/a"]).toBe(2);
+    expect(panelCalls["panel/b"]).toBe(1);
+    expect(result.final_text).toBe("Final synthesized answer");
+  });
+
   it("skips judge and synthesis when all panel responses are non-substantive", async () => {
     const calls: string[] = [];
     const result = await runFusionCompletion(recipe, context, {
