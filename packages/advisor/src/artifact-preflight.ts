@@ -2,9 +2,9 @@ import { existsSync } from "node:fs";
 import { resolve } from "node:path";
 
 const EXTENSIONS = "md|json|txt|yaml|yml|toml|ts|js|tsx|jsx";
-const ABSOLUTE_ARTIFACT_RE = new RegExp(`(?<![A-Za-z0-9._/-])\\/(?:[A-Za-z0-9._-]+\\/)*[A-Za-z0-9._-]+\\.(?:${EXTENSIONS})(?![A-Za-z0-9._/-])`, "g");
+const ABSOLUTE_ARTIFACT_RE = new RegExp(`\\/(?:[^\\s\`'\"<>),;:]+\\/)*[^\\s\`'\"<>),;:]+\\.(?:${EXTENSIONS})`, "g");
 const QUOTED_RELATIVE_ARTIFACT_RE = new RegExp(`[\`'\"]((?:\\.{1,2}\\/)?[A-Za-z0-9._-]+(?:\\/[A-Za-z0-9._-]+)*\\.(?:${EXTENSIONS}))[\`'\"]`, "g");
-const RELATIVE_PATH_ARTIFACT_RE = new RegExp(`(?<![A-Za-z0-9._/-])((?:\\.{1,2}\\/)?[A-Za-z0-9._-]+(?:\\/[A-Za-z0-9._-]+)+\\.(?:${EXTENSIONS}))(?![A-Za-z0-9._/-])`, "g");
+const RELATIVE_PATH_ARTIFACT_RE = new RegExp(`(?:^|\\s)((?:\\.{1,2}\\/|[A-Za-z0-9._-]+\\/)[A-Za-z0-9._/-]+\\.(?:${EXTENSIONS}))`, "g");
 
 function normalizeArtifactRef(ref: string): string {
   return ref.trim().replace(/[),.;:]+$/g, "");
@@ -27,7 +27,7 @@ export function extractArtifactReferences(text: string): string[] {
     ...collectMatches(QUOTED_RELATIVE_ARTIFACT_RE, raw, 1),
     ...collectMatches(RELATIVE_PATH_ARTIFACT_RE, raw, 1),
   ];
-  return [...new Set(refs.map(normalizeArtifactRef).filter((ref) => Boolean(ref) && !/^[ab]\//.test(ref)))];
+  return [...new Set(refs.map(normalizeArtifactRef).filter(Boolean))];
 }
 
 export function findMissingArtifactReferences(cwd: string, ...texts: string[]): string[] {

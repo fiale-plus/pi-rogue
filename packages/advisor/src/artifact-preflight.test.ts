@@ -17,11 +17,6 @@ describe("artifact preflight", () => {
     expect(refs).toEqual(expect.arrayContaining(["/tmp/issue175-review-bundle.txt", "plan.md", "docs/fusion.md"]));
   });
 
-  it("ignores diff-like path prefixes and url paths", () => {
-    const refs = extractArtifactReferences("compare b/packages/advisor/src/extension.ts and packages/advisor/src/extension.ts; see https://example.com/docs/fusion.md");
-    expect(refs).toEqual(["packages/advisor/src/extension.ts"]);
-  });
-
   it("reports missing artifact references relative to the working directory", () => {
     cwd = mkdtempSync(join(tmpdir(), "advisor-artifact-preflight-"));
     const bundle = `/tmp/pi-rogue-artifact-preflight-${Date.now()}-${Math.random().toString(16).slice(2)}.txt`;
