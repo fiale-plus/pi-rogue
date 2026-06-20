@@ -81,6 +81,14 @@ fusion/local-self2
 
 Cost/latency scales with panel size: `N` panel calls + judge call + synthesis call.
 
+### Budget stance
+
+Fusion is self-contained in this repo and should stay explicit and bounded.
+
+Allowed paths include direct `/pi-rogue-fusion` use, selecting a `fusion/<recipe-id>` model, and advisor/router use when the user has configured or routed to that model. What should not be added is an undocumented background Fusion path or an unbounded retry/fallback loop.
+
+Any new Fusion path should be able to answer: what is the maximum number of expensive calls this top-level operation can make? If that number is unclear, do not ship the path yet.
+
 ## Local benchmark preset
 
 Before adding agentic/subagent orchestration, compare model-only Fusion against a single strong model:

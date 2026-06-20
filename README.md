@@ -86,7 +86,7 @@ Workspace-only lab helpers live under `packages/lab/`; they are not part of the 
 - [Advisor README](packages/advisor/README.md) and [binary gate runbook](docs/routing-binary-gate.md) — escalation policy, trained gate, and evaluation workflow.
 - [Router README](packages/router/README.md), [routing dataset workflow](docs/routing-dataset.md), and [routing labels](docs/routing-labels.md) — route telemetry and learning loop.
 - [Context broker README](packages/context-broker/README.md) and [context footprint proposal](docs/context-footprint-broker.md) — prompt-safe artifact storage and lookup.
-- [Fusion README](packages/fusion/README.md), [Fusion budget policy](docs/fusion-budget-policy.md), and [skills-to-flow map](docs/skills-flow.md) — comparable-panel model composition and bounded usage rules.
+- [Fusion README](packages/fusion/README.md) and [skills-to-flow map](docs/skills-flow.md) — comparable-panel model composition and bounded usage rules.
 - [Orchestration README](packages/orchestration/README.md) — goal, loop, autoresearch, and lab behavior.
 - [Release guide](docs/release.md) — canonical `pi-rogue-<semver>` release process.
 
