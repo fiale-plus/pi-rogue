@@ -22,6 +22,7 @@ import {
 } from "./router.js";
 import { type TrajectoryFeatures } from "./binary-gate-eval.js";
 import { classifyIntent, classifyMode } from "./preflight-signals.js";
+import { findMissingReviewArtifacts } from "./review-preflight.js";
 
 // ── Config: 3 optional fields ────────────────────────────────────────────
 
@@ -1056,7 +1057,7 @@ async function maybeAdvisorCheckin(pi: ExtensionAPI, ctx: any, source: string): 
           timestamp: new Date().toISOString(),
         },
       ],
-      { maxTokens: 260, reasoning: "low" as ThinkingLevel },
+      { maxTokens: 260, reasoning: "low" as ThinkingLevel, maxAttempts: 2 },
     );
     if (!completed) return false;
 
@@ -1508,7 +1509,7 @@ function piRogueDoctorText(ctx: any): string {
 
 // ── Model resolution (higher/advanced first, then optional regular fallback) ──
 type ResolvedAdvisorModel = { model: any; auth: any; label: string; fallback?: boolean };
-type ModelResolutionOptions = { allowRegularFallback?: boolean };
+type ModelResolutionOptions = { allowRegularFallback?: boolean; maxAttempts?: number };
 
 export async function resolveModelCandidates(ctx: any, config: AdvisorConfig, options: ModelResolutionOptions = {}): Promise<ResolvedAdvisorModel[]> {
   const { allowRegularFallback = true } = options;
@@ -1550,9 +1551,12 @@ async function resolveModel(ctx: any, config: AdvisorConfig): Promise<ResolvedAd
   return (await resolveModelCandidates(ctx, config))[0] ?? null;
 }
 
-export async function completeWithModelFallback(ctx: any, config: AdvisorConfig, systemPrompt: string, messages: any[], options: { maxTokens: number; reasoning: ThinkingLevel }): Promise<{ text: string; model: string; fallback?: boolean } | null> {
+export async function completeWithModelFallback(ctx: any, config: AdvisorConfig, systemPrompt: string, messages: any[], options: { maxTokens: number; reasoning: ThinkingLevel; maxAttempts?: number }): Promise<{ text: string; model: string; fallback?: boolean } | null> {
   let lastError = "";
+  let attempts = 0;
   for (const resolved of await resolveModelCandidates(ctx, config)) {
+    if (options.maxAttempts !== undefined && attempts >= options.maxAttempts) break;
+    attempts += 1;
     try {
       const resp = await completeSimple(resolved.model, { systemPrompt, messages }, {
         apiKey: resolved.auth.apiKey,
@@ -1573,10 +1577,13 @@ export async function completeWithHigherAdvisorModel(
   config: AdvisorConfig,
   systemPrompt: string,
   messages: any[],
-  options: { maxTokens: number; reasoning: ThinkingLevel; allowRegularFallback?: boolean },
+  options: { maxTokens: number; reasoning: ThinkingLevel; allowRegularFallback?: boolean; maxAttempts?: number },
 ): Promise<{ text: string; model: string } | null> {
-  const { allowRegularFallback = true } = options;
+  const { allowRegularFallback = true, maxAttempts } = options;
+  let attempts = 0;
   for (const resolved of await resolveModelCandidates(ctx, config, { allowRegularFallback })) {
+    if (maxAttempts !== undefined && attempts >= maxAttempts) break;
+    attempts += 1;
     try {
       const resp = await completeSimple(resolved.model, { systemPrompt, messages }, {
         apiKey: resolved.auth.apiKey,
@@ -1722,6 +1729,18 @@ async function doReview(pi: ExtensionAPI, ctx: any, trigger: string, delta: stri
       return;
     }
 
+    const cwd = String(ctx?.cwd ?? process.cwd());
+    const missingArtifacts = findMissingReviewArtifacts(cwd, delta, b, brokerBrief);
+    if (missingArtifacts.length > 0) {
+      finalDecision = "defer";
+      finalReason = `missing review artifacts: ${missingArtifacts.slice(0, 4).join(", ")}`;
+      markReviewApplied(state, signature, trigger, finalDecision, finalReason, true);
+      persistReviewState(state, true);
+      ctx.ui?.notify?.(`Advisor review skipped: missing artifacts ${missingArtifacts.slice(0, 4).join(", ")}`, "warning");
+      finalized = true;
+      return;
+    }
+
     const rk = hash("rev", trigger, b, brokerBrief, delta, String(meta.fileChanged), String(meta.failed), String(meta.isAgentEnd), String(reviewRoute.label), signature);
     const cache = loadCache();
     if (cache[rk]) {
@@ -1744,7 +1763,7 @@ async function doReview(pi: ExtensionAPI, ctx: any, trigger: string, delta: stri
         brokerBrief ? `Context broker brief:\n${brokerBrief}` : "",
       ].join("\n"), timestamp: new Date().toISOString() },
     ] as any[];
-    const completed = await completeWithModelFallback(ctx, config, REVIEW_SYSTEM, msgs, { maxTokens: 400, reasoning: "low" as ThinkingLevel });
+    const completed = await completeWithModelFallback(ctx, config, REVIEW_SYSTEM, msgs, { maxTokens: 400, reasoning: "low" as ThinkingLevel, maxAttempts: 2 });
     const raw = completed?.text;
     if (!raw) {
       finalDecision = "defer";
