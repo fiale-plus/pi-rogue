@@ -1,7 +1,18 @@
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+const { completeSimpleMock } = vi.hoisted(() => ({ completeSimpleMock: vi.fn() }));
+
+vi.mock("@earendil-works/pi-ai", async () => {
+  const actual = await vi.importActual<typeof import("@earendil-works/pi-ai")>("@earendil-works/pi-ai");
+  return {
+    ...actual,
+    completeSimple: completeSimpleMock,
+  };
+});
+
 import { registerFusion } from "./extension.js";
 
 function createPiMock() {
@@ -43,6 +54,12 @@ function createCtx(cwd: string, notifications: Array<{ message: string; type?: s
           { provider: "image-only", id: "paint", input: ["image"] },
           { provider: "fusion", id: "existing", input: ["text"] },
         ];
+      },
+      find(provider: string, id: string) {
+        return { provider, id, input: ["text"], api: "mock-api" };
+      },
+      async getApiKeyAndHeaders() {
+        return { ok: true, apiKey: "mock-key", headers: {} };
       },
     },
   };
@@ -208,6 +225,48 @@ describe("fusion extension", () => {
       // Without recipes, provider is unregistered
       expect(providers.has("fusion")).toBe(false);
     } finally {
+      rmSync(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it("wraps runner failures in the streamed error message", async () => {
+    const cwd = mkdtempSync(join(tmpdir(), "fusion-stream-error-"));
+    const target = join(cwd, "recipes.json");
+    const prev = process.env.PI_ROGUE_FUSION_RECIPES;
+    try {
+      process.env.PI_ROGUE_FUSION_RECIPES = target;
+      writeFileSync(target, JSON.stringify({ recipes: [{
+        schema: "pi-rogue.fusion.recipe.v1",
+        kind: "fusion",
+        id: "hard-judge",
+        model: "openai-codex/gpt-5.5",
+        analysis_models: ["openai-codex/gpt-5.5", "openai-codex/gpt-5.3-codex-spark"],
+      }] }, null, 2));
+      completeSimpleMock.mockRejectedValue(new Error("down"));
+
+      const { pi, handlers, providers } = createPiMock();
+      registerFusion(pi);
+      handlers.get("session_start")?.[0]?.({}, createCtx(cwd));
+
+      const provider = providers.get("fusion");
+      const model = provider.models[0];
+      const stream = provider.streamSimple(model, createCtx(cwd), {});
+      const events: any[] = [];
+      for await (const event of stream as any) {
+        events.push(event);
+        if (event.type === "error") break;
+      }
+      const output = await stream.result();
+
+      expect(output.stopReason).toBe("error");
+      expect(output.content[0]?.type).toBe("text");
+      expect(output.content[0] && "text" in output.content[0] ? output.content[0].text : "").toContain("Fusion failed: panel quorum not met");
+      expect(output.errorMessage).toContain("panel quorum not met: panel models total=2, successful=0");
+      expect(output.errorMessage).toContain("minimum required 1");
+      expect(events.some((event) => event.type === "error")).toBe(true);
+    } finally {
+      completeSimpleMock.mockReset();
+      if (prev === undefined) delete process.env.PI_ROGUE_FUSION_RECIPES; else process.env.PI_ROGUE_FUSION_RECIPES = prev;
       rmSync(cwd, { recursive: true, force: true });
     }
   });

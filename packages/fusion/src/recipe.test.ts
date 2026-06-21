@@ -22,6 +22,33 @@ describe("fusion recipe validation", () => {
     }
   });
 
+  it("accepts explicit min_panel_success override", () => {
+    const result = validateFusionRecipe({
+      ...baseRecipe,
+      min_panel_success: 1,
+    });
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.recipe.min_panel_success).toBe(1);
+    }
+  });
+
+  it("rejects min_panel_success outside valid range", () => {
+    const above = validateFusionRecipe({
+      ...baseRecipe,
+      min_panel_success: 3,
+    });
+    const below = validateFusionRecipe({
+      ...baseRecipe,
+      min_panel_success: 0,
+    });
+
+    expect(above.ok).toBe(false);
+    expect(below.ok).toBe(false);
+    if (!above.ok) expect(above.errors.join("\n")).toContain("min_panel_success must be <= 2");
+    if (!below.ok) expect(below.errors.join("\n")).toContain("min_panel_success must be at least 1");
+  });
+
   it("rejects role-pass and recursive fusion refs", () => {
     const result = validateFusionRecipe({
       ...baseRecipe,

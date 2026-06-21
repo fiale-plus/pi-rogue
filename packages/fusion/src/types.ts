@@ -8,6 +8,12 @@ export interface FusionRecipe {
   model: string;
   /** Comparable independent attempts. Same task, no role prompts. */
   analysis_models: string[];
+  /** Optional explicit minimum number of successful panel responses required to continue. */
+  /**
+   * Defaults to an "almost all" quorum threshold (currently ceil(2/3 * analysis_models.length)
+   * with a floor of 1 for small panel sizes.
+   */
+  min_panel_success?: number;
   max_tool_calls?: number;
   max_completion_tokens?: number;
   temperature?: number;
@@ -36,9 +42,32 @@ export interface FusionPanelResponse {
   wall_ms: number;
 }
 
+export type FusionFailureCategory =
+  | "usage_limit_reached"
+  | "rate_limit"
+  | "auth_error"
+  | "network_error"
+  | "context_length_exceeded"
+  | "timeout"
+  | "aborted"
+  | "provider_error"
+  | "unknown";
+
+export interface FusionFailureMeta {
+  category: FusionFailureCategory;
+  type?: string;
+  code?: string;
+  status_code?: number;
+  reset_in_seconds?: number;
+  reset_at?: number;
+  retry_after?: number;
+  plan_type?: string;
+}
+
 export interface FusionFailedModel {
   model: string;
   error: string;
+  details?: FusionFailureMeta;
 }
 
 export interface FusionRunResult {

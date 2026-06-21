@@ -5,6 +5,7 @@ import { randomUUID } from "node:crypto";
 import type { Context, ThinkingLevel } from "@earendil-works/pi-ai";
 import type {
   FusionFailedModel,
+  FusionFailureMeta,
   FusionJudgeAnalysis,
   FusionPanelResponse,
   FusionRecipe,
@@ -78,9 +79,213 @@ function responseText(value: unknown): string {
   return String(value ?? "").trim();
 }
 
+function asRecord(value: unknown): Record<string, unknown> | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  return value as Record<string, unknown>;
+}
+
+function firstString(value: unknown): string | undefined {
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    return trimmed.length ? trimmed : undefined;
+  }
+  return undefined;
+}
+
+function firstNumber(value: unknown): number | undefined {
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (typeof value === "string") {
+    const parsed = Number.parseInt(value, 10);
+    return Number.isFinite(parsed) ? parsed : undefined;
+  }
+  return undefined;
+}
+
+function truncate(value: string, maxLength: number): string {
+  if (value.length <= maxLength) return value;
+  return `${value.slice(0, maxLength)}…`;
+}
+
+function parseJsonLoose(value: string): unknown | undefined {
+  const text = String(value ?? "").trim();
+  if (!text) return undefined;
+  try {
+    return JSON.parse(text) as unknown;
+  } catch {
+    const firstBrace = text.indexOf("{");
+    const lastBrace = text.lastIndexOf("}");
+    if (firstBrace >= 0 && lastBrace > firstBrace) {
+      try {
+        return JSON.parse(text.slice(firstBrace, lastBrace + 1)) as unknown;
+      } catch {
+        return undefined;
+      }
+    }
+    return undefined;
+  }
+}
+
+function extractErrorPayload(error: unknown): Record<string, unknown> | undefined {
+  if (error instanceof Error) {
+    const parsed = parseJsonLoose(error.message);
+    if (parsed && typeof parsed === "object") return asRecord(parsed);
+    return asRecord(error.cause) ?? asRecord(error);
+  }
+  if (typeof error === "string") return asRecord(parseJsonLoose(error));
+  return asRecord(error);
+}
+
+function locateErrorObject(payload: Record<string, unknown> | undefined): Record<string, unknown> | undefined {
+  let current = payload;
+  for (let i = 0; i < 4; i += 1) {
+    if (!current) return undefined;
+    const type = firstString(current.type);
+    const code = firstString(current.code);
+    const message = firstString(current.message);
+    const hasTerminalError = code !== undefined || message !== undefined && (type !== "error");
+    if (hasTerminalError || (type !== undefined && type !== "error")) {
+      return current;
+    }
+    const next = [current.error, current.data, current.details, current.body];
+    const nextRecord = next.map((entry) => asRecord(entry)).find(Boolean);
+    if (!nextRecord) return current;
+    current = nextRecord;
+  }
+  return current;
+}
+
+function readHeaderNumber(headers: Record<string, unknown> | undefined, keys: string[]): number | undefined {
+  if (!headers) return undefined;
+  for (const key of keys) {
+    const value = firstNumber(headers[key]);
+    if (value !== undefined) return value;
+  }
+  return undefined;
+}
+
+function classifyFailureCategory(errorText: string, errorNode: Record<string, unknown> | undefined): FusionFailureMeta["category"] {
+  const lowered = errorText.toLowerCase();
+  const type = firstString(errorNode?.type)?.toLowerCase();
+  const code = firstString(errorNode?.code)?.toLowerCase();
+  const status = firstNumber(errorNode?.status_code) ?? firstNumber(errorNode?.statusCode) ?? firstNumber(errorNode?.status);
+
+  if (lowered.includes("aborted") || /timeout after\s+\d+ms/i.test(lowered) || type === "aborted" || code === "aborted") return "aborted";
+  if (type === "usage_limit_reached" || code === "usage_limit_reached" || /usage[_-]?limit|quota.*(exhausted|exceeded|reached)/i.test(lowered)) return "usage_limit_reached";
+  if ((type?.includes("rate") && type.includes("limit")) || code === "rate_limit" || code === "rate_limit_exceeded" || /rate\s+limit|rate_limit/i.test(lowered) || status === 429) return "rate_limit";
+  if (type === "auth_error" || code === "auth_error" || status === 401 || status === 403 || /401|403|unauthorized|forbidden|authentication|api key|permission denied/i.test(lowered)) return "auth_error";
+  if (type === "network_error" || code === "network_error" || /network error|econn|enotfound|etimedout|timed out|fetch failed|ECONNRESET|ENOTFOUND|ETIMEDOUT/i.test(lowered)) return "network_error";
+  if (type === "context_length_exceeded" || code === "context_length_exceeded" || /context_length_exceeded|context window|input exceeds/i.test(lowered)) return "context_length_exceeded";
+  if (/timeout after\s+\d+ms/i.test(lowered)) return "timeout";
+  return "provider_error";
+}
+
+function summarizePanelFailure(error: unknown): { summary: string; details: FusionFailureMeta } {
+  const rawText = responseText(error);
+  const parsed = extractErrorPayload(error);
+  const detailNode = locateErrorObject(parsed) ?? asRecord(error) ?? asRecord((error as any)?.cause);
+
+  const parsedError = asRecord((parsed as any)?.error);
+  const nestedParsedError = asRecord((parsedError as any)?.error);
+  const message = firstString(detailNode?.message)
+    ?? firstString(parsedError?.message)
+    ?? firstString(nestedParsedError?.message)
+    ?? rawText
+    ?? "provider request failed";
+
+  const type = firstString(detailNode?.type);
+  const code = firstString(detailNode?.code);
+  const statusCode = firstNumber(detailNode?.status_code) ?? firstNumber(detailNode?.statusCode) ?? firstNumber(detailNode?.status) ?? firstNumber((parsed as any)?.status_code) ?? firstNumber((parsed as any)?.statusCode) ?? firstNumber((parsed as any)?.status);
+  const parsedHeaders = asRecord((parsed as any)?.headers) ?? asRecord(parsedError?.headers);
+  const headers = asRecord(detailNode?.headers) ?? parsedHeaders;
+
+  const category = classifyFailureCategory(`${rawText} ${type ?? ""} ${code ?? ""}`, detailNode);
+  const resetInSeconds = readHeaderNumber(headers, [
+    "X-Codex-Primary-Reset-After-Seconds",
+    "X-Codex-Bengalfox-Primary-Reset-After-Seconds",
+    "X-Codex-Secondary-Reset-After-Seconds",
+    "X-Codex-Bengalfox-Secondary-Reset-After-Seconds",
+  ]);
+  const resetAt = readHeaderNumber(headers, [
+    "X-Codex-Primary-Reset-At",
+    "X-Codex-Bengalfox-Primary-Reset-At",
+    "X-Codex-Secondary-Reset-At",
+    "X-Codex-Bengalfox-Secondary-Reset-At",
+    "X-RateLimit-Reset",
+  ]);
+  const retryAfter = readHeaderNumber(headers, [
+    "Retry-After",
+    "X-Codex-Retry-After",
+    "X-RateLimit-Reset-After",
+    "X-RateLimit-Remaining-Reset",
+  ]);
+  const planType = firstString(headers?.["X-Codex-Plan-Type"]) ?? firstString(headers?.["X-Codex-Bengalfox-Plan-Type"]);
+
+  const details: FusionFailureMeta = {
+    category,
+    ...(type ? { type } : {}),
+    ...(code ? { code } : {}),
+    ...(statusCode !== undefined ? { status_code: statusCode } : {}),
+    ...(resetInSeconds !== undefined ? { reset_in_seconds: resetInSeconds } : {}),
+    ...(resetAt !== undefined ? { reset_at: resetAt } : {}),
+    ...(retryAfter !== undefined ? { retry_after: retryAfter } : {}),
+    ...(planType ? { plan_type: planType } : {}),
+  };
+
+  const summaryBits: string[] = [];
+  if (type) summaryBits.push(`type=${type}`);
+  if (code) summaryBits.push(`code=${code}`);
+  if (statusCode !== undefined) summaryBits.push(`status=${statusCode}`);
+  if (resetInSeconds !== undefined) summaryBits.push(`reset_in=${resetInSeconds}s`);
+  if (resetAt !== undefined) summaryBits.push(`reset_at=${resetAt}`);
+  if (retryAfter !== undefined) summaryBits.push(`retry_after=${retryAfter}`);
+  if (planType) summaryBits.push(`plan=${planType}`);
+
+
+  return {
+    summary: `${truncate(message, 220)}${summaryBits.length ? ` (${summaryBits.join(", ")})` : ""}`,
+    details,
+  };
+}
+
 function isContextLengthExceeded(error: unknown): boolean {
-  const message = error instanceof Error ? `${error.message} ${String((error as any).code ?? "")}` : String(error ?? "");
-  return /context_length_exceeded|exceeds the context window|input exceeds the context window/i.test(message);
+  const rawText = responseText(error);
+  return /context_length_exceeded|exceeds the context window|input exceeds the context window/i.test(rawText);
+}
+
+function formatFailedPanelSummary(failed: FusionFailedModel[]): string {
+  const grouped = new Map<string, { models: string[]; sample: string }>();
+  for (const item of failed) {
+    const reason = item.details?.category ?? "unknown";
+    const key = `${reason}::${item.error}`;
+    const existing = grouped.get(key);
+    if (existing) {
+      if (!existing.models.includes(item.model)) existing.models.push(item.model);
+    } else {
+      grouped.set(key, { models: [item.model], sample: item.error });
+    }
+  }
+  return [...grouped.values()]
+    .map((entry) => `${entry.models.join(", ")} (${entry.models.length}): ${entry.sample}`)
+    .join("; ");
+}
+
+function summarizePanelFailureCategories(failed: FusionFailedModel[]): string {
+  const grouped = new Map<string, number>();
+  for (const item of failed) {
+    const category = item.details?.category ?? "unknown";
+    grouped.set(category, (grouped.get(category) ?? 0) + 1);
+  }
+  return [...grouped.entries()]
+    .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+    .map(([category, count]) => `${category}(${count})`)
+    .join("; ");
+}
+
+const DEFAULT_PANEL_SUCCESS_RATIO = 2 / 3;
+
+function minimumPanelSuccessCount(totalModels: number): number {
+  if (totalModels <= 2) return 1;
+  return Math.max(1, Math.ceil(totalModels * DEFAULT_PANEL_SUCCESS_RATIO));
 }
 
 function parseJsonObject(text: string): unknown | null {
@@ -261,7 +466,8 @@ export async function runFusionCompletion(recipe: FusionRecipe, context: Context
   const panelResults = await Promise.all(recipe.analysis_models.map(async (model): Promise<FusionPanelResponse | FusionFailedModel> => {
     const started = performance.now();
     const panelBudgets = [8_000, 4_000];
-    let lastError: unknown;
+    let lastFailure: { summary: string; details: FusionFailureMeta } | undefined;
+
     for (const budget of panelBudgets) {
       try {
         const content = responseText(await options.completer.complete({
@@ -276,18 +482,29 @@ export async function runFusionCompletion(recipe: FusionRecipe, context: Context
         if (!content) throw new Error("empty panel response");
         return { model, content, wall_ms: Math.round(performance.now() - started) };
       } catch (error) {
-        lastError = error;
+        lastFailure = summarizePanelFailure(error);
         if (!isContextLengthExceeded(error) || budget === panelBudgets.at(-1)) break;
       }
     }
-    return { model, error: lastError instanceof Error ? lastError.message : String(lastError) };
+
+    if (!lastFailure) return { model, error: "provider request failed", details: { category: "provider_error" } };
+    return {
+      model,
+      error: lastFailure.summary,
+      details: lastFailure.details,
+    };
   }));
 
   const responses = panelResults.filter((item): item is FusionPanelResponse => "content" in item);
   const failed_models = panelResults.filter((item): item is FusionFailedModel => "error" in item);
   const allowPartial = recipe.allow_partial_panel !== false;
 
-  if (responses.length === 0 || (!allowPartial && failed_models.length > 0)) {
+  const minimumPanelSuccess = recipe.min_panel_success ?? minimumPanelSuccessCount(recipe.analysis_models.length);
+  const panelQuorumMet = responses.length >= minimumPanelSuccess;
+
+  if (!panelQuorumMet || (!allowPartial && failed_models.length > 0)) {
+    const disabled = !allowPartial && failed_models.length > 0 ? "partial panel failure is disabled" : "panel quorum not met";
+    const categorySummary = summarizePanelFailureCategories(failed_models);
     const result: FusionRunResult = {
       status: "error",
       recipe_id: recipe.id,
@@ -295,7 +512,7 @@ export async function runFusionCompletion(recipe: FusionRecipe, context: Context
       responses,
       failed_models,
       requested_params,
-      error: responses.length === 0 ? "all panel models failed" : "partial panel failure is disabled",
+      error: `${disabled}: panel models total=${recipe.analysis_models.length}, successful=${responses.length}, failed=${failed_models.length}, minimum required ${minimumPanelSuccess}${categorySummary ? `; dominant failures: ${categorySummary}` : ""}. ${formatFailedPanelSummary(failed_models)}`,
     };
     result.trace_path = options.traceStore?.write(result);
     return result;
@@ -343,8 +560,9 @@ export async function runFusionCompletion(recipe: FusionRecipe, context: Context
     }
   } catch (error) {
     degraded = "judge_failed";
-    judge_error = error instanceof Error ? error.message : String(error);
-    if (/usage_limit_reached/i.test(judge_error)) {
+    const judgeFailure = summarizePanelFailure(error);
+    judge_error = judgeFailure.summary;
+    if (judgeFailure.details.category === "usage_limit_reached") {
       judgeUsageLimit = true;
     }
   }
