@@ -20,7 +20,8 @@ describe("fusion runner", () => {
   it("runs panel, judge, and synthesis", async () => {
     const calls: string[] = [];
     const panelSystemPrompts: string[] = [];
-    const result = await runFusionCompletion(recipe, context, {
+    const contextWithSystem: Context = { ...context, systemPrompt: "Respect repo AGENTS.md constraints." };
+    const result = await runFusionCompletion(recipe, contextWithSystem, {
       runId: "run-1",
       completer: {
         async complete(request) {
@@ -49,6 +50,7 @@ describe("fusion runner", () => {
     expect(calls).toEqual(expect.arrayContaining(["panel/a", "panel/b", "judge/model"]));
     expect(calls.filter((call) => call === "judge/model")).toHaveLength(2);
     expect(panelSystemPrompts).toHaveLength(2);
+    expect(panelSystemPrompts.every((prompt) => prompt.includes("Respect repo AGENTS.md constraints."))).toBe(true);
     expect(panelSystemPrompts.every((prompt) => prompt.includes("Do not call tools, edit files, write state, run commands"))).toBe(true);
   });
 
@@ -196,6 +198,7 @@ describe("fusion runner", () => {
     expect(result.error).toContain("panel models total=2, successful=0");
     expect(result.error).toContain("minimum required 1");
     expect(result.error).toContain("dominant failures: provider_error(2)");
+    expect((result.effective_params as any).min_panel_success).toBe(1);
     expect(result.failed_models).toHaveLength(2);
   });
 

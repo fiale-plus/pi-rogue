@@ -355,6 +355,7 @@ export function parseJudgeAnalysis(text: string): FusionJudgeAnalysis | null {
 function panelPrompt(context: Context, maxChars = 8_000): Context {
   return {
     systemPrompt: [
+      context.systemPrompt,
       "Fusion panel mode: provide an independent analysis-only answer.",
       "Do not call tools, edit files, write state, run commands, or take side-effecting actions. If the task asks for changes, describe the recommended changes and risks rather than attempting to apply them.",
       "The judge and synthesis stages will compare this advice with other panel answers before a final response is produced.",
@@ -457,6 +458,7 @@ export async function runFusionCompletion(recipe: FusionRecipe, context: Context
   const requested_params = {
     model: recipe.model,
     analysis_models: recipe.analysis_models,
+    min_panel_success: recipe.min_panel_success,
     max_tool_calls: recipe.max_tool_calls,
     max_completion_tokens: recipe.max_completion_tokens,
     temperature: recipe.temperature,
@@ -502,6 +504,7 @@ export async function runFusionCompletion(recipe: FusionRecipe, context: Context
   const allowPartial = recipe.allow_partial_panel !== false;
 
   const minimumPanelSuccess = recipe.min_panel_success ?? minimumPanelSuccessCount(recipe.analysis_models.length);
+  const effective_params = { ...requested_params, min_panel_success: minimumPanelSuccess };
   const panelQuorumMet = responses.length >= minimumPanelSuccess;
 
   if (!panelQuorumMet || (!allowPartial && failed_models.length > 0)) {
@@ -514,6 +517,7 @@ export async function runFusionCompletion(recipe: FusionRecipe, context: Context
       responses,
       failed_models,
       requested_params,
+      effective_params,
       error: `${disabled}: panel models total=${recipe.analysis_models.length}, successful=${responses.length}, failed=${failed_models.length}, minimum required ${minimumPanelSuccess}${categorySummary ? `; dominant failures: ${categorySummary}` : ""}. ${formatFailedPanelSummary(failed_models)}`,
     };
     result.trace_path = options.traceStore?.write(result);
@@ -533,7 +537,7 @@ export async function runFusionCompletion(recipe: FusionRecipe, context: Context
       failed_models,
       degraded: failed_models.length > 0 ? "panel_partial" : "panel_only",
       requested_params,
-      effective_params: requested_params,
+      effective_params,
     };
     result.trace_path = options.traceStore?.write(result);
     options.broker?.publish(result, compactSummary(result));
@@ -607,7 +611,7 @@ export async function runFusionCompletion(recipe: FusionRecipe, context: Context
     ...(judge_raw && !analysis ? { judge_raw: judge_raw.slice(0, 8_000) } : {}),
     ...(degraded ? { degraded } : {}),
     requested_params,
-    effective_params: requested_params,
+    effective_params,
   };
   result.trace_path = options.traceStore?.write(result);
   options.broker?.publish(result, compactSummary(result));
