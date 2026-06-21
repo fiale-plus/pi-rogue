@@ -87,7 +87,9 @@ function textStream(model: Model<Api>, promise: Promise<{ text: string; result?:
       stream.end();
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      const failedText = signal?.aborted ? `Fusion aborted: ${message}` : `Fusion failed: ${message}`;
+      const failedText = signal?.aborted
+        ? `Fusion aborted: ${message}`
+        : `Fusion failed: ${message}`;
       output = makeOutput(model, failedText, usageZero(), signal?.aborted ? "aborted" : "error", message);
       stream.push({ type: "error", reason: output.stopReason as "error" | "aborted", error: output });
       stream.end();

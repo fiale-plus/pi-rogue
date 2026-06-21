@@ -23,6 +23,7 @@ import {
 import { type TrajectoryFeatures } from "./binary-gate-eval.js";
 import { classifyIntent, classifyMode } from "./preflight-signals.js";
 import { findMissingArtifactReferences } from "./artifact-preflight.js";
+import { findMissingReviewArtifacts } from "./review-preflight.js";
 
 // ── Config: 3 optional fields ────────────────────────────────────────────
 
@@ -1730,7 +1731,10 @@ async function doReview(pi: ExtensionAPI, ctx: any, trigger: string, delta: stri
     }
 
     const cwd = String(ctx?.cwd ?? process.cwd());
-    const missingArtifacts = findMissingArtifactReferences(cwd, delta, b, brokerBrief);
+    const missingArtifacts = [...new Set([
+      ...findMissingArtifactReferences(cwd, delta, b, brokerBrief),
+      ...findMissingReviewArtifacts(cwd, delta, b, brokerBrief),
+    ])];
     if (missingArtifacts.length > 0) {
       finalDecision = "defer";
       finalReason = `missing review artifacts: ${missingArtifacts.slice(0, 4).join(", ")}`;

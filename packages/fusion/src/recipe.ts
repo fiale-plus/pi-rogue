@@ -112,6 +112,11 @@ export function validateFusionRecipe(raw: unknown): { ok: true; recipe: FusionRe
     errors.push("allow_partial_panel must be boolean");
   }
 
+  const min_panel_success = cleanNonNegativeInt(raw.min_panel_success, "min_panel_success", analysis_models.length, errors);
+  if (min_panel_success !== undefined && min_panel_success < 1) {
+    errors.push("min_panel_success must be at least 1");
+  }
+
   if (raw.analysis_agents !== undefined) {
     errors.push("analysis_agents is not supported in kind=fusion; use kind=agent_fusion in a future release");
   }
@@ -135,6 +140,7 @@ export function validateFusionRecipe(raw: unknown): { ok: true; recipe: FusionRe
       ...(timeout_ms !== undefined ? { timeout_ms } : {}),
       ...(per_model_timeout_ms !== undefined ? { per_model_timeout_ms } : {}),
       ...(typeof allow_partial_panel === "boolean" ? { allow_partial_panel } : {}),
+      ...(min_panel_success !== undefined ? { min_panel_success } : {}),
     },
   };
 }
