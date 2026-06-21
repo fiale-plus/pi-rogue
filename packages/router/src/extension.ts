@@ -51,6 +51,15 @@ function statusText(ctx: any, config: RouterConfig): string {
 
 function notifyProfile(ctx: any, config: RouterConfig, prefix = "router profile"): void {
   const profile = activeProfile(config);
+  ctx.ui?.notify?.(
+    [
+      `${prefix}: ${config.activeProfile}`,
+      `worker: ${profile.worker}`,
+      `smart/review: ${profile.smart}`,
+      roleMapText(profile),
+    ].join("\n"),
+    "info",
+  );
 }
 
 function helpText(ctx: any, config: RouterConfig): string {

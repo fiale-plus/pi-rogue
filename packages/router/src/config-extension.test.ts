@@ -306,6 +306,8 @@ describe("router extension", () => {
     expect(loadRouterConfig(ctx).mode).toBe("auto_model");
     await commands.get("pi-rogue-router").handler("print all", ctx);
     expect(loadRouterConfig(ctx).print).toBe("all");
+    await commands.get("pi-rogue-router").handler("models", ctx);
+    expect(ctx.notifications.at(-1)?.text).toContain("router models:");
     await commands.get("pi-rogue-router").handler("help", ctx);
     expect(ctx.notifications.at(-1)?.text).toContain("router command tree:");
     await commands.get("pi-rogue-router").handler("off", ctx);
@@ -316,6 +318,7 @@ describe("router extension", () => {
 
     await shortcuts.get("ctrl+alt+p").handler(ctx);
     expect(loadRouterConfig(ctx).activeProfile).toBe("local-smart");
+    expect(ctx.notifications.at(-1)?.text).toContain("router profile cycled:");
   });
 
   it("formats observe-only mismatch summaries without changing models", () => {
