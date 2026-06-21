@@ -18,6 +18,7 @@ type LoopState = {
   interval: string;
   instruction: string;
   updatedAt: string;
+  generation: number;
 };
 
 function defaultLoopState(): LoopState {
@@ -26,6 +27,19 @@ function defaultLoopState(): LoopState {
     interval: "",
     instruction: "",
     updatedAt: "",
+    generation: 0,
+  };
+}
+
+function normalizeLoopState(state: Partial<LoopState> | null | undefined): LoopState {
+  const fallback = defaultLoopState();
+  const generation = state?.generation;
+  return {
+    enabled: Boolean(state?.enabled),
+    interval: typeof state?.interval === "string" ? state.interval : fallback.interval,
+    instruction: typeof state?.instruction === "string" ? state.instruction : fallback.instruction,
+    updatedAt: typeof state?.updatedAt === "string" ? state.updatedAt : fallback.updatedAt,
+    generation: typeof generation === "number" && Number.isFinite(generation) ? generation : fallback.generation,
   };
 }
 
@@ -34,17 +48,27 @@ function activeGoal(ctx: any): string {
 }
 
 export function readLoopState(ctx: any): LoopState {
-  return readSessionJson(FEATURE, ctx, LOOP_FILE, defaultLoopState());
+  return normalizeLoopState(readSessionJson(FEATURE, ctx, LOOP_FILE, defaultLoopState()));
 }
 
-function writeLoopState(ctx: any, state: LoopState): LoopState {
-  const next: LoopState = { ...state, updatedAt: new Date().toISOString() };
+function writeLoopState(ctx: any, state: Partial<LoopState>): LoopState {
+  const current = readLoopState(ctx);
+  const next: LoopState = normalizeLoopState({
+    ...current,
+    ...state,
+    updatedAt: new Date().toISOString(),
+    generation: Number.isFinite(state.generation) ? Number(state.generation) : current.generation,
+  });
   writeSessionJson(FEATURE, ctx, LOOP_FILE, next);
   return next;
 }
 
 function clearLoopState(ctx: any): LoopState {
-  return writeLoopState(ctx, defaultLoopState());
+  const current = readLoopState(ctx);
+  return writeLoopState(ctx, {
+    ...defaultLoopState(),
+    generation: current.generation + 1,
+  });
 }
 
 function archiveLoopState(ctx: any, previous: LoopState): void {
@@ -127,9 +151,13 @@ async function runAdvisorCheckinTick(pi: ExtensionAPI, ctx: any): Promise<void> 
   await advisorLoopCheckinFn(pi, ctx, "loop_tick");
 }
 
-function runLoopTick(pi: ExtensionAPI, ctx: any): boolean {
+function runLoopTick(pi: ExtensionAPI, ctx: any, generation?: number): boolean {
   const key = sessionKey(ctx);
   const current = readLoopState(ctx);
+  const activeGeneration = generation ?? current.generation;
+  if (activeGeneration !== current.generation) {
+    return false;
+  }
   if (!current.enabled || !current.instruction) {
     stopLoopTimer(key);
     setLoopStatus(ctx, current);
@@ -146,12 +174,17 @@ function runLoopTick(pi: ExtensionAPI, ctx: any): boolean {
 
   const goal = activeGoal(ctx);
   if (goal && hasGoalCheckPending(ctx)) {
+    if (activeGeneration !== current.generation) return false;
     void runAdvisorCheckinTick(pi, ctx);
     return false;
   }
 
   const prompt = goal ? buildGoalCheckPrompt(goal, current.instruction) : current.instruction;
-  ctx.ui.notify(goal ? `🎯 Goal check: ${truncate(goal, 80)}` : `↻ Loop tick: ${truncate(current.instruction, 80)}`, "info");
+  const live = readLoopState(ctx);
+  if (activeGeneration !== live.generation || !live.enabled || !live.instruction || live.instruction !== current.instruction || parseIntervalMs(live.interval) !== currentIntervalMs) {
+    return false;
+  }
+
   if (goal) {
     beginGoalCheck(ctx);
   }
@@ -162,6 +195,7 @@ function runLoopTick(pi: ExtensionAPI, ctx: any): boolean {
     pi.sendUserMessage(prompt, { deliverAs: "followUp" });
   }
 
+  ctx.ui.notify(goal ? `🎯 Goal check: ${truncate(goal, 80)}` : `↻ Loop tick: ${truncate(current.instruction, 80)}`, "info");
   void runAdvisorCheckinTick(pi, ctx);
   return true;
 }
@@ -185,6 +219,7 @@ function syncLoopTimer(pi: ExtensionAPI, ctx: any): void {
   }
 
   setAdvisorCheckinsEnabled(true);
+  const generation = state.generation;
   const tick = () => {
     const currentIntervalMs = parseIntervalMs(readLoopState(ctx).interval);
     if (currentIntervalMs === null || currentIntervalMs !== intervalMs) {
@@ -192,7 +227,7 @@ function syncLoopTimer(pi: ExtensionAPI, ctx: any): void {
       return;
     }
 
-    runLoopTick(pi, ctx);
+    runLoopTick(pi, ctx, generation);
   };
 
   loopTimers.set(key, setInterval(tick, intervalMs));
@@ -204,11 +239,13 @@ export function startLoop(pi: ExtensionAPI, ctx: any, interval: string, instruct
   }
 
   clearNoProgressRecovery(ctx);
+  const current = readLoopState(ctx);
   const next = writeLoopState(ctx, {
     enabled: true,
     interval,
     instruction,
     updatedAt: "",
+    generation: current.generation + 1,
   });
   setAdvisorCheckinsEnabled(true);
   setLoopStatus(ctx, next);
@@ -233,6 +270,8 @@ export function registerLoop(pi: ExtensionAPI): void {
   });
 
   pi.on("session_shutdown", (_event, ctx) => {
+    const current = readLoopState(ctx);
+    writeLoopState(ctx, { generation: current.generation + 1 });
     stopLoopTimer(sessionKey(ctx));
     setLoopStatus(ctx, defaultLoopState());
   });
