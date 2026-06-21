@@ -262,7 +262,7 @@ describe("fusion extension", () => {
       expect(output.content[0]?.type).toBe("text");
       expect(output.content[0] && "text" in output.content[0] ? output.content[0].text : "").toContain("Fusion failed: panel quorum not met");
       expect(output.errorMessage).toContain("panel quorum not met: panel models total=2, successful=0");
-      expect(output.errorMessage).toContain("minimum required 1");
+      expect(output.errorMessage).toContain("minimum required 2");
       expect(events.some((event) => event.type === "error")).toBe(true);
     } finally {
       completeSimpleMock.mockReset();

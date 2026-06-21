@@ -169,13 +169,13 @@ function classifyFailureCategory(errorText: string, errorNode: Record<string, un
   const code = firstString(errorNode?.code)?.toLowerCase();
   const status = firstNumber(errorNode?.status_code) ?? firstNumber(errorNode?.statusCode) ?? firstNumber(errorNode?.status);
 
-  if (lowered.includes("aborted") || /timeout after\s+\d+ms/i.test(lowered) || type === "aborted" || code === "aborted") return "aborted";
+  if (/timeout after\s+\d+ms/i.test(lowered)) return "timeout";
+  if (lowered.includes("aborted") || type === "aborted" || code === "aborted") return "aborted";
   if (type === "usage_limit_reached" || code === "usage_limit_reached" || /usage[_-]?limit|quota.*(exhausted|exceeded|reached)/i.test(lowered)) return "usage_limit_reached";
   if ((type?.includes("rate") && type.includes("limit")) || code === "rate_limit" || code === "rate_limit_exceeded" || /rate\s+limit|rate_limit/i.test(lowered) || status === 429) return "rate_limit";
   if (type === "auth_error" || code === "auth_error" || status === 401 || status === 403 || /401|403|unauthorized|forbidden|authentication|api key|permission denied/i.test(lowered)) return "auth_error";
   if (type === "network_error" || code === "network_error" || /network error|econn|enotfound|etimedout|timed out|fetch failed|ECONNRESET|ENOTFOUND|ETIMEDOUT/i.test(lowered)) return "network_error";
   if (type === "context_length_exceeded" || code === "context_length_exceeded" || /context_length_exceeded|context window|input exceeds/i.test(lowered)) return "context_length_exceeded";
-  if (/timeout after\s+\d+ms/i.test(lowered)) return "timeout";
   return "provider_error";
 }
 
@@ -286,7 +286,6 @@ function summarizePanelFailureCategories(failed: FusionFailedModel[]): string {
 const DEFAULT_PANEL_SUCCESS_RATIO = 2 / 3;
 
 function minimumPanelSuccessCount(totalModels: number): number {
-  if (totalModels <= 2) return 1;
   return Math.max(1, Math.ceil(totalModels * DEFAULT_PANEL_SUCCESS_RATIO));
 }
 

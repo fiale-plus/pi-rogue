@@ -8,10 +8,9 @@ export interface FusionRecipe {
   model: string;
   /** Comparable independent attempts. Same task, no role prompts. */
   analysis_models: string[];
-  /** Optional explicit minimum number of successful panel responses required to continue. */
   /**
-   * Defaults to an "almost all" quorum threshold (currently ceil(2/3 * analysis_models.length)
-   * with a floor of 1 for small panel sizes.
+   * Optional explicit minimum number of successful panel responses required to continue.
+   * Defaults to ceil(2/3 * analysis_models.length), with a minimum of 1.
    */
   min_panel_success?: number;
   max_tool_calls?: number;

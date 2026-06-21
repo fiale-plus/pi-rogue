@@ -54,8 +54,9 @@ describe("fusion runner", () => {
     expect(panelSystemPrompts.every((prompt) => prompt.includes("Do not call tools, edit files, write state, run commands"))).toBe(true);
   });
 
-  it("keeps partial panel failures recoverable", async () => {
-    const result = await runFusionCompletion(recipe, context, {
+  it("keeps minority panel failures recoverable", async () => {
+    const partialRecipe = { ...recipe, analysis_models: ["panel/a", "panel/b", "panel/c"] };
+    const result = await runFusionCompletion(partialRecipe, context, {
       runId: "run-2",
       completer: {
         async complete(request) {
@@ -68,7 +69,7 @@ describe("fusion runner", () => {
     });
 
     expect(result.status).toBe("ok");
-    expect(result.responses).toHaveLength(1);
+    expect(result.responses).toHaveLength(2);
     expect(result.failed_models).toMatchObject([{ model: "panel/b", error: "rate limited" }]);
     expect(result.degraded).toBe("judge_failed");
     expect(result.final_text).toBe("Panel-only final");
@@ -196,10 +197,21 @@ describe("fusion runner", () => {
     expect(result.status).toBe("error");
     expect(result.error).toContain("panel quorum not met");
     expect(result.error).toContain("panel models total=2, successful=0");
-    expect(result.error).toContain("minimum required 1");
+    expect(result.error).toContain("minimum required 2");
     expect(result.error).toContain("dominant failures: provider_error(2)");
-    expect((result.effective_params as any).min_panel_success).toBe(1);
+    expect((result.effective_params as any).min_panel_success).toBe(2);
     expect(result.failed_models).toHaveLength(2);
+  });
+
+  it("classifies model timeouts separately from aborts", async () => {
+    const result = await runFusionCompletion(recipe, context, {
+      runId: "run-timeout",
+      completer: { async complete() { throw new Error("timeout after 250ms"); } },
+    });
+
+    expect(result.status).toBe("error");
+    expect(result.error).toContain("dominant failures: timeout(2)");
+    expect(result.failed_models.every((failed) => failed.details?.category === "timeout")).toBe(true);
   });
 
   it("fails when near-all panel models fail and blocks fusion", async () => {
