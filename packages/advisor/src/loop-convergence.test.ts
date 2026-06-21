@@ -60,6 +60,7 @@ const ADVISOR_STATE_DIR = join(homedir(), ".pi", "agent", "pi-rogue", "advisor")
 const ADVISOR_STATE_PATH = advisorSessionStatePath("session");
 const ADVISOR_CONFIG_PATH = join(ADVISOR_STATE_DIR, "config.json");
 const ADVISOR_CACHE_PATH = join(ADVISOR_STATE_DIR, "cache.json");
+const ADVISOR_CURRENT_PATH = join(dirname(ADVISOR_STATE_PATH), "current.md");
 
 function readAdvisorState(): any {
   return JSON.parse(readFileSync(ADVISOR_STATE_PATH, "utf8"));
@@ -480,6 +481,117 @@ describe("advisor two-agent convergence", () => {
       expect.anything(),
     );
   });
+
+  it("persists clean closeout over stale advisor warnings and current note", async () => {
+    const agentEnd = handlers.agent_end;
+    expect(agentEnd?.length).toBe(1);
+
+    completeSimpleMock.mockResolvedValue({
+      content: [{
+        type: "text",
+        text: JSON.stringify({
+          verdict: "on_track",
+          summary: "Final tests, typecheck, and Codex review are clean",
+          reason: "The previous review warning has been satisfied",
+          actions: [],
+          checklist: [],
+          notify: true,
+        }),
+      }],
+    });
+
+    await handlers.session_start?.[0]?.({}, ctx);
+
+    const staleTask = "fix advisor stale closeout";
+    const stale = readAdvisorState();
+    stale.lastTask = staleTask;
+    stale.followUp = "final Codex review still needs to complete cleanly before closure";
+    stale.followUpTask = staleTask;
+    stale.reviewSignals = ["Recent context shows prior failed commands, so confirm latest clean test/typecheck results"];
+    stale.reviewSignalsTask = staleTask;
+    stale.reviewControl = {
+      status: "needed",
+      pending: true,
+      consumed: false,
+      running: false,
+      lastDecision: "review",
+      lastReason: "final review still needed",
+    };
+    stale.router.review = {
+      phase: "closeout",
+      label: "not_done",
+      confidence: 0.91,
+      reason: "final review still needed",
+      source: "llm",
+      review: "strict",
+      escalate: true,
+      trajectory: { failed: true },
+    };
+    writeFileSync(ADVISOR_STATE_PATH, JSON.stringify(stale, null, 2), "utf8");
+    writeFileSync(ADVISOR_CURRENT_PATH, "[advisor:llm: review, reason: final review still needed]\n", "utf8");
+
+    await agentEnd![0]({
+      messages: [
+        { role: "toolResult", content: "edit tool changed file" },
+        { role: "assistant", content: "Revalidated clean: tests passed, typecheck passed, and final Codex review had no findings." },
+      ],
+    }, ctx);
+
+    const resolved = readAdvisorState();
+    const current = readFileSync(ADVISOR_CURRENT_PATH, "utf8");
+    expect(completeSimpleMock).toHaveBeenCalledTimes(1);
+    expect(resolved.followUp).toBe("");
+    expect(resolved.followUpTask).toBeUndefined();
+    expect(resolved.reviewSignals).toEqual([]);
+    expect(resolved.reviewSignalsTask).toBeUndefined();
+    expect(resolved.reviewControl.lastDecision).toBe("continue");
+    expect(resolved.reviewControl.status).toBe("consumed");
+    expect(current).toContain("advisor:llm: continue");
+    expect(current).not.toContain("final review still needed");
+    expect(JSON.stringify(resolved.router.review ?? {})).not.toContain('"failed":true');
+  });
+
+  it("clears stale advisor warnings for clean closeout without material changes", async () => {
+    const agentEnd = handlers.agent_end;
+    expect(agentEnd?.length).toBe(1);
+
+    await handlers.session_start?.[0]?.({}, ctx);
+
+    const staleTask = "fix advisor stale closeout";
+    const stale = readAdvisorState();
+    stale.lastTask = staleTask;
+    stale.followUp = "final Codex review still needs to complete cleanly before closure";
+    stale.followUpTask = staleTask;
+    stale.reviewSignals = ["Recent context shows prior failed commands, so confirm latest clean test/typecheck results"];
+    stale.reviewSignalsTask = staleTask;
+    stale.router.review = {
+      phase: "closeout",
+      label: "not_done",
+      confidence: 0.91,
+      reason: "final review still needed",
+      source: "llm",
+      review: "strict",
+      escalate: true,
+      trajectory: { failed: true },
+    };
+    writeFileSync(ADVISOR_STATE_PATH, JSON.stringify(stale, null, 2), "utf8");
+    writeFileSync(ADVISOR_CURRENT_PATH, "[advisor:llm: review, reason: final review still needed]\n", "utf8");
+
+    await agentEnd![0]({
+      messages: [
+        { role: "assistant", content: "Final Codex review had no findings; no changes needed." },
+      ],
+    }, ctx);
+
+    const resolved = readAdvisorState();
+    const current = readFileSync(ADVISOR_CURRENT_PATH, "utf8");
+    expect(resolved.followUp).toBe("");
+    expect(resolved.reviewSignals).toEqual([]);
+    expect(resolved.reviewControl.lastDecision).toBe("continue");
+    expect(current).toContain("advisor:llm: continue");
+    expect(current).not.toContain("final review still needed");
+  });
+
 
   it("recovers running review control state on session start", async () => {
     const preflight = handlers.before_agent_start;
