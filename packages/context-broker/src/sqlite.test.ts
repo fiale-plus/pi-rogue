@@ -1,7 +1,7 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { createSqliteContextBroker } from "./sqlite.js";
 
 describe("createSqliteContextBroker", () => {
@@ -129,6 +129,83 @@ describe("createSqliteContextBroker", () => {
       expect(broker.lookup({ handle: pinned.handle })[0]?.payload).toBe("keep");
       expect(broker.lookup({ handle: other.handle })[0]?.payload).toBe("other");
     } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("truncates the WAL after purge maintenance", () => {
+    const dir = mkdtempSync(join(tmpdir(), "ctx-sqlite-test-"));
+    try {
+      const path = join(dir, "artifacts.sqlite");
+      const broker = createSqliteContextBroker({ path, defaultTtlMs: 0 });
+      for (let i = 0; i < 24; i += 1) {
+        broker.publish({ sessionId: "s", kind: "tool_output", payload: `payload-${i}`, summary: `sum-${i}` });
+      }
+
+      const walPath = `${path}-wal`;
+      expect(existsSync(walPath)).toBe(true);
+      const before = statSync(walPath).size;
+      expect(before).toBeGreaterThan(0);
+
+      broker.purge({ sessionId: "s", keepPinned: true });
+
+      const after = existsSync(walPath) ? statSync(walPath).size : 0;
+      expect(after).toBeLessThan(before);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("truncates the WAL when publish clears expired artifacts", () => {
+    const dir = mkdtempSync(join(tmpdir(), "ctx-sqlite-test-"));
+    const now = 1_700_000_000_000;
+    const nowSpy = vi.spyOn(Date, "now").mockImplementation(() => now);
+    try {
+      const path = join(dir, "artifacts.sqlite");
+      const broker = createSqliteContextBroker({ path, defaultTtlMs: 1 });
+      for (let i = 0; i < 24; i += 1) {
+        broker.publish({ sessionId: "s", kind: "tool_output", payload: `payload-${i}`, summary: `sum-${i}` });
+      }
+
+      const walPath = `${path}-wal`;
+      expect(existsSync(walPath)).toBe(true);
+      const before = statSync(walPath).size;
+      expect(before).toBeGreaterThan(0);
+
+      nowSpy.mockImplementation(() => now + 10_000);
+      broker.publish({ sessionId: "s", kind: "tool_output", payload: "fresh payload", summary: "fresh" });
+
+      const after = existsSync(walPath) ? statSync(walPath).size : 0;
+      expect(after).toBeLessThan(before);
+    } finally {
+      nowSpy.mockRestore();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("truncates the WAL after lazy expiry cleanup", () => {
+    const dir = mkdtempSync(join(tmpdir(), "ctx-sqlite-test-"));
+    const now = 1_700_000_000_000;
+    const nowSpy = vi.spyOn(Date, "now").mockImplementation(() => now);
+    try {
+      const path = join(dir, "artifacts.sqlite");
+      const broker = createSqliteContextBroker({ path, defaultTtlMs: 1 });
+      for (let i = 0; i < 24; i += 1) {
+        broker.publish({ sessionId: "s", kind: "tool_output", payload: `payload-${i}`, summary: `sum-${i}` });
+      }
+
+      const walPath = `${path}-wal`;
+      expect(existsSync(walPath)).toBe(true);
+      const before = statSync(walPath).size;
+      expect(before).toBeGreaterThan(0);
+
+      nowSpy.mockImplementation(() => now + 10_000);
+      broker.status();
+
+      const after = existsSync(walPath) ? statSync(walPath).size : 0;
+      expect(after).toBeLessThan(before);
+    } finally {
+      nowSpy.mockRestore();
       rmSync(dir, { recursive: true, force: true });
     }
   });

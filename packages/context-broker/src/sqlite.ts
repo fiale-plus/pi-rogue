@@ -187,6 +187,7 @@ function initialize(db: DatabaseSync): void {
       branch TEXT,
       tier TEXT NOT NULL,
       baseTier TEXT NOT NULL,
+      sequence INTEGER NOT NULL DEFAULT 0,
       expiresAt INTEGER,
       pinned INTEGER NOT NULL DEFAULT 0,
       parentIdsJson TEXT NOT NULL
@@ -198,6 +199,14 @@ function initialize(db: DatabaseSync): void {
     CREATE INDEX IF NOT EXISTS idx_artifacts_created ON artifacts(createdAt);
     CREATE VIRTUAL TABLE IF NOT EXISTS artifact_fts USING fts5(id UNINDEXED, summary, payload, command, tags, paths);
   `);
+  const artifactColumns = new Set<string>(db.prepare("PRAGMA table_info(artifacts)").all().map((row) => String((row as Record<string, unknown>).name ?? "")));
+  if (!artifactColumns.has("sequence")) {
+    db.exec("ALTER TABLE artifacts ADD COLUMN sequence INTEGER NOT NULL DEFAULT 0");
+  }
+  db.exec("UPDATE artifacts SET sequence = rowid WHERE sequence = 0");
+  const maxSequenceRow = db.prepare("SELECT COALESCE(MAX(sequence), 0) AS sequence FROM artifacts").get() ?? {};
+  const maxSequence = Number((maxSequenceRow as Record<string, unknown>).sequence ?? 0);
+  db.prepare("INSERT INTO meta(key, value) VALUES('sequence', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").run(String(maxSequence));
 }
 
 export function createSqliteContextBroker(options: SqliteContextBrokerOptions = {}): BoundedContextBroker {
@@ -234,6 +243,7 @@ export function createSqliteContextBroker(options: SqliteContextBrokerOptions = 
   const warmToColdMs = optionMs(options.warmToColdMs);
   const summaryBytes = Math.max(16, Math.floor(options.summaryBytes ?? DEFAULT_SUMMARY_BYTES));
   const defaultBriefBytes = Math.max(64, Math.floor(options.briefBytes ?? DEFAULT_BRIEF_BYTES));
+  const vacuumThreshold = Math.max(128, maxRecords * 2);
 
   function nextSequence(): number {
     const row = db.prepare("SELECT value FROM meta WHERE key = 'sequence'").get();
@@ -242,9 +252,25 @@ export function createSqliteContextBroker(options: SqliteContextBrokerOptions = 
     return next;
   }
 
-  function deleteArtifact(id: string): void {
+  function deleteArtifact(id: string): boolean {
     db.prepare("DELETE FROM artifact_fts WHERE id = ?").run(id);
-    db.prepare("DELETE FROM artifacts WHERE id = ?").run(id);
+    return db.prepare("DELETE FROM artifacts WHERE id = ?").run(id).changes > 0;
+  }
+
+  function maintainStorage(removedCount: number, options: { purge?: boolean } = {}): void {
+    if (removedCount <= 0) return;
+    const shouldCheckpoint = options.purge || removedCount > 0;
+    const shouldVacuum = removedCount >= vacuumThreshold;
+    try {
+      if (shouldCheckpoint) {
+        db.exec("PRAGMA wal_checkpoint(TRUNCATE)");
+      }
+      if (shouldVacuum) {
+        db.exec("VACUUM");
+      }
+    } catch (error) {
+      console.warn("SQLite maintenance failed", error);
+    }
   }
 
   function cooledTier(artifact: ContextArtifact & { baseTier: ContextArtifactTier }, now = Date.now()): ContextArtifactTier {
@@ -305,12 +331,14 @@ export function createSqliteContextBroker(options: SqliteContextBrokerOptions = 
     };
   }
 
-  function dropExpired(now = Date.now(), protectedIds = new Set<string>()): void {
+  function dropExpired(now = Date.now(), protectedIds = new Set<string>()): number {
     const rows = db.prepare("SELECT id FROM artifacts WHERE pinned = 0 AND expiresAt IS NOT NULL AND expiresAt <= ?").all(now);
+    let removedCount = 0;
     for (const row of rows) {
       const id = String(row.id);
-      if (!protectedIds.has(id)) deleteArtifact(id);
+      if (!protectedIds.has(id) && deleteArtifact(id)) removedCount += 1;
     }
+    return removedCount;
   }
 
   function capStats(sessionId: string, tier?: ContextArtifactTier): { records: number; bytes: number } {
@@ -340,7 +368,7 @@ export function createSqliteContextBroker(options: SqliteContextBrokerOptions = 
     const protectedList = [...protectedIds];
     const protectedClause = protectedList.length ? `AND id NOT IN (${protectedList.map(() => "?").join(",")})` : "";
     const tierClause = tier ? "AND tier = ?" : "";
-    const order = tier ? "createdAt ASC, rowid ASC" : "CASE tier WHEN 'cold' THEN 0 WHEN 'warm' THEN 1 ELSE 2 END ASC, createdAt ASC, rowid ASC";
+    const order = tier ? "createdAt ASC, sequence ASC" : "CASE tier WHEN 'cold' THEN 0 WHEN 'warm' THEN 1 ELSE 2 END ASC, createdAt ASC, sequence ASC";
     const params = tier ? [sessionId, tier, ...protectedList] : [sessionId, ...protectedList];
     const row = db.prepare(`SELECT id FROM artifacts WHERE sessionId = ? AND pinned = 0 ${tierClause} ${protectedClause} ORDER BY ${order} LIMIT 1`).get(...params);
     return row?.id == null ? undefined : String(row.id);
@@ -351,8 +379,8 @@ export function createSqliteContextBroker(options: SqliteContextBrokerOptions = 
     const protectedClause = protectedList.length ? `AND id NOT IN (${protectedList.map(() => "?").join(",")})` : "";
     const tierClause = tier ? "AND tier = ?" : "";
     const order = tier
-      ? "createdAt ASC, rowid ASC"
-      : "CASE tier WHEN 'cold' THEN 0 WHEN 'warm' THEN 1 ELSE 2 END ASC, createdAt ASC, rowid ASC";
+      ? "createdAt ASC, sequence ASC"
+      : "CASE tier WHEN 'cold' THEN 0 WHEN 'warm' THEN 1 ELSE 2 END ASC, createdAt ASC, sequence ASC";
     const params = tier ? [tier, ...protectedList] : [...protectedList];
     const row = db.prepare(
       `SELECT id FROM artifacts WHERE pinned = 0 ${tierClause} ${protectedClause} ORDER BY ${order} LIMIT 1`,
@@ -361,7 +389,7 @@ export function createSqliteContextBroker(options: SqliteContextBrokerOptions = 
   }
 
   function prune(now = Date.now(), protectedIds = new Set<string>()): ContextBrokerStatus {
-    dropExpired(now, protectedIds);
+    let removedCount = dropExpired(now, protectedIds);
     applyCooling(now, protectedIds);
     const sessions = db.prepare("SELECT DISTINCT sessionId FROM artifacts").all().map((row) => String(row.sessionId));
     for (const sessionId of sessions) {
@@ -369,33 +397,36 @@ export function createSqliteContextBroker(options: SqliteContextBrokerOptions = 
         while (!withinCaps(sessionId, tier)) {
           const id = removalCandidate(sessionId, protectedIds, tier);
           if (!id) break;
-          deleteArtifact(id);
+          if (deleteArtifact(id)) removedCount += 1;
         }
       }
 
       while (!withinCaps(sessionId)) {
         const id = removalCandidate(sessionId, protectedIds);
         if (!id) break;
-        deleteArtifact(id);
+        if (deleteArtifact(id)) removedCount += 1;
       }
     }
 
     while (!withinGlobalCaps()) {
       const id = removalCandidateGlobal(protectedIds);
       if (!id) break;
-      deleteArtifact(id);
+      if (deleteArtifact(id)) removedCount += 1;
     }
-    return currentStatus();
+    const status = currentStatus();
+    maintainStorage(removedCount, { purge: false });
+    return status;
   }
 
   function status(): ContextBrokerStatus {
-    dropExpired();
+    const expiredRemoved = dropExpired();
     applyCooling();
+    if (expiredRemoved > 0) maintainStorage(expiredRemoved, { purge: false });
     return currentStatus();
   }
 
   function purge(options: ContextPurgeOptions = {}): ContextBrokerStatus {
-    dropExpired();
+    let removedCount = dropExpired();
     applyCooling();
     const keepPinned = options.keepPinned ?? true;
     const clauses: string[] = [];
@@ -409,20 +440,24 @@ export function createSqliteContextBroker(options: SqliteContextBrokerOptions = 
     const rows = db.prepare(`SELECT id FROM artifacts ${where}`).all(...params);
     db.exec("BEGIN IMMEDIATE");
     try {
-      for (const row of rows) deleteArtifact(String(row.id));
+      for (const row of rows) {
+        if (deleteArtifact(String(row.id))) removedCount += 1;
+      }
       db.exec("COMMIT");
     } catch (error) {
       db.exec("ROLLBACK");
       throw error;
     }
-    return currentStatus();
+    const status = currentStatus();
+    maintainStorage(removedCount, { purge: true });
+    return status;
   }
 
   function publish(input: ContextArtifactInput): ContextArtifact {
-    dropExpired();
+    const expiredRemoved = dropExpired();
     const source = stableSource(input);
     if (source) {
-      const existing = db.prepare("SELECT * FROM artifacts WHERE sessionId = ? AND parentIdsJson LIKE ? ESCAPE '\\' ORDER BY createdAt DESC, rowid DESC LIMIT 1")
+      const existing = db.prepare("SELECT * FROM artifacts WHERE sessionId = ? AND parentIdsJson LIKE ? ESCAPE '\\' ORDER BY createdAt DESC, sequence DESC LIMIT 1")
         .get(input.sessionId, likePattern(`"${source}"`));
       if (existing) return rowToArtifact(existing);
     }
@@ -459,16 +494,17 @@ export function createSqliteContextBroker(options: SqliteContextBrokerOptions = 
       branch: input.branch?.trim() || undefined,
       tier,
       baseTier,
+      sequence,
       expiresAt: ttlMs > 0 ? now + ttlMs : undefined,
       pinned: Boolean(input.pinned),
       parentIds,
-    } satisfies ContextArtifact & { baseTier: ContextArtifactTier };
+    } satisfies ContextArtifact & { baseTier: ContextArtifactTier; sequence: number };
 
     db.exec("BEGIN IMMEDIATE");
     try {
       db.prepare(`
-        INSERT INTO artifacts(id, handle, sessionId, kind, createdAt, updatedAt, bytes, sha256, payload, summary, tagsJson, pathsJson, command, branch, tier, baseTier, expiresAt, pinned, parentIdsJson)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO artifacts(id, handle, sessionId, kind, createdAt, updatedAt, bytes, sha256, payload, summary, tagsJson, pathsJson, command, branch, tier, baseTier, sequence, expiresAt, pinned, parentIdsJson)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `).run(
         artifact.id,
         artifact.handle,
@@ -486,6 +522,7 @@ export function createSqliteContextBroker(options: SqliteContextBrokerOptions = 
         artifact.branch ?? null,
         artifact.tier,
         artifact.baseTier,
+        artifact.sequence,
         artifact.expiresAt ?? null,
         artifact.pinned ? 1 : 0,
         JSON.stringify(artifact.parentIds),
@@ -505,12 +542,14 @@ export function createSqliteContextBroker(options: SqliteContextBrokerOptions = 
     }
 
     prune(Date.now(), new Set([artifact.id]));
+    if (expiredRemoved > 0) maintainStorage(expiredRemoved, { purge: false });
     return lookup({ id: artifact.id })[0] ?? artifact;
   }
 
   function lookup(query: ContextLookupQuery = {}): ContextArtifact[] {
-    dropExpired();
+    const expiredRemoved = dropExpired();
     applyCooling();
+    if (expiredRemoved > 0) maintainStorage(expiredRemoved, { purge: false });
     const storedCount = Number(db.prepare("SELECT COUNT(*) AS count FROM artifacts").get()?.count ?? 1) || 1;
     const limit = Math.max(1, Math.floor(query.limit ?? storedCount));
     const clauses: string[] = [];
@@ -540,7 +579,7 @@ export function createSqliteContextBroker(options: SqliteContextBrokerOptions = 
       ORDER BY a.pinned DESC,
         CASE a.tier WHEN 'hot' THEN ${TIER_ORDER.hot} WHEN 'warm' THEN ${TIER_ORDER.warm} ELSE ${TIER_ORDER.cold} END ASC,
         a.createdAt DESC,
-        a.rowid DESC
+        a.sequence DESC
       LIMIT ?
     `;
 
@@ -555,7 +594,6 @@ export function createSqliteContextBroker(options: SqliteContextBrokerOptions = 
   }
 
   function pin(idOrHandle: string, pinned = true): ContextArtifact | null {
-    dropExpired();
     const artifact = lookup(idOrHandle.startsWith("ctx://") ? { handle: idOrHandle } : { id: idOrHandle })[0] as (ContextArtifact & { baseTier?: ContextArtifactTier }) | undefined;
     if (!artifact) return null;
     const nextTier: ContextArtifactTier = pinned ? "hot" : artifact.baseTier ?? artifact.tier;
