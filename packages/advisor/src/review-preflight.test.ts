@@ -13,8 +13,13 @@ afterEach(() => {
 
 describe("review preflight", () => {
   it("extracts explicit plan and progress hints", () => {
-    const refs = extractReviewArtifactHints("review plan.md, progress.md, and /tmp/review-summary.json before continuing");
-    expect(refs).toEqual(expect.arrayContaining(["plan.md", "progress.md", "/tmp/review-summary.json"]));
+    const refs = extractReviewArtifactHints("review plan.md, ./progress.md, docs/review/progress.md, and /var/folders/pi-review-summary.json before continuing");
+    expect(refs).toEqual(expect.arrayContaining(["plan.md", "./progress.md", "docs/review/progress.md", "/var/folders/pi-review-summary.json"]));
+  });
+
+  it("does not treat URL paths as local review artifacts", () => {
+    const refs = extractReviewArtifactHints("see https://example.com/docs/progress.md and then read progress.md");
+    expect(refs).toEqual(["progress.md"]);
   });
 
   it("reports missing review artifacts relative to the working directory", () => {

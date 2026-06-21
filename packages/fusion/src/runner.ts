@@ -249,7 +249,9 @@ function summarizePanelFailure(error: unknown): { summary: string; details: Fusi
 
 function isContextLengthExceeded(error: unknown): boolean {
   const rawText = responseText(error);
-  return /context_length_exceeded|exceeds the context window|input exceeds the context window/i.test(rawText);
+  const parsed = extractErrorPayload(error);
+  const detailNode = locateErrorObject(parsed) ?? asRecord(error) ?? asRecord((error as any)?.cause);
+  return classifyFailureCategory(rawText, detailNode) === "context_length_exceeded";
 }
 
 function formatFailedPanelSummary(failed: FusionFailedModel[]): string {
