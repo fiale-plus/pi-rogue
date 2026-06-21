@@ -14,7 +14,7 @@
   ],
   "scripts": {
     "check": "tsc -p ../../tsconfig.json --noEmit",
-    "test": "cd ../.. && vitest run packages/advisor/src/*.test.ts"
+    "test": "node ../../scripts/run-vitest.mjs packages/advisor/src/*.test.ts"
   },
   "main": "./src/index.ts",
   "exports": {
