@@ -624,6 +624,33 @@ function persistReviewState(state: SessionState, includeReviewRoute: boolean): v
   saveState(persisted);
 }
 
+const CLEAN_CLOSEOUT_RE = /\b(?:revalidated clean|validated clean|final (?:codex )?review (?:had no findings|clean|passed)|codex review (?:had no findings|clean)|no findings)\b/i;
+const UNRESOLVED_CLOSEOUT_RE = /\b(?:pending|still needs?|still needed|still required|incomplete|not done|todo|needs (?:changes|work|fix(?:es)?|review|attention)|(?:still|currently) failing|(?:still|currently) failed)\b/i;
+
+function hasCleanCloseoutEvidence(delta: string, meta: ReviewMaterialMeta): boolean {
+  return Boolean(meta.isAgentEnd && CLEAN_CLOSEOUT_RE.test(delta) && !UNRESOLVED_CLOSEOUT_RE.test(delta));
+}
+
+function clearResolvedReviewWarning(state: SessionState, ctx: any, reason: string): void {
+  state.followUp = "";
+  state.followUpTask = undefined;
+  state.reviewSignals = [];
+  state.reviewSignalsTask = undefined;
+  if (state.router.review) {
+    state.router.review = {
+      ...state.router.review,
+      label: "on_track",
+      reason,
+      review: "off",
+      escalate: false,
+      trajectory: state.router.review.trajectory
+        ? { ...state.router.review.trajectory, failed: false }
+        : state.router.review.trajectory,
+    };
+  }
+  writeText(advisorCurrentPath(ctx), `${formatAdvisorDisplay("advisor:llm", "continue", reason)}\n`);
+}
+
 function recoverReviewControl(state: SessionState): void {
   if (!state.reviewControl.running) return;
 
@@ -1689,6 +1716,9 @@ async function doReview(pi: ExtensionAPI, ctx: any, trigger: string, delta: stri
     if (gatePrediction && gatePrediction.trusted && gatePrediction.decision === "continue" && !reviewHeuristic.safety) {
       finalDecision = "continue";
       finalReason = "local gate continue";
+      if (hasCleanCloseoutEvidence(delta, meta)) {
+        clearResolvedReviewWarning(state, ctx, finalReason);
+      }
       markReviewApplied(state, signature, trigger, finalDecision, finalReason, true);
       persistReviewState(state, true);
       finalized = true;
@@ -1700,6 +1730,9 @@ async function doReview(pi: ExtensionAPI, ctx: any, trigger: string, delta: stri
     if (finalReview === "off") {
       finalDecision = "continue";
       finalReason = "review disabled";
+      if (hasCleanCloseoutEvidence(delta, meta)) {
+        clearResolvedReviewWarning(state, ctx, finalReason);
+      }
       markReviewApplied(state, signature, trigger, finalDecision, finalReason, true);
       persistReviewState(state, true);
       finalized = true;
@@ -1711,8 +1744,14 @@ async function doReview(pi: ExtensionAPI, ctx: any, trigger: string, delta: stri
         ? meta.isAgentEnd || meta.fileChanged || meta.failed || reviewRoute.label !== "abstain" || state.turns % 3 === 0
         : meta.fileChanged || meta.failed;
     if (!shouldRun) {
-      finalDecision = "defer";
-      finalReason = "no material signal";
+      if (hasCleanCloseoutEvidence(delta, meta)) {
+        finalDecision = "continue";
+        finalReason = "clean closeout evidence";
+        clearResolvedReviewWarning(state, ctx, finalReason);
+      } else {
+        finalDecision = "defer";
+        finalReason = "no material signal";
+      }
       markReviewApplied(state, signature, trigger, finalDecision, finalReason, true);
       persistReviewState(state, true);
       finalized = true;
@@ -1748,8 +1787,15 @@ async function doReview(pi: ExtensionAPI, ctx: any, trigger: string, delta: stri
     const rk = hash("rev", trigger, b, brokerBrief, delta, String(meta.fileChanged), String(meta.failed), String(meta.isAgentEnd), String(reviewRoute.label), signature);
     const cache = loadCache();
     if (cache[rk]) {
-      finalDecision = "defer";
-      finalReason = "cached verdict";
+      const cachedParsed = parseReviewPayload(cache[rk], state.lastTask);
+      if (cachedParsed?.verdict === "on_track") {
+        finalDecision = "continue";
+        finalReason = (cachedParsed.reason || cachedParsed.summary || "cached on-track verdict").slice(0, 120);
+        clearResolvedReviewWarning(state, ctx, finalReason);
+      } else {
+        finalDecision = "defer";
+        finalReason = "cached verdict";
+      }
       markReviewApplied(state, signature, trigger, finalDecision, finalReason, true);
       persistReviewState(state, true);
       finalized = true;
@@ -1804,10 +1850,7 @@ async function doReview(pi: ExtensionAPI, ctx: any, trigger: string, delta: stri
       finalDecision = "continue";
       finalReason = parsed.reason || parsed.summary || "review result";
       finalReason = finalReason.slice(0, 120);
-      state.followUp = "";
-      state.followUpTask = undefined;
-      state.reviewSignals = [];
-      state.reviewSignalsTask = undefined;
+      clearResolvedReviewWarning(state, ctx, finalReason);
       markReviewApplied(state, signature, trigger, finalDecision, finalReason, true);
       persistReviewState(state, true);
       finalized = true;
