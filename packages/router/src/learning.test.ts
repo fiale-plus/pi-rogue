@@ -7,10 +7,15 @@ import { buildRouteEvent } from "./ledger.js";
 import {
   generateCapabilityCards,
   generateTeacherReflection,
+  isV2Card,
+  getCardTier,
+  getCardCost,
+  getCardContextWindow,
   shadowEvaluate,
   writeCapabilityCards,
   writeShadowEval,
   writeTeacherReflection,
+  MODEL_CAPABILITY_CARD_SCHEMA_V2,
 } from "./learning.js";
 import type { RouterCheckpoint } from "./types.js";
 
@@ -122,9 +127,10 @@ describe("trajectory router local learning and eval", () => {
 
     expect(cards).toHaveLength(1);
     expect(cards[0]).toMatchObject({
-      schema: "pi-router.model-capability-card.v1",
+      schema: MODEL_CAPABILITY_CARD_SCHEMA_V2,
       modelId: "local/qwen",
       provider: "local",
+      capabilities: { tier: "local", contextWindow: 131072, tags: ["local"] },
       seed: { source: "none" },
       observed: {
         source: "local Pi telemetry",
@@ -154,7 +160,7 @@ describe("trajectory router local learning and eval", () => {
     const cards = writeCapabilityCards(eventPath, outputPath);
 
     expect(cards).toHaveLength(1);
-    expect(readFileSync(outputPath, "utf8")).toContain("pi-router.model-capability-card.v1");
+    expect(readFileSync(outputPath, "utf8")).toContain(MODEL_CAPABILITY_CARD_SCHEMA_V2);
   });
 
   it("generates teacher labels and reflection artifacts without transcript content", () => {
@@ -237,5 +243,163 @@ describe("trajectory router local learning and eval", () => {
 
     expect(report.checkpoints).toBe(1);
     expect(JSON.parse(readFileSync(outputPath, "utf8")).schema).toBe("pi-router.shadow-eval.v1");
+  });
+
+  describe("v2 capability cards with structured metadata", () => {
+    it("generates v2 cards with capabilities metadata for known models", () => {
+      const item = checkpoint({ activeModel: "openai/gpt-4", provider: "openai" });
+      const events = [buildRouteEvent(item, decideRoute(item))];
+      const cards = generateCapabilityCards(events);
+
+      expect(cards).toHaveLength(1);
+      expect(cards[0].schema).toBe(MODEL_CAPABILITY_CARD_SCHEMA_V2);
+      expect(cards[0].capabilities).toMatchObject({
+        tier: "premium",
+        cost: { input: 0.01, output: 0.03 },
+        tags: ["premium", "gpt"],
+      });
+    });
+
+    it("generates v2 cards with capabilities for local models", () => {
+      const item = checkpoint({ activeModel: "local/qwen", provider: "local" });
+      const events = [buildRouteEvent(item, decideRoute(item))];
+      const cards = generateCapabilityCards(events);
+
+      expect(cards[0].capabilities?.tier).toBe("local");
+      expect(cards[0].capabilities?.contextWindow).toBe(131072);
+    });
+
+    it("generates v2 cards with capabilities for cheap models", () => {
+      const item = checkpoint({ activeModel: "anthropic/claude-sonnet-4", provider: "anthropic" });
+      const events = [buildRouteEvent(item, decideRoute(item))];
+      const cards = generateCapabilityCards(events);
+
+      expect(cards[0].capabilities?.tier).toBe("premium");
+      expect(cards[0].capabilities?.cost).toMatchObject({ input: 0.008, output: 0.024 });
+    });
+
+    it("uses default tier for unknown models", () => {
+      const item = checkpoint({ activeModel: "unknown-model", provider: "unknown" });
+      const events = [buildRouteEvent(item, decideRoute(item))];
+      const cards = generateCapabilityCards(events);
+
+      expect(cards[0].capabilities).toBeUndefined();
+    });
+
+    it("isV2Card correctly discriminates v1 vs v2 cards", () => {
+      const v1Card = {
+        schema: "pi-router.model-capability-card.v1",
+        modelId: "test",
+        provider: "test",
+        generatedAt: "2026-01-01T00:00:00Z",
+        seed: { source: "none", purpose: "test" },
+        observed: {
+          source: "local Pi telemetry",
+          events: 1,
+          sessions: 1,
+          actions: {},
+          averageLoopScore: 0.5,
+          averageProgressScore: 0.5,
+          averageContextTokensApprox: null,
+          outcomes: { linked: 0, success: 0, partial: 0, failed: 0, abandoned: 0, unknown: 0, averageReworkTurns: null },
+        },
+        promotion: { manualOnly: true, promoted: false },
+      } as const;
+
+      const v2Card = {
+        schema: MODEL_CAPABILITY_CARD_SCHEMA_V2,
+        modelId: "test",
+        provider: "test",
+        generatedAt: "2026-01-01T00:00:00Z",
+        capabilities: { tier: "local" },
+        seed: { source: "none", purpose: "test" },
+        observed: {
+          source: "local Pi telemetry",
+          events: 1,
+          sessions: 1,
+          actions: {},
+          averageLoopScore: 0.5,
+          averageProgressScore: 0.5,
+          averageContextTokensApprox: null,
+          outcomes: { linked: 0, success: 0, partial: 0, failed: 0, abandoned: 0, unknown: 0, averageReworkTurns: null },
+        },
+        promotion: { manualOnly: true, promoted: false },
+      } as const;
+
+      expect(isV2Card(v1Card as any)).toBe(false);
+      expect(isV2Card(v2Card as any)).toBe(true);
+    });
+
+    it("getCardTier returns tier from v2 cards", () => {
+      const v2Card = {
+        schema: MODEL_CAPABILITY_CARD_SCHEMA_V2,
+        modelId: "test",
+        provider: "test",
+        generatedAt: "2026-01-01T00:00:00Z",
+        capabilities: { tier: "cheap" },
+        seed: { source: "none", purpose: "test" },
+        observed: {
+          source: "local Pi telemetry",
+          events: 1,
+          sessions: 1,
+          actions: {},
+          averageLoopScore: 0.5,
+          averageProgressScore: 0.5,
+          averageContextTokensApprox: null,
+          outcomes: { linked: 0, success: 0, partial: 0, failed: 0, abandoned: 0, unknown: 0, averageReworkTurns: null },
+        },
+        promotion: { manualOnly: true, promoted: false },
+      } as const;
+
+      expect(getCardTier(v2Card as any)).toBe("cheap");
+    });
+
+    it("getCardCost returns cost from v2 cards", () => {
+      const v2Card = {
+        schema: MODEL_CAPABILITY_CARD_SCHEMA_V2,
+        modelId: "test",
+        provider: "test",
+        generatedAt: "2026-01-01T00:00:00Z",
+        capabilities: { cost: { input: 0.001, output: 0.002 } },
+        seed: { source: "none", purpose: "test" },
+        observed: {
+          source: "local Pi telemetry",
+          events: 1,
+          sessions: 1,
+          actions: {},
+          averageLoopScore: 0.5,
+          averageProgressScore: 0.5,
+          averageContextTokensApprox: null,
+          outcomes: { linked: 0, success: 0, partial: 0, failed: 0, abandoned: 0, unknown: 0, averageReworkTurns: null },
+        },
+        promotion: { manualOnly: true, promoted: false },
+      } as const;
+
+      expect(getCardCost(v2Card as any)).toEqual({ input: 0.001, output: 0.002 });
+    });
+
+    it("getCardContextWindow returns context window from v2 cards", () => {
+      const v2Card = {
+        schema: MODEL_CAPABILITY_CARD_SCHEMA_V2,
+        modelId: "test",
+        provider: "test",
+        generatedAt: "2026-01-01T00:00:00Z",
+        capabilities: { contextWindow: 131072 },
+        seed: { source: "none", purpose: "test" },
+        observed: {
+          source: "local Pi telemetry",
+          events: 1,
+          sessions: 1,
+          actions: {},
+          averageLoopScore: 0.5,
+          averageProgressScore: 0.5,
+          averageContextTokensApprox: null,
+          outcomes: { linked: 0, success: 0, partial: 0, failed: 0, abandoned: 0, unknown: 0, averageReworkTurns: null },
+        },
+        promotion: { manualOnly: true, promoted: false },
+      } as const;
+
+      expect(getCardContextWindow(v2Card as any)).toBe(131072);
+    });
   });
 });

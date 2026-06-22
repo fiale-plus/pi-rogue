@@ -3,7 +3,8 @@ import { dirname, resolve } from "node:path";
 import { hashText } from "./hash.js";
 import { readRouteEvents, type RouteEvent } from "./ledger.js";
 import { readOutcomes, type RouterOutcome } from "./outcomes.js";
-import type { ModelCapabilityCard } from "./learning.js";
+import { getCardTier, getCardCost } from "./learning.js";
+import type { ModelCapabilityCard, ModelCapabilityCardAny } from "./learning.js";
 import type { RouteAction, TaskStatus } from "./types.js";
 
 export const ROUTER_SHARPENING_HINTS_SCHEMA = "pi-router.sharpening-hints.v1" as const;
@@ -103,8 +104,23 @@ function modelDisplay(provider: string | undefined, modelId: string): string {
   return provider && provider !== "unknown" ? `${provider}/${modelId}` : modelId;
 }
 
+const LOCAL_OR_CHEAP_TIER = new Set<"local" | "cheap">(["local", "cheap"]);
+
 function isLocalOrCheap(modelId: string, provider?: string): boolean {
   return /(local|ollama|mlx|qwen|llama|mistral|phi|codex-spark|spark)/i.test(`${provider ?? ""}/${modelId}`);
+}
+
+/**
+ * Structured capability-aware check: use v2 card tier when available,
+ * falling back to the existing regex heuristic for v1 cards or missing metadata.
+ */
+function isLocalOrCheapFromCard(card: ModelCapabilityCardAny | undefined, modelId: string, provider?: string): boolean {
+  if (!card) return isLocalOrCheap(modelId, provider);
+  const capabilities = (card as ModelCapabilityCardAny & { capabilities?: { tier?: string } }).capabilities;
+  const tier = capabilities?.tier;
+  if (tier && LOCAL_OR_CHEAP_TIER.has(tier as "local" | "cheap")) return true;
+  // Fallback: use provider/modelId from the card
+  return isLocalOrCheap(card.modelId, card.provider);
 }
 
 function confidence(events: number, linkedOutcomes: number, score: number): RouterSharpeningConfidence {
@@ -215,7 +231,7 @@ function baseHint(kind: RouterSharpeningHintKind, stats: GroupStats, rationale: 
   };
 }
 
-function readCapabilityCards(path?: string): ModelCapabilityCard[] {
+function readCapabilityCards(path?: string): ModelCapabilityCardAny[] {
   if (!path) return [];
   const resolved = resolve(path);
   if (!existsSync(resolved)) throw new Error(`capability cards file not found: ${path}`);
@@ -224,8 +240,8 @@ function readCapabilityCards(path?: string): ModelCapabilityCard[] {
     .filter((line) => line.trim())
     .map((line, index) => {
       try {
-        const card = JSON.parse(line) as ModelCapabilityCard;
-        if (card.schema !== "pi-router.model-capability-card.v1") throw new Error("invalid schema");
+        const card = JSON.parse(line) as ModelCapabilityCardAny;
+        if (card.schema !== "pi-router.model-capability-card.v1" && card.schema !== "pi-router.model-capability-card.v2") throw new Error("invalid schema");
         return card;
       } catch (error) {
         throw new Error(`invalid capability card at line ${index + 1}: ${error instanceof Error ? error.message : String(error)}`);
@@ -233,11 +249,11 @@ function readCapabilityCards(path?: string): ModelCapabilityCard[] {
     });
 }
 
-function cardMap(cards: ModelCapabilityCard[]): Map<string, ModelCapabilityCard> {
+function cardMap(cards: ModelCapabilityCardAny[]): Map<string, ModelCapabilityCardAny> {
   return new Map(cards.map((card) => [modelKey(card.provider, card.modelId), card]));
 }
 
-export function generateSharpeningHints(options: { events: RouteEvent[]; outcomes?: RouterOutcome[]; cards?: ModelCapabilityCard[]; generatedAt?: string; inputs?: RouterSharpeningArtifact["inputs"] }): RouterSharpeningArtifact {
+export function generateSharpeningHints(options: { events: RouteEvent[]; outcomes?: RouterOutcome[]; cards?: ModelCapabilityCardAny[]; generatedAt?: string; inputs?: RouterSharpeningArtifact["inputs"] }): RouterSharpeningArtifact {
   const events = [...options.events].sort((a, b) => a.eventId.localeCompare(b.eventId));
   const outcomes = options.outcomes ?? [];
   const cards = options.cards ?? [];
@@ -266,11 +282,17 @@ export function generateSharpeningHints(options: { events: RouteEvent[]; outcome
   for (const stats of groupedByModel(events, outcomes).sort((a, b) => b.score - a.score || modelDisplay(a.provider, a.modelId).localeCompare(modelDisplay(b.provider, b.modelId)))) {
     const card = byCard.get(modelKey(stats.provider, stats.modelId));
     const cardProgressOk = card ? card.observed.averageProgressScore >= 0.65 && card.observed.averageLoopScore <= 0.35 : true;
-    if (!isLocalOrCheap(stats.modelId, stats.provider) || stats.events.length < 3 || stats.averageProgressScore < 0.65 || stats.averageLoopScore > 0.35 || stats.score < 0.65 || hasPoorLinkedOutcomes(stats) || !cardProgressOk) continue;
+    if (!isLocalOrCheapFromCard(card, stats.modelId, stats.provider) || stats.events.length < 3 || stats.averageProgressScore < 0.65 || stats.averageLoopScore > 0.35 || stats.score < 0.65 || hasPoorLinkedOutcomes(stats) || !cardProgressOk) continue;
+    const costInfo = card ? getCardCost(card) : undefined;
+    const tierInfo = card ? getCardTier(card) : undefined;
+    const costRationale = costInfo
+      ? ` cost $${costInfo.input.toFixed(4)}/M input` + (costInfo.output > 0 ? `, $${costInfo.output.toFixed(4)}/M output` : "")
+      : ``;
+    const tierRationale = tierInfo ? ` [${tierInfo}]` : ``;
     hints.push(baseHint(
       "savings_candidate",
       stats,
-      `${modelDisplay(stats.provider, stats.modelId)} looks safe to keep exploring for routine/worker traffic: ${stats.events.length} events, progress ${stats.averageProgressScore}, loop ${stats.averageLoopScore}. This is a manual hint, not an automatic promotion.`,
+      `${modelDisplay(stats.provider, stats.modelId)} looks safe to keep exploring for routine/worker traffic${tierRationale}${costRationale}: ${stats.events.length} events, progress ${stats.averageProgressScore}, loop ${stats.averageLoopScore}. This is a manual hint, not an automatic promotion.`,
       undefined,
       card?.observed.events,
     ));
