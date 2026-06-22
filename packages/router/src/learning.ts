@@ -7,6 +7,7 @@ import { readOutcomes, type RouterOutcome } from "./outcomes.js";
 import type { RouteAction, RouteDecision, RouterCheckpoint } from "./types.js";
 
 export const MODEL_CAPABILITY_CARD_SCHEMA = "pi-router.model-capability-card.v1" as const;
+export const MODEL_CAPABILITY_CARD_SCHEMA_V2 = "pi-router.model-capability-card.v2" as const;
 export const TEACHER_LABEL_SCHEMA = "pi-router.teacher-label.v1" as const;
 export const SHADOW_EVAL_SCHEMA = "pi-router.shadow-eval.v1" as const;
 
@@ -41,6 +42,84 @@ export interface ModelCapabilityCard {
     manualOnly: true;
     promoted: false;
   };
+}
+
+export type CapabilityTier = "local" | "cheap" | "standard" | "premium" | "experimental";
+
+export interface ModelCapabilityMetadata {
+  /** Context window in tokens (approximate, rounded to nearest 1024). */
+  contextWindow?: number;
+  /** Cost per million tokens, structured as { input: number; output: number } in USD. */
+  cost?: { input: number; output: number };
+  /** Whether the model supports structured reasoning outputs. */
+  reasoning?: boolean;
+  /** Whether the model is primarily an input model (embedding, classification). */
+  inputOnly?: boolean;
+  /** Capability tier for cost-aware routing hints. */
+  tier?: CapabilityTier;
+  /** Free-form tags for structured capability signals (e.g. "multimodal", "vision", "code-generation"). */
+  tags?: string[];
+}
+
+export interface ModelCapabilityCardV2 {
+  schema: typeof MODEL_CAPABILITY_CARD_SCHEMA_V2;
+  modelId: string;
+  provider?: string;
+  generatedAt: string;
+  seed: {
+    source: "none" | "manual" | "public" | "default";
+    purpose: string;
+  };
+  /** Structured capability/cost metadata for cost-aware routing. */
+  capabilities?: ModelCapabilityMetadata;
+  observed: {
+    source: "local Pi telemetry";
+    events: number;
+    sessions: number;
+    actions: Record<string, number>;
+    averageLoopScore: number;
+    averageProgressScore: number;
+    averageContextTokensApprox: number | null;
+    outcomes: {
+      linked: number;
+      success: number;
+      partial: number;
+      failed: number;
+      abandoned: number;
+      unknown: number;
+      averageReworkTurns: number | null;
+    };
+  };
+  promotion: {
+    manualOnly: true;
+    promoted: false;
+  };
+}
+
+/** Union type for all card versions; consumers should check schema to discriminate. */
+export type ModelCapabilityCardAny = ModelCapabilityCard | ModelCapabilityCardV2;
+
+/** Type guard: is this a v2 card with capabilities metadata? */
+export function isV2Card(card: ModelCapabilityCardAny): card is ModelCapabilityCardV2 {
+  return card.schema === MODEL_CAPABILITY_CARD_SCHEMA_V2;
+}
+
+/** Extract tier from v2 card capabilities, falling back to heuristic if unavailable. */
+export function getCardTier(card: ModelCapabilityCardAny): CapabilityTier | undefined {
+  if (isV2Card(card) && card.capabilities?.tier) return card.capabilities.tier;
+  return undefined;
+}
+
+/** Extract cost metadata from v2 card capabilities. */
+export function getCardCost(card: ModelCapabilityCardAny): { input: number; output: number } | undefined {
+  if (isV2Card(card) && card.capabilities?.cost) return card.capabilities.cost;
+  return undefined;
+}
+
+/** Extract context window from v2 card capabilities. */
+export function getCardContextWindow(card: ModelCapabilityCardAny): number | undefined {
+  if (isV2Card(card) && card.capabilities?.contextWindow) return card.capabilities.contextWindow;
+  return undefined;
 }
 
 export interface TeacherLabel {
@@ -135,7 +214,39 @@ function summarizeOutcomes(group: RouteEvent[], outcomes: RouterOutcome[]): Mode
   return counts;
 }
 
-export function generateCapabilityCards(events: RouteEvent[], generatedAt = new Date().toISOString(), outcomes: RouterOutcome[] = []): ModelCapabilityCard[] {
+/**
+ * Map of known model patterns to v2 capabilities metadata.
+ * This is the structured replacement for the old isLocalOrCheap regex heuristics.
+ */
+const MODEL_CAPABILITIES_MAP: Record<string, Partial<ModelCapabilityMetadata>> = {
+  "local": { tier: "local", contextWindow: 131072, tags: ["local"] },
+  "ollama": { tier: "local", tags: ["local", "ollama"] },
+  "mlx": { tier: "local", tags: ["local", "mlx"] },
+  "qwen": { tier: "cheap", cost: { input: 0.0003, output: 0.0006 }, tags: ["cheap", "qwen"] },
+  "llama": { tier: "cheap", cost: { input: 0.0002, output: 0.0004 }, tags: ["cheap", "llama"] },
+  "mistral": { tier: "cheap", cost: { input: 0.0002, output: 0.0004 }, tags: ["cheap", "mistral"] },
+  "phi": { tier: "cheap", cost: { input: 0.0001, output: 0.0002 }, tags: ["cheap", "phi"] },
+  "codex-spark": { tier: "cheap", cost: { input: 0.0005, output: 0.001 }, tags: ["cheap", "codex-spark"] },
+  "spark": { tier: "cheap", cost: { input: 0.0003, output: 0.0006 }, tags: ["cheap", "spark"] },
+  "gpt": { tier: "premium", cost: { input: 0.01, output: 0.03 }, tags: ["premium", "gpt"] },
+  "claude": { tier: "premium", cost: { input: 0.008, output: 0.024 }, tags: ["premium", "claude"] },
+  "gemini": { tier: "standard", cost: { input: 0.000125, output: 0.0005 }, tags: ["standard", "gemini"] },
+  "deepseek": { tier: "cheap", cost: { input: 0.000014, output: 0.000028 }, tags: ["cheap", "deepseek"] },
+};
+
+function resolveCapabilitiesForModel(modelId: string, provider: string): ModelCapabilityMetadata | undefined {
+  const providerLower = (provider ?? "").toLowerCase();
+  const modelLower = modelId.toLowerCase();
+  for (const [pattern, capabilities] of Object.entries(MODEL_CAPABILITIES_MAP)) {
+    if (providerLower.includes(pattern) || modelLower.includes(pattern)) {
+      return capabilities as ModelCapabilityMetadata;
+    }
+  }
+  // Default: standard tier with no cost info
+  return undefined;
+}
+
+export function generateCapabilityCards(events: RouteEvent[], generatedAt = new Date().toISOString(), outcomes: RouterOutcome[] = []): ModelCapabilityCardV2[] {
   const groups = new Map<string, RouteEvent[]>();
   for (const event of events) {
     const modelId = event.runtime.activeModel ?? "unknown";
@@ -152,11 +263,13 @@ export function generateCapabilityCards(events: RouteEvent[], generatedAt = new 
       .map((event) => event.runtime.contextTokensApprox)
       .filter((value): value is number => typeof value === "number" && Number.isFinite(value));
     for (const event of group) increment(actions, event.decision.action);
+    const capabilities = resolveCapabilitiesForModel(modelId, provider);
     return {
-      schema: MODEL_CAPABILITY_CARD_SCHEMA,
+      schema: MODEL_CAPABILITY_CARD_SCHEMA_V2,
       modelId,
       provider,
       generatedAt,
+      capabilities,
       seed: {
         source: "none",
         purpose: "cold-start priors are intentionally absent in v0; local observations dominate",
@@ -177,7 +290,7 @@ export function generateCapabilityCards(events: RouteEvent[], generatedAt = new 
         manualOnly: true,
         promoted: false,
       },
-    } satisfies ModelCapabilityCard;
+    } satisfies ModelCapabilityCardV2;
   }).sort((a, b) => `${a.provider}/${a.modelId}`.localeCompare(`${b.provider}/${b.modelId}`));
 }
 
@@ -186,7 +299,7 @@ function readRequiredRouteEvents(path: string): RouteEvent[] {
   return readRouteEvents(path);
 }
 
-export function writeCapabilityCards(eventsPath: string, outputPath: string, outcomesPath?: string): ModelCapabilityCard[] {
+export function writeCapabilityCards(eventsPath: string, outputPath: string, outcomesPath?: string): ModelCapabilityCardV2[] {
   const cards = generateCapabilityCards(readRequiredRouteEvents(eventsPath), new Date().toISOString(), readOutcomes(outcomesPath));
   writeJsonl(outputPath, cards);
   return cards;
