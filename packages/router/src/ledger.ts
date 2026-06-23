@@ -25,6 +25,7 @@ export interface RouteEvent {
   observed: {
     followed: boolean | null;
     overriddenBy?: string;
+    routingStatus?: "applied" | "policy_noop" | "blocked" | "downgraded";
   };
   metrics: {
     loopScore: number;

@@ -20,6 +20,7 @@ export interface RouterProfile {
 
 export interface RouterAutoModelPolicy {
   minConfidence: number;
+  downgradeConfidence: number;
   requiredConsecutiveMismatches: number;
   minCooldownSeconds: number;
   maxSwitchesPerWindow: number;
@@ -48,6 +49,7 @@ export interface RouterState {
 
 export const DEFAULT_ROUTER_AUTO_MODEL_POLICY: RouterAutoModelPolicy = {
   minConfidence: 0.7,
+  downgradeConfidence: 0.6,
   requiredConsecutiveMismatches: 2,
   minCooldownSeconds: 30,
   maxSwitchesPerWindow: 3,
@@ -67,6 +69,7 @@ function clampInt(value: unknown, min: number, max: number, fallback: number): n
 function normalizeAutoModelPolicy(raw: Partial<RouterAutoModelPolicy> | null | undefined): RouterAutoModelPolicy {
   return {
     minConfidence: clamp(Number.isFinite(Number(raw?.minConfidence)) ? Number(raw?.minConfidence) : DEFAULT_ROUTER_AUTO_MODEL_POLICY.minConfidence, 0, 1),
+    downgradeConfidence: clamp(Number.isFinite(Number(raw?.downgradeConfidence)) ? Number(raw?.downgradeConfidence) : DEFAULT_ROUTER_AUTO_MODEL_POLICY.downgradeConfidence, 0, 1),
     requiredConsecutiveMismatches: clampInt(raw?.requiredConsecutiveMismatches, 1, 20, DEFAULT_ROUTER_AUTO_MODEL_POLICY.requiredConsecutiveMismatches),
     minCooldownSeconds: clampInt(raw?.minCooldownSeconds, 0, 3_600, DEFAULT_ROUTER_AUTO_MODEL_POLICY.minCooldownSeconds),
     maxSwitchesPerWindow: clampInt(raw?.maxSwitchesPerWindow, 1, 100, DEFAULT_ROUTER_AUTO_MODEL_POLICY.maxSwitchesPerWindow),
