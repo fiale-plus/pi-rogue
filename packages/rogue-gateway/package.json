@@ -1,0 +1,21 @@
+{
+  "name": "@fiale-plus/pi-rogue-gateway",
+  "version": "0.1.0",
+  "description": "Standalone Rogue tokenomics and substrate routing prototype module.",
+  "private": true,
+  "type": "module",
+  "license": "MIT",
+  "scripts": {
+    "check": "tsc -p ../../tsconfig.json --noEmit",
+    "test": "cd ../.. && vitest run packages/rogue-gateway/src/*.test.ts"
+  },
+  "main": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "files": [
+    "src",
+    "README.md",
+    "package.json"
+  ]
+}
