@@ -565,7 +565,8 @@ lookupBytes: 500,
         "Context broker artifact: ctx://session/example",
         "Summary: copied placeholder",
         "Payload bytes: 10",
-        "Raw payload omitted from prompt. Use /pi-rogue-context lookup <handle> if exact evidence is needed.",
+        "Raw payload omitted from prompt. For exact evidence, call context_lookup with { \"handle\": \"ctx://session/example\" }.",
+        "Human/TUI command: /pi-rogue-context lookup ctx://session/example",
       ].join("\n") }],
       isError: false,
     }, ctx);
@@ -650,9 +651,9 @@ lookupBytes: 500,
   });
 
   it("rewrites large historical tool results in context to live broker handles", async () => {
-    const { pi, handlers, commands } = createPiMock();
+    const { pi, handlers, tools } = createPiMock();
     registerContextBrokerBeta(pi, { rewriteThresholdBytes: 40, lookupBytes: 500 });
-    const { ctx, notifications } = createCtx();
+    const { ctx } = createCtx();
     const raw = "RAW_TOOL_OUTPUT_" + "x".repeat(100);
 
     await runHandlers(handlers, "session_start", { type: "session_start" }, ctx);
@@ -666,12 +667,14 @@ lookupBytes: 500,
 
     const text = result.messages[1].content[0].text;
     const handle = text.match(/ctx:\/\/\S+/)?.[0];
+    expect(handle).toBeTruthy();
     expect(text).toContain("Context broker artifact: ctx://");
-    expect(text).toContain("Raw payload omitted from prompt");
+    expect(text).toContain(`call context_lookup with { "handle": "${handle}" }`);
+    expect(text).toContain(`/pi-rogue-context lookup ${handle}`);
     expect(text).not.toContain(raw);
 
-    await commands.get("pi-rogue-context").handler(`lookup ${handle}`, ctx);
-    expect(notifications.at(-1)?.message).toContain("RAW_TOOL_OUTPUT_");
+    const lookup = await tools.get("context_lookup").execute("lookup-large", { handle }, undefined, undefined, ctx);
+    expect(lookup.content[0].text).toContain("RAW_TOOL_OUTPUT_");
   });
 
   it("rewrites small tool results and leaves excluded bash outputs unchanged in context", async () => {
@@ -886,6 +889,17 @@ maxRecords: 1,
     }
   });
 
+  it("does not inject broker guidance when no handles are present", async () => {
+    const { pi, handlers } = createPiMock();
+    registerContextBrokerBeta(pi, { rewriteThresholdBytes: 1 });
+    const { ctx } = createCtx();
+
+    await runHandlers(handlers, "session_start", { type: "session_start" }, ctx);
+    const result = await handlers.get("before_agent_start")?.[0]({ systemPrompt: "base" }, ctx);
+
+    expect(result).toBeUndefined();
+  });
+
   it("injects a bounded broker brief without raw payload text", async () => {
     const { pi, handlers } = createPiMock();
     registerContextBrokerBeta(pi, {
@@ -909,6 +923,8 @@ briefBytes: 220,
     expect(Buffer.byteLength(result.systemPrompt, "utf8")).toBeLessThanOrEqual(Buffer.byteLength("base\n\n", "utf8") + 220 + 180);
     expect(result.systemPrompt).toContain("Context Broker");
     expect(result.systemPrompt).toContain("ctx://");
+    expect(result.systemPrompt).toContain("context_lookup");
+    expect(result.systemPrompt).toContain("/pi-rogue-context lookup is human/TUI only");
     expect(result.systemPrompt).not.toContain("SECRET_TOKEN");
   });
 });

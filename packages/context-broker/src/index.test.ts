@@ -287,8 +287,18 @@ describe("createInMemoryContextBroker", () => {
     expect(broker.lookup({ id: cold.id })).toEqual([]);
   });
 
-  it("renders a bounded prompt brief with lookup instructions", () => {
+  it("renders empty prompt briefs without fake handles", () => {
     const broker = createInMemoryContextBroker({ briefBytes: 180 });
+
+    const brief = broker.renderBrief({ sessionId: "empty" });
+
+    expect(brief).toContain("Context Broker");
+    expect(brief).toContain("context_lookup");
+    expect(brief).not.toContain("ctx://");
+  });
+
+  it("renders a bounded prompt brief with lookup instructions", () => {
+    const broker = createInMemoryContextBroker({ briefBytes: 500 });
     broker.publish({
       sessionId: "s",
       kind: "tool_output",
@@ -300,9 +310,10 @@ describe("createInMemoryContextBroker", () => {
 
     const brief = broker.renderBrief();
 
-    expect(Buffer.byteLength(brief, "utf8")).toBeLessThanOrEqual(180);
+    expect(Buffer.byteLength(brief, "utf8")).toBeLessThanOrEqual(500);
     expect(brief).toContain("Context Broker");
     expect(brief).toContain("ctx://session/s/tool_output/");
+    expect(brief).toContain("context_lookup");
   });
 
   it("enforces prompt brief budgets by UTF-8 byte length", () => {

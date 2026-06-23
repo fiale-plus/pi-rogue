@@ -382,7 +382,7 @@ export function createInMemoryContextBroker(options: ContextBrokerOptions = {}):
       ...warm.map(tierLine),
       cold.length ? "Cold:" : "",
       ...cold.map(tierLine),
-      "Lookup: use broker lookup by handle/path/tag/kind/session before replaying raw payloads.",
+      "Lookup: call context_lookup({handle}) for exact payloads.",
     ].filter(Boolean);
 
     return truncateUtf8(lines.join("\n"), budget);

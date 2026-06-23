@@ -314,7 +314,8 @@ function brokerPlaceholder(artifact: ContextArtifact): string {
     `Context broker artifact: ${artifact.handle}`,
     `Summary: ${artifact.summary}`,
     `Payload bytes: ${artifact.bytes}`,
-    "Raw payload omitted from prompt. Use /pi-rogue-context lookup <handle> if exact evidence is needed.",
+    `Raw payload omitted from prompt. For exact evidence, call context_lookup with { "handle": "${artifact.handle}" }.`,
+    `Human/TUI command: /pi-rogue-context lookup ${artifact.handle}`,
   ].join("\n");
 }
 
@@ -870,7 +871,7 @@ export async function registerContextBrokerBeta(pi: ExtensionAPI, options: Conte
       systemPrompt: [
         event.systemPrompt,
         brief,
-        "Context broker rule: use /pi-rogue-context lookup <handle> for exact evidence when a broker handle is relevant. Broker briefs are bounded summaries and never raw payload dumps.",
+        "Context broker rule: call context_lookup({handle:\"<ctx://...>\"}) for exact broker evidence. Briefs are summaries; /pi-rogue-context lookup is human/TUI only.",
       ].join("\n\n"),
     };
   });
