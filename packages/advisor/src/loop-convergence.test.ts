@@ -447,6 +447,160 @@ describe("advisor two-agent convergence", () => {
     expect(String(withoutFollowUp?.systemPrompt)).not.toContain("Advisor follow-up");
   });
 
+  it("clears prior task context before reviewing an explicit new issue", async () => {
+    const preflight = handlers.before_agent_start;
+    const agentEnd = handlers.agent_end;
+    expect(preflight?.length).toBe(1);
+    expect(agentEnd?.length).toBe(1);
+
+    await handlers.session_start?.[0]?.({}, ctx);
+
+    const stale = readAdvisorState();
+    stale.lastTask = "release @fiale-plus/pi-rogue 0.3.13";
+    stale.notes = [
+      "Release published: npm now shows @fiale-plus/pi-rogue@0.3.13. Installing locally now.",
+      "Publish succeeded, but local package still reports 0.3.12 after pi install.",
+    ];
+    stale.followUp = "Confirm the local pi install now resolves to @fiale-plus/pi-rogue@0.3.13.";
+    stale.followUpTask = stale.lastTask;
+    stale.reviewSignals = ["The local install initially reported 0.3.12, so verification is task-critical."];
+    stale.reviewSignalsTask = stale.lastTask;
+    writeFileSync(ADVISOR_STATE_PATH, JSON.stringify(stale, null, 2), "utf8");
+
+    completeSimpleMock.mockResolvedValue({
+      content: [{
+        type: "text",
+        text: JSON.stringify({
+          verdict: "on_track",
+          summary: "Issue 206 assessment is scoped to the new ticket",
+          actions: [],
+          checklist: [],
+          notify: true,
+        }),
+      }],
+    });
+
+    const nextPrompt = await preflight![0]({ systemPrompt: "SYS", prompt: "wdyt on https://github.com/fiale-plus/pi-rogue/issues/206" }, ctx);
+    expect(String(nextPrompt?.systemPrompt)).not.toContain("Advisor follow-up");
+    expect(String(nextPrompt?.systemPrompt)).not.toContain("0.3.12");
+    expect(String(nextPrompt?.systemPrompt)).not.toContain("local pi install");
+
+    const switched = readAdvisorState();
+    expect(switched.lastTask).toBe("wdyt on https://github.com/fiale-plus/pi-rogue/issues/206");
+    expect(switched.notes).toEqual([]);
+    expect(switched.followUp).toBe("");
+    expect(switched.reviewSignals).toEqual([]);
+
+    await agentEnd![0]({
+      messages: [
+        { role: "toolResult", content: "edit tool changed file" },
+        { role: "assistant", content: "Issue #206 looks well scoped as a narrow native log/context-lens ticket." },
+      ],
+    }, ctx);
+
+    const reviewPrompt = JSON.stringify(completeSimpleMock.mock.calls.at(-1)?.[1]?.messages ?? []);
+    expect(reviewPrompt).not.toContain("0.3.12");
+    expect(reviewPrompt).not.toContain("local package still reports");
+    expect(readAdvisorState().followUp).toBe("");
+  });
+
+  it("does not reset task context for generic same-issue continuation wording", async () => {
+    const preflight = handlers.before_agent_start;
+    expect(preflight?.length).toBe(1);
+
+    await handlers.session_start?.[0]?.({}, ctx);
+
+    const state = readAdvisorState();
+    state.lastTask = "fix the failing install issue";
+    state.notes = ["Local install still needs verification after npm publish."];
+    writeFileSync(ADVISOR_STATE_PATH, JSON.stringify(state, null, 2), "utf8");
+
+    await preflight![0]({ systemPrompt: "SYS", prompt: "check out the issue with the failing install" }, ctx);
+
+    expect(readAdvisorState().notes).toEqual(["Local install still needs verification after npm publish."]);
+  });
+
+  it("resets stale task context on explicit different issue id", async () => {
+    const preflight = handlers.before_agent_start;
+    expect(preflight?.length).toBe(1);
+
+    await handlers.session_start?.[0]?.({}, ctx);
+
+    const state = readAdvisorState();
+    state.lastTask = "wdyt on issue #20";
+    state.notes = ["Issue #20 requested follow-up checks on npm tags."];
+    state.followUp = "Issue #20 follow-up still requires action.";
+    state.followUpTask = state.lastTask;
+    writeFileSync(ADVISOR_STATE_PATH, JSON.stringify(state, null, 2), "utf8");
+
+    await preflight![0]({ systemPrompt: "SYS", prompt: "wdyt on #206" }, ctx);
+
+    expect(readAdvisorState().notes).toEqual([]);
+    expect(readAdvisorState().followUp).toBe("");
+    expect(readAdvisorState().followUpTask).toBeUndefined();
+  });
+
+  it("resets when same issue number appears in different repositories", async () => {
+    const preflight = handlers.before_agent_start;
+    expect(preflight?.length).toBe(1);
+
+    await handlers.session_start?.[0]?.({}, ctx);
+
+    const state = readAdvisorState();
+    state.lastTask = "wdyt on https://github.com/fiale-plus/pi-rogue/issues/206";
+    state.notes = ["Issue #206 in pi-rogue still needs local install verification."];
+    state.followUp = "Check local install status for this repository.";
+    state.followUpTask = state.lastTask;
+    writeFileSync(ADVISOR_STATE_PATH, JSON.stringify(state, null, 2), "utf8");
+
+    await preflight![0]({ systemPrompt: "SYS", prompt: "Check https://github.com/fiale-plus/pi-rogue-orchestration/issues/206" }, ctx);
+
+    expect(readAdvisorState().notes).toEqual([]);
+    expect(readAdvisorState().followUp).toBe("");
+    expect(readAdvisorState().followUpTask).toBeUndefined();
+  });
+
+  it("keeps context when issue id wording stays the same", async () => {
+    const preflight = handlers.before_agent_start;
+    expect(preflight?.length).toBe(1);
+
+    await handlers.session_start?.[0]?.({}, ctx);
+
+    const state = readAdvisorState();
+    state.lastTask = "fix issue 206 in the release flow";
+    state.notes = ["Issue 206 needs extra verification in install step."];
+    state.followUp = "Follow-up: confirm npm install now points to local package.";
+    state.followUpTask = state.lastTask;
+    writeFileSync(ADVISOR_STATE_PATH, JSON.stringify(state, null, 2), "utf8");
+
+    const preflightPrompt = await preflight![0]({ systemPrompt: "SYS", prompt: "continue #206" }, ctx);
+
+    expect(readAdvisorState().notes).toEqual(["Issue 206 needs extra verification in install step."]);
+    expect(String(preflightPrompt?.systemPrompt)).toContain("Follow-up: confirm npm install now points to local package.");
+  });
+
+  it("keeps context when bare issue wording becomes explicit URL", async () => {
+    const preflight = handlers.before_agent_start;
+    expect(preflight?.length).toBe(1);
+
+    await handlers.session_start?.[0]?.({}, ctx);
+
+    const state = readAdvisorState();
+    state.lastTask = "review issue 206";
+    state.notes = ["Issue 206 still has verification pending."];
+    state.followUp = "Follow-up: check badge status for issue 206";
+    state.followUpTask = state.lastTask;
+    writeFileSync(ADVISOR_STATE_PATH, JSON.stringify(state, null, 2), "utf8");
+
+    const preflightPrompt = await preflight![0]({
+      systemPrompt: "SYS",
+      prompt: "Please re-check https://github.com/fiale-plus/pi-rogue/issues/206",
+    }, ctx);
+
+    expect(readAdvisorState().notes).toEqual(["Issue 206 still has verification pending."]);
+    expect(String(preflightPrompt?.systemPrompt)).toContain("Follow-up: check badge status for issue 206");
+  });
+
   it("records on-track reviews silently instead of emitting repetitive continue hints", async () => {
     const preflight = handlers.before_agent_start;
     const turnEnd = handlers.turn_end;

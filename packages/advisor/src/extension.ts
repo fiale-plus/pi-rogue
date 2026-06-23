@@ -532,11 +532,106 @@ export function isTaskContinuation(previousTask: string, nextTask: string): bool
   const next = normalizeTask(nextTask);
   if (!prev || !next) return true;
   if (prev === next) return true;
+
+  const prevRefs = githubIssueRefs(prev);
+  const nextRefs = githubIssueRefs(next);
+  const prevRepoRefs = githubIssueRepoRefs(prev);
+  const nextRepoRefs = githubIssueRepoRefs(next);
+
+  if (prevRepoRefs.length > 0 && nextRepoRefs.length > 0) {
+    if (!nextRepoRefs.some((ref) => prevRepoRefs.includes(ref))) {
+      return false;
+    }
+  }
+
+  if (prevRefs.length > 0 && nextRefs.length > 0) {
+    const numberLikeRefs = (refs: string[]) => refs.filter((ref) => /^issue:\d+$/.test(ref));
+    const prevNumbers = numberLikeRefs(prevRefs);
+    const nextNumbers = numberLikeRefs(nextRefs);
+    if (prevNumbers.length > 0 && nextNumbers.length > 0 && prevNumbers.some((ref) => nextNumbers.includes(ref))) {
+      return true;
+    }
+  }
+
   return prev.includes(next) || next.includes(prev);
 }
 
 function normalizeTask(task: string): string {
   return squish(task, 200).toLowerCase();
+}
+
+function githubIssueRefs(task: string): string[] {
+  const text = normalizeTask(task);
+  const refs = new Set<string>();
+  for (const match of text.matchAll(/github\.com\/([^\s/]+\/[^\s/)]+)\/issues\/(\d+)/g)) {
+    const repo = match[1].toLowerCase();
+    refs.add(`issue:${repo}:${match[2]}`);
+    refs.add(`issue:${match[2]}`);
+  }
+  for (const match of text.matchAll(/(?:^|\s)#(\d+)(?=$|\s|[),.;:])/g)) refs.add(`issue:${match[1]}`);
+  for (const match of text.matchAll(/(?:^|\s)(?:issue|ticket)\s+(\d+)(?=$|\s|[),.;:])/g)) refs.add(`issue:${match[1]}`);
+  return [...refs];
+}
+
+function githubIssueRepoRefs(task: string): string[] {
+  const text = normalizeTask(task);
+  const repos = new Set<string>();
+  for (const match of text.matchAll(/github\.com\/([^\s/]+\/[^\s/)]+)\/issues\/(\d+)/g)) {
+    repos.add(`issue:${match[1].toLowerCase()}:${match[2]}`);
+  }
+  return [...repos];
+}
+
+function looksLikeExplicitTaskSwitch(previousTask: string, nextTask: string): boolean {
+  const prev = normalizeTask(previousTask);
+  const next = normalizeTask(nextTask);
+  if (!prev || !next) return false;
+  if (/\b(?:previous|prior|last|compare|carry over|same ticket|same issue)\b/.test(next)) return false;
+
+  const prevRefs = githubIssueRefs(prev);
+  const nextRefs = githubIssueRefs(next);
+  const prevRepoRefs = githubIssueRepoRefs(prev);
+  const nextRepoRefs = githubIssueRepoRefs(next);
+
+  if (nextRepoRefs.length > 0 && prevRepoRefs.length > 0) {
+    if (!nextRepoRefs.every((ref) => prevRepoRefs.includes(ref))) {
+      return true;
+    }
+  }
+
+  if (nextRefs.length > 0) {
+    if (prevRefs.length === 0) return true;
+    const numberLikeRefs = (refs: string[]) => refs.filter((ref) => /^issue:\d+$/.test(ref));
+    const prevNumbers = numberLikeRefs(prevRefs);
+    const nextNumbers = numberLikeRefs(nextRefs);
+    const sharedNumber = nextNumbers.some((ref) => prevNumbers.includes(ref));
+    if (sharedNumber) return false;
+    return nextRefs.some((ref) => !prevRefs.includes(ref));
+  }
+
+  if (isTaskContinuation(prev, next)) return false;
+
+  return /\b(?:next|new|another)\s+(?:ticket|issue|task)\b/.test(next);
+}
+
+function resetTaskScopedStateForSwitch(state: SessionState): void {
+  state.notes = [];
+  state.files = [];
+  state.errors = [];
+  state.followUp = "";
+  state.followUpTask = undefined;
+  state.reviewSignals = [];
+  state.reviewSignalsTask = undefined;
+  state.reviewControl = {
+    ...state.reviewControl,
+    status: "consumed",
+    pending: false,
+    consumed: true,
+    running: false,
+    lastDecision: "defer",
+    lastReason: "task switched",
+    lastAppliedAt: new Date().toISOString(),
+  };
 }
 
 function reviewMaterialSignature(state: SessionState, delta: string, meta: ReviewMaterialMeta): string {
@@ -1775,11 +1870,12 @@ async function doReview(pi: ExtensionAPI, ctx: any, trigger: string, delta: stri
       ...findMissingReviewArtifacts(cwd, delta, b, brokerBrief),
     ])];
     if (missingArtifacts.length > 0) {
+      const missingSummary = missingArtifacts.slice(0, 4).join(", ");
       finalDecision = "defer";
-      finalReason = `missing review artifacts: ${missingArtifacts.slice(0, 4).join(", ")}`;
+      finalReason = `artifact preflight missing references: ${missingSummary}`;
       markReviewApplied(state, signature, trigger, finalDecision, finalReason, true);
       persistReviewState(state, true);
-      ctx.ui?.notify?.(`Advisor review skipped: missing artifacts ${missingArtifacts.slice(0, 4).join(", ")}`, "warning");
+      ctx.ui?.notify?.(`Advisor artifact preflight blocked model review: missing referenced files ${missingSummary}`, "warning");
       finalized = true;
       return;
     }
@@ -1951,7 +2047,10 @@ export function registerAdvisor(pi: ExtensionAPI): void {
     }
     setPiRogueStatus(ctx, cfg, state);
     const prompt = typeof event.prompt === "string" && event.prompt.trim() ? squish(event.prompt, 1000) : "";
-    if (prompt) state.lastTask = prompt;
+    if (prompt) {
+      if (looksLikeExplicitTaskSwitch(state.lastTask, prompt)) resetTaskScopedStateForSwitch(state);
+      state.lastTask = prompt;
+    }
     const currentTask = state.lastTask || "";
     const briefText = brief(state);
     const brokerBrief = contextBrokerBrief(pi);
