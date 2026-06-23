@@ -504,6 +504,103 @@ describe("advisor two-agent convergence", () => {
     expect(readAdvisorState().followUp).toBe("");
   });
 
+  it("does not reset task context for generic same-issue continuation wording", async () => {
+    const preflight = handlers.before_agent_start;
+    expect(preflight?.length).toBe(1);
+
+    await handlers.session_start?.[0]?.({}, ctx);
+
+    const state = readAdvisorState();
+    state.lastTask = "fix the failing install issue";
+    state.notes = ["Local install still needs verification after npm publish."];
+    writeFileSync(ADVISOR_STATE_PATH, JSON.stringify(state, null, 2), "utf8");
+
+    await preflight![0]({ systemPrompt: "SYS", prompt: "check out the issue with the failing install" }, ctx);
+
+    expect(readAdvisorState().notes).toEqual(["Local install still needs verification after npm publish."]);
+  });
+
+  it("resets stale task context on explicit different issue id", async () => {
+    const preflight = handlers.before_agent_start;
+    expect(preflight?.length).toBe(1);
+
+    await handlers.session_start?.[0]?.({}, ctx);
+
+    const state = readAdvisorState();
+    state.lastTask = "wdyt on issue #20";
+    state.notes = ["Issue #20 requested follow-up checks on npm tags."];
+    state.followUp = "Issue #20 follow-up still requires action.";
+    state.followUpTask = state.lastTask;
+    writeFileSync(ADVISOR_STATE_PATH, JSON.stringify(state, null, 2), "utf8");
+
+    await preflight![0]({ systemPrompt: "SYS", prompt: "wdyt on #206" }, ctx);
+
+    expect(readAdvisorState().notes).toEqual([]);
+    expect(readAdvisorState().followUp).toBe("");
+    expect(readAdvisorState().followUpTask).toBeUndefined();
+  });
+
+  it("resets when same issue number appears in different repositories", async () => {
+    const preflight = handlers.before_agent_start;
+    expect(preflight?.length).toBe(1);
+
+    await handlers.session_start?.[0]?.({}, ctx);
+
+    const state = readAdvisorState();
+    state.lastTask = "wdyt on https://github.com/fiale-plus/pi-rogue/issues/206";
+    state.notes = ["Issue #206 in pi-rogue still needs local install verification."];
+    state.followUp = "Check local install status for this repository.";
+    state.followUpTask = state.lastTask;
+    writeFileSync(ADVISOR_STATE_PATH, JSON.stringify(state, null, 2), "utf8");
+
+    await preflight![0]({ systemPrompt: "SYS", prompt: "Check https://github.com/fiale-plus/pi-rogue-orchestration/issues/206" }, ctx);
+
+    expect(readAdvisorState().notes).toEqual([]);
+    expect(readAdvisorState().followUp).toBe("");
+    expect(readAdvisorState().followUpTask).toBeUndefined();
+  });
+
+  it("keeps context when issue id wording stays the same", async () => {
+    const preflight = handlers.before_agent_start;
+    expect(preflight?.length).toBe(1);
+
+    await handlers.session_start?.[0]?.({}, ctx);
+
+    const state = readAdvisorState();
+    state.lastTask = "fix issue 206 in the release flow";
+    state.notes = ["Issue 206 needs extra verification in install step."];
+    state.followUp = "Follow-up: confirm npm install now points to local package.";
+    state.followUpTask = state.lastTask;
+    writeFileSync(ADVISOR_STATE_PATH, JSON.stringify(state, null, 2), "utf8");
+
+    const preflightPrompt = await preflight![0]({ systemPrompt: "SYS", prompt: "continue #206" }, ctx);
+
+    expect(readAdvisorState().notes).toEqual(["Issue 206 needs extra verification in install step."]);
+    expect(String(preflightPrompt?.systemPrompt)).toContain("Follow-up: confirm npm install now points to local package.");
+  });
+
+  it("keeps context when bare issue wording becomes explicit URL", async () => {
+    const preflight = handlers.before_agent_start;
+    expect(preflight?.length).toBe(1);
+
+    await handlers.session_start?.[0]?.({}, ctx);
+
+    const state = readAdvisorState();
+    state.lastTask = "review issue 206";
+    state.notes = ["Issue 206 still has verification pending."];
+    state.followUp = "Follow-up: check badge status for issue 206";
+    state.followUpTask = state.lastTask;
+    writeFileSync(ADVISOR_STATE_PATH, JSON.stringify(state, null, 2), "utf8");
+
+    const preflightPrompt = await preflight![0]({
+      systemPrompt: "SYS",
+      prompt: "Please re-check https://github.com/fiale-plus/pi-rogue/issues/206",
+    }, ctx);
+
+    expect(readAdvisorState().notes).toEqual(["Issue 206 still has verification pending."]);
+    expect(String(preflightPrompt?.systemPrompt)).toContain("Follow-up: check badge status for issue 206");
+  });
+
   it("records on-track reviews silently instead of emitting repetitive continue hints", async () => {
     const preflight = handlers.before_agent_start;
     const turnEnd = handlers.turn_end;

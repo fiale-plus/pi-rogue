@@ -532,6 +532,27 @@ export function isTaskContinuation(previousTask: string, nextTask: string): bool
   const next = normalizeTask(nextTask);
   if (!prev || !next) return true;
   if (prev === next) return true;
+
+  const prevRefs = githubIssueRefs(prev);
+  const nextRefs = githubIssueRefs(next);
+  const prevRepoRefs = githubIssueRepoRefs(prev);
+  const nextRepoRefs = githubIssueRepoRefs(next);
+
+  if (prevRepoRefs.length > 0 && nextRepoRefs.length > 0) {
+    if (!nextRepoRefs.some((ref) => prevRepoRefs.includes(ref))) {
+      return false;
+    }
+  }
+
+  if (prevRefs.length > 0 && nextRefs.length > 0) {
+    const numberLikeRefs = (refs: string[]) => refs.filter((ref) => /^issue:\d+$/.test(ref));
+    const prevNumbers = numberLikeRefs(prevRefs);
+    const nextNumbers = numberLikeRefs(nextRefs);
+    if (prevNumbers.length > 0 && nextNumbers.length > 0 && prevNumbers.some((ref) => nextNumbers.includes(ref))) {
+      return true;
+    }
+  }
+
   return prev.includes(next) || next.includes(prev);
 }
 
@@ -542,23 +563,55 @@ function normalizeTask(task: string): string {
 function githubIssueRefs(task: string): string[] {
   const text = normalizeTask(task);
   const refs = new Set<string>();
-  for (const match of text.matchAll(/github\.com\/[^\s)]+\/issues\/(\d+)/g)) refs.add(`issue:${match[1]}`);
+  for (const match of text.matchAll(/github\.com\/([^\s/]+\/[^\s/)]+)\/issues\/(\d+)/g)) {
+    const repo = match[1].toLowerCase();
+    refs.add(`issue:${repo}:${match[2]}`);
+    refs.add(`issue:${match[2]}`);
+  }
   for (const match of text.matchAll(/(?:^|\s)#(\d+)(?=$|\s|[),.;:])/g)) refs.add(`issue:${match[1]}`);
+  for (const match of text.matchAll(/(?:^|\s)(?:issue|ticket)\s+(\d+)(?=$|\s|[),.;:])/g)) refs.add(`issue:${match[1]}`);
   return [...refs];
+}
+
+function githubIssueRepoRefs(task: string): string[] {
+  const text = normalizeTask(task);
+  const repos = new Set<string>();
+  for (const match of text.matchAll(/github\.com\/([^\s/]+\/[^\s/)]+)\/issues\/(\d+)/g)) {
+    repos.add(`issue:${match[1].toLowerCase()}:${match[2]}`);
+  }
+  return [...repos];
 }
 
 function looksLikeExplicitTaskSwitch(previousTask: string, nextTask: string): boolean {
   const prev = normalizeTask(previousTask);
   const next = normalizeTask(nextTask);
-  if (!prev || !next || isTaskContinuation(prev, next)) return false;
+  if (!prev || !next) return false;
   if (/\b(?:previous|prior|last|compare|carry over|same ticket|same issue)\b/.test(next)) return false;
 
   const prevRefs = githubIssueRefs(prev);
   const nextRefs = githubIssueRefs(next);
-  if (nextRefs.length > 0 && (prevRefs.length === 0 || nextRefs.some((ref) => !prevRefs.includes(ref)))) return true;
+  const prevRepoRefs = githubIssueRepoRefs(prev);
+  const nextRepoRefs = githubIssueRepoRefs(next);
 
-  return /\b(?:next|new|another)\s+(?:ticket|issue|task)\b/.test(next)
-    || /\b(?:look into|check out|wdyt on|what do you think (?:on|about))\b.*\b(?:issue|ticket|github\.com\/[^\s)]+\/issues\/)\b/.test(next);
+  if (nextRepoRefs.length > 0 && prevRepoRefs.length > 0) {
+    if (!nextRepoRefs.every((ref) => prevRepoRefs.includes(ref))) {
+      return true;
+    }
+  }
+
+  if (nextRefs.length > 0) {
+    if (prevRefs.length === 0) return true;
+    const numberLikeRefs = (refs: string[]) => refs.filter((ref) => /^issue:\d+$/.test(ref));
+    const prevNumbers = numberLikeRefs(prevRefs);
+    const nextNumbers = numberLikeRefs(nextRefs);
+    const sharedNumber = nextNumbers.some((ref) => prevNumbers.includes(ref));
+    if (sharedNumber) return false;
+    return nextRefs.some((ref) => !prevRefs.includes(ref));
+  }
+
+  if (isTaskContinuation(prev, next)) return false;
+
+  return /\b(?:next|new|another)\s+(?:ticket|issue|task)\b/.test(next);
 }
 
 function resetTaskScopedStateForSwitch(state: SessionState): void {
