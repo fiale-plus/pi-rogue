@@ -85,6 +85,7 @@ describe("context broker extension enablement", () => {
       "prune",
     ]);
     expect(command.getArgumentCompletions("config threshold ")?.map((item: any) => item.value)).toContain("config threshold 8192");
+    expect(command.getArgumentCompletions("config lenses ")?.map((item: any) => item.value)).toEqual(expect.arrayContaining(["config lenses on", "config lenses off"]));
   });
 
   it("backfills current branch toolResult and bashExecution entries idempotently", async () => {
@@ -650,6 +651,56 @@ lookupBytes: 500,
     expect(notifications.at(-1)?.message).toContain("must be an integer >= 2048 bytes");
   });
 
+  it("defaults context lenses to off without explicit flag", async () => {
+    const oldEnv = process.env.PI_CONTEXT_BROKER_CONTEXT_LENSES_ENABLED;
+    try {
+      delete process.env.PI_CONTEXT_BROKER_CONTEXT_LENSES_ENABLED;
+      const { pi, handlers } = createPiMock();
+      registerContextBrokerBeta(pi, { rewriteThresholdBytes: 40, contextLensesEnabled: false, lookupBytes: 500 });
+      const { ctx } = createCtx();
+      const raw = "npm ERR! code ENOTFOUND\nnpm ERR! errno ENOTFOUND\n";
+
+      await runHandlers(handlers, "session_start", { type: "session_start" }, ctx);
+      const result = await handlers.get("context")?.[0]({
+        type: "context",
+        messages: [
+          { role: "assistant", content: [{ type: "toolCall", id: "call-large", name: "bash", arguments: { command: "npm install" } }] },
+          { role: "toolResult", toolCallId: "call-large", toolName: "bash", content: [{ type: "text", text: raw }], isError: true, timestamp: 1 },
+        ],
+      }, ctx);
+      const text = result.messages[1].content[0].text;
+      expect(text).not.toContain("Package-manager lens");
+    } finally {
+      if (oldEnv === undefined) delete process.env.PI_CONTEXT_BROKER_CONTEXT_LENSES_ENABLED;
+      else process.env.PI_CONTEXT_BROKER_CONTEXT_LENSES_ENABLED = oldEnv;
+    }
+  });
+
+  it("can turn lenses on via environment variable", async () => {
+    const oldEnv = process.env.PI_CONTEXT_BROKER_CONTEXT_LENSES_ENABLED;
+    try {
+      process.env.PI_CONTEXT_BROKER_CONTEXT_LENSES_ENABLED = "true";
+      const { pi, handlers } = createPiMock();
+      registerContextBrokerBeta(pi, { rewriteThresholdBytes: 40, lookupBytes: 500 });
+      const { ctx } = createCtx();
+      const raw = "ERROR\nTrace\n" + "x".repeat(200);
+
+      await runHandlers(handlers, "session_start", { type: "session_start" }, ctx);
+      const result = await handlers.get("context")?.[0]({
+        type: "context",
+        messages: [
+          { role: "assistant", content: [{ type: "toolCall", id: "call-large", name: "bash", arguments: { command: "cat /var/log/app.log" } }] },
+          { role: "toolResult", toolCallId: "call-large", toolName: "bash", content: [{ type: "text", text: raw }], isError: true, timestamp: 1 },
+        ],
+      }, ctx);
+
+      expect(result.messages[1].content[0].text).toContain("Log/error lens");
+    } finally {
+      if (oldEnv === undefined) delete process.env.PI_CONTEXT_BROKER_CONTEXT_LENSES_ENABLED;
+      else process.env.PI_CONTEXT_BROKER_CONTEXT_LENSES_ENABLED = oldEnv;
+    }
+  });
+
   it("rewrites large historical tool results in context to live broker handles", async () => {
     const { pi, handlers, tools } = createPiMock();
     registerContextBrokerBeta(pi, { rewriteThresholdBytes: 40, lookupBytes: 500 });
@@ -694,6 +745,119 @@ lookupBytes: 500,
 
     expect(result?.messages[0].content?.[0]?.text).toContain("Context broker artifact");
     expect(result?.messages[1]).toMatchObject({ role: "bashExecution", output: secret });
+  });
+
+  it("uses context lenses for package-manager errors when enabled", async () => {
+    const { pi, handlers, commands } = createPiMock();
+    registerContextBrokerBeta(pi, { rewriteThresholdBytes: 40, contextLensesEnabled: true, lookupBytes: 500 });
+    const { ctx, notifications } = createCtx();
+    const raw = [
+      "npm ERR! code ENOTFOUND",
+      "npm ERR! errno ENOTFOUND",
+      "npm ERR! network request to https://registry.npmjs.org/dep failed",
+      "error Command failed with exit code 1.",
+      "See https://docs.npmjs.com/cli/v10/commands/npm-install for more information.",
+    ].join("\n");
+
+    await runHandlers(handlers, "session_start", { type: "session_start" }, ctx);
+    const result = await handlers.get("context")?.[0]({
+      type: "context",
+      messages: [
+        { role: "assistant", content: [{ type: "toolCall", id: "call-large", name: "bash", arguments: { command: "npm install" } }] },
+        { role: "toolResult", toolCallId: "call-large", toolName: "bash", content: [{ type: "text", text: raw }], isError: true, timestamp: 1 },
+      ],
+    }, ctx);
+
+    const text = result.messages[1].content[0].text;
+    const handle = text.match(/ctx:\/\/\S+/)?.[0];
+    expect(text).toContain("Package-manager lens");
+    expect(text).toContain("source=npm install");
+    expect(text).toContain("ctx://");
+
+    await commands.get("pi-rogue-context").handler(`lookup ${handle}`, ctx);
+    expect(notifications.at(-1)?.message).toContain("npm ERR!");
+  });
+
+  it("does not apply lenses when disabled by default", async () => {
+    const { pi, handlers } = createPiMock();
+    registerContextBrokerBeta(pi, { rewriteThresholdBytes: 40, contextLensesEnabled: false, lookupBytes: 500 });
+    const { ctx } = createCtx();
+    const raw = [
+      "npm ERR! code ENOTFOUND",
+      "npm ERR! errno ENOTFOUND",
+      "npm ERR! network request to https://registry.npmjs.org/dep failed",
+    ].join("\n");
+
+    await runHandlers(handlers, "session_start", { type: "session_start" }, ctx);
+    const result = await handlers.get("context")?.[0]({
+      type: "context",
+      messages: [
+        { role: "assistant", content: [{ type: "toolCall", id: "call-large", name: "bash", arguments: { command: "npm install" } }] },
+        { role: "toolResult", toolCallId: "call-large", toolName: "bash", content: [{ type: "text", text: raw }], isError: true, timestamp: 1 },
+      ],
+    }, ctx);
+
+    const text = result.messages[1].content[0].text;
+    expect(text).toContain("Context broker artifact: ctx://");
+    expect(text).toContain("Raw payload omitted from prompt");
+    expect(text).not.toContain("Package-manager lens");
+    expect(text).not.toContain("npm ERR!");
+  });
+
+  it("emits bounded log/error lens snapshots for large error logs", async () => {
+    const { pi, handlers, commands } = createPiMock();
+    registerContextBrokerBeta(pi, { rewriteThresholdBytes: 40, contextLensesEnabled: true, lookupBytes: 5000, searchBytes: 5000 });
+    const { ctx, notifications } = createCtx();
+    const raw = Array.from({ length: 80 }, (_, index) => `ERROR Trace ${index}: failed to process component`);
+    const errorLog = raw.join("\n");
+
+    await runHandlers(handlers, "session_start", { type: "session_start" }, ctx);
+    const result = await handlers.get("context")?.[0]({
+      type: "context",
+      messages: [
+        { role: "assistant", content: [{ type: "toolCall", id: "log-large", name: "bash", arguments: { command: "cat /var/log/app.log" } }] },
+        { role: "toolResult", toolCallId: "log-large", toolName: "bash", content: [{ type: "text", text: errorLog }], isError: true, timestamp: 3 },
+      ],
+    }, ctx);
+
+    const text = result.messages[1].content[0].text;
+    const handle = commands.get("pi-rogue-context").getArgumentCompletions("lookup ")?.[0]?.value.replace(/^lookup /, "");
+    expect(text).toContain("Log/error lens");
+    expect(text).toContain("source=cat /var/log/app.log");
+    expect(text).toContain("Lens view (max 4096 bytes):");
+    expect(Buffer.byteLength(text)).toBeLessThanOrEqual(5000);
+
+    await commands.get("pi-rogue-context").handler(`lookup ${handle}`, ctx);
+    expect(notifications.at(-1)?.message).toContain("ERROR Trace 0");
+  });
+
+  it("can enable lenses via slash command config", async () => {
+    const oldHome = process.env.HOME;
+    const testHome = mkdtempSync(join(tmpdir(), "ctx-broker-config-"));
+    try {
+      process.env.HOME = testHome;
+      const { pi, handlers, commands } = createPiMock();
+      registerContextBrokerBeta(pi, { rewriteThresholdBytes: 40, lookupBytes: 500 });
+      const { ctx } = createCtx();
+      const raw = "ERROR at startup\nFAIL at component A\n" + "x".repeat(100);
+
+      await runHandlers(handlers, "session_start", { type: "session_start" }, ctx);
+      await commands.get("pi-rogue-context").handler("config lenses on", ctx);
+
+      const result = await handlers.get("context")?.[0]({
+        type: "context",
+        messages: [
+          { role: "assistant", content: [{ type: "toolCall", id: "call-large", name: "bash", arguments: { command: "tail -n 200 /var/log/sys.log" } }] },
+          { role: "toolResult", toolCallId: "call-large", toolName: "bash", content: [{ type: "text", text: raw }], isError: true, timestamp: 1 },
+        ],
+      }, ctx);
+
+      expect(result.messages[1].content[0].text).toContain("Log/error lens");
+    } finally {
+      if (oldHome === undefined) delete process.env.HOME;
+      else process.env.HOME = oldHome;
+      rmSync(testHome, { recursive: true, force: true });
+    }
   });
 
   it("does not collapse repeated bash rewrites for the same command and timestamp", async () => {
