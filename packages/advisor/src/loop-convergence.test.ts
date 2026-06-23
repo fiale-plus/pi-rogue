@@ -447,6 +447,63 @@ describe("advisor two-agent convergence", () => {
     expect(String(withoutFollowUp?.systemPrompt)).not.toContain("Advisor follow-up");
   });
 
+  it("clears prior task context before reviewing an explicit new issue", async () => {
+    const preflight = handlers.before_agent_start;
+    const agentEnd = handlers.agent_end;
+    expect(preflight?.length).toBe(1);
+    expect(agentEnd?.length).toBe(1);
+
+    await handlers.session_start?.[0]?.({}, ctx);
+
+    const stale = readAdvisorState();
+    stale.lastTask = "release @fiale-plus/pi-rogue 0.3.13";
+    stale.notes = [
+      "Release published: npm now shows @fiale-plus/pi-rogue@0.3.13. Installing locally now.",
+      "Publish succeeded, but local package still reports 0.3.12 after pi install.",
+    ];
+    stale.followUp = "Confirm the local pi install now resolves to @fiale-plus/pi-rogue@0.3.13.";
+    stale.followUpTask = stale.lastTask;
+    stale.reviewSignals = ["The local install initially reported 0.3.12, so verification is task-critical."];
+    stale.reviewSignalsTask = stale.lastTask;
+    writeFileSync(ADVISOR_STATE_PATH, JSON.stringify(stale, null, 2), "utf8");
+
+    completeSimpleMock.mockResolvedValue({
+      content: [{
+        type: "text",
+        text: JSON.stringify({
+          verdict: "on_track",
+          summary: "Issue 206 assessment is scoped to the new ticket",
+          actions: [],
+          checklist: [],
+          notify: true,
+        }),
+      }],
+    });
+
+    const nextPrompt = await preflight![0]({ systemPrompt: "SYS", prompt: "wdyt on https://github.com/fiale-plus/pi-rogue/issues/206" }, ctx);
+    expect(String(nextPrompt?.systemPrompt)).not.toContain("Advisor follow-up");
+    expect(String(nextPrompt?.systemPrompt)).not.toContain("0.3.12");
+    expect(String(nextPrompt?.systemPrompt)).not.toContain("local pi install");
+
+    const switched = readAdvisorState();
+    expect(switched.lastTask).toBe("wdyt on https://github.com/fiale-plus/pi-rogue/issues/206");
+    expect(switched.notes).toEqual([]);
+    expect(switched.followUp).toBe("");
+    expect(switched.reviewSignals).toEqual([]);
+
+    await agentEnd![0]({
+      messages: [
+        { role: "toolResult", content: "edit tool changed file" },
+        { role: "assistant", content: "Issue #206 looks well scoped as a narrow native log/context-lens ticket." },
+      ],
+    }, ctx);
+
+    const reviewPrompt = JSON.stringify(completeSimpleMock.mock.calls.at(-1)?.[1]?.messages ?? []);
+    expect(reviewPrompt).not.toContain("0.3.12");
+    expect(reviewPrompt).not.toContain("local package still reports");
+    expect(readAdvisorState().followUp).toBe("");
+  });
+
   it("records on-track reviews silently instead of emitting repetitive continue hints", async () => {
     const preflight = handlers.before_agent_start;
     const turnEnd = handlers.turn_end;

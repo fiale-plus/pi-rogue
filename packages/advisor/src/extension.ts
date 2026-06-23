@@ -539,6 +539,48 @@ function normalizeTask(task: string): string {
   return squish(task, 200).toLowerCase();
 }
 
+function githubIssueRefs(task: string): string[] {
+  const text = normalizeTask(task);
+  const refs = new Set<string>();
+  for (const match of text.matchAll(/github\.com\/[^\s)]+\/issues\/(\d+)/g)) refs.add(`issue:${match[1]}`);
+  for (const match of text.matchAll(/(?:^|\s)#(\d+)(?=$|\s|[),.;:])/g)) refs.add(`issue:${match[1]}`);
+  return [...refs];
+}
+
+function looksLikeExplicitTaskSwitch(previousTask: string, nextTask: string): boolean {
+  const prev = normalizeTask(previousTask);
+  const next = normalizeTask(nextTask);
+  if (!prev || !next || isTaskContinuation(prev, next)) return false;
+  if (/\b(?:previous|prior|last|compare|carry over|same ticket|same issue)\b/.test(next)) return false;
+
+  const prevRefs = githubIssueRefs(prev);
+  const nextRefs = githubIssueRefs(next);
+  if (nextRefs.length > 0 && (prevRefs.length === 0 || nextRefs.some((ref) => !prevRefs.includes(ref)))) return true;
+
+  return /\b(?:next|new|another)\s+(?:ticket|issue|task)\b/.test(next)
+    || /\b(?:look into|check out|wdyt on|what do you think (?:on|about))\b.*\b(?:issue|ticket|github\.com\/[^\s)]+\/issues\/)\b/.test(next);
+}
+
+function resetTaskScopedStateForSwitch(state: SessionState): void {
+  state.notes = [];
+  state.files = [];
+  state.errors = [];
+  state.followUp = "";
+  state.followUpTask = undefined;
+  state.reviewSignals = [];
+  state.reviewSignalsTask = undefined;
+  state.reviewControl = {
+    ...state.reviewControl,
+    status: "consumed",
+    pending: false,
+    consumed: true,
+    running: false,
+    lastDecision: "defer",
+    lastReason: "task switched",
+    lastAppliedAt: new Date().toISOString(),
+  };
+}
+
 function reviewMaterialSignature(state: SessionState, delta: string, meta: ReviewMaterialMeta): string {
   const signals = normalizeReviewSignals(meta.materialSignals);
   return hash(
@@ -1952,7 +1994,10 @@ export function registerAdvisor(pi: ExtensionAPI): void {
     }
     setPiRogueStatus(ctx, cfg, state);
     const prompt = typeof event.prompt === "string" && event.prompt.trim() ? squish(event.prompt, 1000) : "";
-    if (prompt) state.lastTask = prompt;
+    if (prompt) {
+      if (looksLikeExplicitTaskSwitch(state.lastTask, prompt)) resetTaskScopedStateForSwitch(state);
+      state.lastTask = prompt;
+    }
     const currentTask = state.lastTask || "";
     const briefText = brief(state);
     const brokerBrief = contextBrokerBrief(pi);
