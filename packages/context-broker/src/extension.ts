@@ -24,6 +24,7 @@ export interface ContextBrokerBetaOptions {
   warmToColdMs?: number;
   durable?: boolean;
   storeDir?: string;
+  contextLensesEnabled?: boolean;
 }
 
 type UiLike = { notify(message: string, type?: "info" | "warning" | "error"): void; setStatus?(key: string, text: string | undefined): void };
@@ -35,7 +36,10 @@ const DEFAULT_SEARCH_BYTES = 2_000;
 const DEFAULT_REWRITE_THRESHOLD_BYTES = 8 * 1024;
 const MIN_REWRITE_THRESHOLD_BYTES = 2 * 1024;
 const REWRITE_THRESHOLD_ENV = "PI_CONTEXT_BROKER_REWRITE_THRESHOLD_BYTES";
+const CONTEXT_LENSES_ENABLED_ENV = "PI_CONTEXT_BROKER_CONTEXT_LENSES_ENABLED";
 const REWRITE_THRESHOLD_PRESETS = [2 * 1024, 4 * 1024, 8 * 1024, 16 * 1024, 32 * 1024];
+const LOG_ERROR_LENS_MAX_BYTES = 4 * 1024;
+const PACKAGE_LENS_MAX_BYTES = 2 * 1024;
 const DEFAULT_TTL_MS = 24 * 60 * 60 * 1000;
 const DEFAULT_HOT_TO_WARM_MS = 2 * 60 * 60 * 1000;
 const DEFAULT_WARM_TO_COLD_MS = 12 * 60 * 60 * 1000;
@@ -54,6 +58,15 @@ function parseNonNegativeInt(value: unknown): number | undefined {
   return Number.isFinite(parsed) && parsed >= 0 ? parsed : undefined;
 }
 
+function parseBooleanish(value: unknown): boolean | undefined {
+  if (typeof value === "boolean") return value;
+  if (typeof value !== "string") return undefined;
+  const normalized = value.trim().toLowerCase();
+  if (["1", "true", "yes", "on", "enabled"].includes(normalized)) return true;
+  if (["0", "false", "no", "off", "disabled"].includes(normalized)) return false;
+  return undefined;
+}
+
 function envNonNegativeInt(name: string): number | undefined {
   return parseNonNegativeInt(process.env[name]);
 }
@@ -67,21 +80,50 @@ function contextBrokerConfigPath(_ctx: Pick<ExtensionContext, "cwd"> | { cwd?: u
   return join(homedir(), ".pi", "agent", "pi-rogue", "context-broker", "config.json");
 }
 
-function loadConfiguredRewriteThresholdBytes(ctx: Pick<ExtensionContext, "cwd"> | { cwd?: unknown }): number | undefined {
+function loadConfiguredContextBrokerConfig(ctx: Pick<ExtensionContext, "cwd"> | { cwd?: unknown }): { rewriteThresholdBytes?: number; contextLensesEnabled?: boolean } {
   const path = contextBrokerConfigPath(ctx);
-  if (!existsSync(path)) return undefined;
+  if (!existsSync(path)) return {};
   try {
-    const parsed = JSON.parse(readFileSync(path, "utf8")) as { rewriteThresholdBytes?: unknown; rewrite_threshold_bytes?: unknown };
-    return clampRewriteThresholdBytes(parseNonNegativeInt(parsed.rewriteThresholdBytes ?? parsed.rewrite_threshold_bytes));
+    const parsed = JSON.parse(readFileSync(path, "utf8")) as {
+      rewriteThresholdBytes?: unknown;
+      rewrite_threshold_bytes?: unknown;
+      contextLensesEnabled?: unknown;
+      context_lenses_enabled?: unknown;
+    };
+    const rewriteThresholdBytes = clampRewriteThresholdBytes(
+      parseNonNegativeInt(parsed.rewriteThresholdBytes ?? parsed.rewrite_threshold_bytes),
+    );
+    const contextLensesEnabled = parseBooleanish(parsed.contextLensesEnabled ?? parsed.context_lenses_enabled);
+    return {
+      ...(rewriteThresholdBytes === undefined ? {} : { rewriteThresholdBytes }),
+      ...(contextLensesEnabled === undefined ? {} : { contextLensesEnabled }),
+    };
   } catch {
-    return undefined;
+    return {};
   }
 }
 
 function saveConfiguredRewriteThresholdBytes(ctx: Pick<ExtensionContext, "cwd"> | { cwd?: unknown }, value: number): string {
   const path = contextBrokerConfigPath(ctx);
+  const existing = loadConfiguredContextBrokerConfig(ctx);
+  const next = {
+    ...existing,
+    rewriteThresholdBytes: value,
+  };
   mkdirSync(dirname(path), { recursive: true });
-  writeFileSync(path, `${JSON.stringify({ rewriteThresholdBytes: value }, null, 2)}\n`);
+  writeFileSync(path, `${JSON.stringify(next, null, 2)}\n`);
+  return path;
+}
+
+function saveConfiguredContextLensesEnabled(ctx: Pick<ExtensionContext, "cwd"> | { cwd?: unknown }, value: boolean): string {
+  const path = contextBrokerConfigPath(ctx);
+  const existing = loadConfiguredContextBrokerConfig(ctx);
+  const next = {
+    ...existing,
+    contextLensesEnabled: value,
+  };
+  mkdirSync(dirname(path), { recursive: true });
+  writeFileSync(path, `${JSON.stringify(next, null, 2)}\n`);
   return path;
 }
 
@@ -342,6 +384,62 @@ function summarizeTool(event: { toolName: string; input?: any; isError?: boolean
   return `${event.isError ? "failed" : "completed"} ${event.toolName}${target}; payload=${bytes} bytes${marker}`;
 }
 
+function isPackageManagerCommand(command = ""): boolean {
+  return /(^|[^a-z])(npm|pnpm|yarn|bun)\s+(install|add|update|upgrade|remove|rm|ci|build|rebuild)\b/i.test(command);
+}
+
+function extractContextLens(
+  text: string,
+  options: { toolName?: string; command?: string; path?: string; isError?: boolean; exitCode?: number; }
+): { kind: "log" | "package"; summary: string; body: string; maxBytes: number } | null {
+  const normalized = text.replace(/\r\n/g, "\n");
+  const command = String(options.command ?? "");
+  if (isPackageManagerCommand(command) && (Boolean(options.isError) || options.exitCode !== undefined && options.exitCode !== 0)) {
+    const lines = normalized.split("\n");
+    const interesting = lines.filter((line) => /(error|warning|warn|conflict|failed|unable to|unable|ER[0-9]{4}|pnpm ERR!|npm ERR!|yarn error|bun:|peer dep|dependency|resolve)/i.test(line));
+    const body = (interesting.length > 0 ? interesting : lines.filter((line) => line.trim()).slice(0, 24)).join("\n").trim();
+    if (!body) return null;
+    return {
+      kind: "package",
+      summary: `package-manager failure/diagnostic for ${compact(command, 80)}`,
+      body,
+      maxBytes: PACKAGE_LENS_MAX_BYTES,
+    };
+  }
+
+  const lines = normalized.split("\n");
+  const hasErrors = lines.some((line) => /(fatal|exception|traceback|stack|error|failed|panic|segfault|undefined|cannot|unable to)/i.test(line));
+  if (!hasErrors) return null;
+  if (!/\.log$|\.err$|^\/var\/log\//i.test(String(options.path ?? command))) {
+    const likelyPackageOutput = /npm|pnpm|yarn|bun/i.test(command);
+    if (!likelyPackageOutput) return null;
+  }
+
+  const matches = lines.filter((line) => /(fatal|exception|traceback|stack|error|failed|panic|segfault|undefined|unable to)/i.test(line));
+  const body = matches.slice(0, 12).join("\n").trim();
+  if (!body) return null;
+  return {
+    kind: "log",
+    summary: `log/error signature from ${compact(command || (options.path ? String(options.path) : options.toolName ?? "tool output"), 80)}`,
+    body,
+    maxBytes: LOG_ERROR_LENS_MAX_BYTES,
+  };
+}
+
+function contextLensPlaceholder(artifact: ContextArtifact, lens: { kind: "log" | "package"; summary: string; body: string; maxBytes: number }, commandOrPath = ""): string {
+  const header = lens.kind === "package" ? "Package-manager lens" : "Log/error lens";
+  const source = commandOrPath ? `source=${compact(commandOrPath, 140)}` : `source=tool=${artifact.summary}`;
+  return [
+    `Context broker lens (${header}):`,
+    `Context broker artifact: ${artifact.handle}`,
+    `Summary: ${lens.summary}`,
+    `Payload bytes: ${artifact.bytes}`,
+    `${source}`,
+    `Lens view (max ${lens.maxBytes} bytes):`,
+    truncateUtf8(lens.body, lens.maxBytes),
+  ].join("\n");
+}
+
 const NON_BROKERED_TOOL_NAMES = new Set(["context_lookup"]);
 
 function shouldBrokerToolName(toolName: string): boolean {
@@ -374,7 +472,11 @@ export async function registerContextBrokerBeta(pi: ExtensionAPI, options: Conte
   const searchBytes = options.searchBytes ?? DEFAULT_SEARCH_BYTES;
   const rewriteThresholdOption = options.rewriteThresholdBytes;
   const rewriteThresholdEnv = clampRewriteThresholdBytes(envNonNegativeInt(REWRITE_THRESHOLD_ENV));
-  const rewriteThresholdConfigured = loadConfiguredRewriteThresholdBytes({ cwd: process.cwd() });
+  const resolvedConfig = loadConfiguredContextBrokerConfig({ cwd: process.cwd() });
+  const rewriteThresholdConfigured = resolvedConfig.rewriteThresholdBytes;
+  const lensesEnabledOption = options.contextLensesEnabled;
+  const lensesEnabledEnv = parseBooleanish(process.env[CONTEXT_LENSES_ENABLED_ENV]);
+  const lensesEnabledConfigured = resolvedConfig.contextLensesEnabled;
   let rewriteThresholdBytes =
     rewriteThresholdOption
     ?? rewriteThresholdEnv
@@ -385,6 +487,14 @@ export async function registerContextBrokerBeta(pi: ExtensionAPI, options: Conte
     : rewriteThresholdEnv !== undefined
       ? "env"
       : rewriteThresholdConfigured !== undefined
+        ? "config"
+        : "default";
+  let contextLensesEnabled = lensesEnabledOption ?? lensesEnabledEnv ?? lensesEnabledConfigured ?? false;
+  let contextLensesSource = lensesEnabledOption !== undefined
+    ? "option"
+    : lensesEnabledEnv !== undefined
+      ? "env"
+      : lensesEnabledConfigured !== undefined
         ? "config"
         : "default";
   const durable = options.durable ?? (envFlag("PI_CONTEXT_BROKER_DURABLE") || Boolean(options.storeDir ?? process.env.PI_CONTEXT_BROKER_STORE_DIR));
@@ -424,6 +534,10 @@ export async function registerContextBrokerBeta(pi: ExtensionAPI, options: Conte
     contextHookRewriteRawBytes: 0,
     contextHookRewriteReplacementBytes: 0,
     contextHookContextLookupHistoryOmissions: 0,
+    contextLensHits: 0,
+    contextLensMisses: 0,
+    contextLensFallbacks: 0,
+    contextLensEmittedBytes: 0,
     toolResultEvents: 0,
     toolResultArtifacts: 0,
     backfillScans: 0,
@@ -451,16 +565,22 @@ export async function registerContextBrokerBeta(pi: ExtensionAPI, options: Conte
 
   function refreshRewriteThresholdFromConfig(ctx: Pick<ExtensionContext, "cwd"> | { cwd?: unknown }): void {
     if (rewriteThresholdOption !== undefined || rewriteThresholdEnv !== undefined) return;
-    const configured = loadConfiguredRewriteThresholdBytes(ctx);
+    const configured = loadConfiguredContextBrokerConfig(ctx).rewriteThresholdBytes;
     rewriteThresholdBytes = configured ?? DEFAULT_REWRITE_THRESHOLD_BYTES;
     rewriteThresholdSource = configured !== undefined ? "config" : "default";
+    if (lensesEnabledOption === undefined && lensesEnabledEnv === undefined) {
+      const lensesConfigured = loadConfiguredContextBrokerConfig(ctx).contextLensesEnabled;
+      contextLensesEnabled = lensesConfigured ?? false;
+      contextLensesSource = lensesConfigured !== undefined ? "config" : "default";
+    }
   }
 
   function formatContextBrokerConfig(ctx: Pick<ExtensionContext, "cwd"> | { cwd?: unknown }): string {
     return [
       `Context broker config: rewriteThresholdBytes=${rewriteThresholdBytes} (source=${rewriteThresholdSource})`,
+      `Context lenses: ${contextLensesEnabled ? "on" : "off"} (source=${contextLensesSource})`,
       `config: ${contextBrokerConfigPath(ctx)}`,
-      `env override: ${REWRITE_THRESHOLD_ENV}`,
+      `env override: ${REWRITE_THRESHOLD_ENV}, ${CONTEXT_LENSES_ENABLED_ENV}`,
     ].join("\n");
   }
 
@@ -479,6 +599,7 @@ export async function registerContextBrokerBeta(pi: ExtensionAPI, options: Conte
       `toolResults seen=${routingTelemetry.contextHookToolResults} rewritten=${routingTelemetry.contextHookToolResultRewrites} hostile=${routingTelemetry.contextHookToolResultHostile}`,
       `bash seen=${routingTelemetry.contextHookBash} rewritten=${routingTelemetry.contextHookBashRewrites} hostile=${routingTelemetry.contextHookBashHostile}`,
       `rewriteSavings rawBytes=${routingTelemetry.contextHookRewriteRawBytes} replacementBytes=${routingTelemetry.contextHookRewriteReplacementBytes} savedBytes=${savedBytes} savedPct=${savedPct}% contextLookupHistoryOmitted=${routingTelemetry.contextHookContextLookupHistoryOmissions}`,
+      `contextLenses hits=${routingTelemetry.contextLensHits} misses=${routingTelemetry.contextLensMisses} fallbacks=${routingTelemetry.contextLensFallbacks} emittedBytes=${routingTelemetry.contextLensEmittedBytes}`,
       `lookups tool(calls=${routingTelemetry.toolLookupCalls}, exact=${routingTelemetry.toolLookupExactCalls}, text=${routingTelemetry.toolLookupTextCalls}, hits=${routingTelemetry.toolLookupHits}, misses=${routingTelemetry.toolLookupMisses}, exactMisses=${routingTelemetry.toolLookupExactMisses}, textMisses=${routingTelemetry.toolLookupTextMisses})`,
       `lookups slash(calls=${routingTelemetry.commandLookupCalls}, exact=${routingTelemetry.commandLookupExactCalls}, text=${routingTelemetry.commandLookupTextCalls}, hits=${routingTelemetry.commandLookupHits}, misses=${routingTelemetry.commandLookupMisses}, exactMisses=${routingTelemetry.commandLookupExactMisses}, textMisses=${routingTelemetry.commandLookupTextMisses})`,
       `exports=${routingTelemetry.exportCalls}`,
@@ -698,6 +819,7 @@ export async function registerContextBrokerBeta(pi: ExtensionAPI, options: Conte
         const items = [
           { value: "config", label: "config", description: "Show context broker config" },
           { value: "config threshold ", label: "threshold", description: "Set rewrite threshold in bytes" },
+          { value: "config lenses ", label: "lenses", description: "Enable or disable context-lens generation (on|off)" },
         ].filter((item) => item.value.trim().startsWith(`config ${rest}`.trimEnd()));
         return items.length ? items : null;
       }
@@ -707,6 +829,15 @@ export async function registerContextBrokerBeta(pi: ExtensionAPI, options: Conte
           value: `config threshold ${value}`,
           label: `${value}`,
           description: value === DEFAULT_REWRITE_THRESHOLD_BYTES ? "default 8 KiB" : `set rewrite threshold to ${value} bytes`,
+        })).filter((item) => item.value.startsWith(query));
+        return items.length ? items : null;
+      }
+      if (restParts[0] === "lenses") {
+        const query = `config lenses ${restParts.slice(1).join(" ")}`.trimEnd();
+        const items = ["on", "off"].map((value) => ({
+          value: `config lenses ${value}`,
+          label: `${value}`,
+          description: `set context lenses to ${value}`,
         })).filter((item) => item.value.startsWith(query));
         return items.length ? items : null;
       }
@@ -753,13 +884,17 @@ export async function registerContextBrokerBeta(pi: ExtensionAPI, options: Conte
       artifact?: ContextArtifact;
       rewrite?: (artifact: ContextArtifact) => any;
       safeFallback?: any;
+      usedContextLens?: boolean;
+      contextLensCapBytes?: number;
     };
     const drafts = event.messages.map((message: any, index: number): RewriteDraft => {
       if (message?.role === "toolResult") {
         routingTelemetry.contextHookToolResults += 1;
         const raw = contentText(message.content);
         const rawBytes = utf8Bytes(raw);
-        const toolInput = typeof message.toolCallId === "string" ? toolInputs.get(message.toolCallId) : undefined;
+        const toolInput = (typeof message.toolCallId === "string" ? toolInputs.get(message.toolCallId) : undefined) as
+          | { toolName?: string; input?: any }
+          | undefined;
         const toolName = String(message.toolName ?? toolInput?.toolName ?? "tool");
         const hostile = hasHostileText(raw) || hasHostileValue(message.content);
         if (hostile) routingTelemetry.contextHookToolResultHostile += 1;
@@ -775,6 +910,25 @@ export async function registerContextBrokerBeta(pi: ExtensionAPI, options: Conte
         }
         const shouldRewrite = rawBytes > rewriteThresholdBytes || hostile;
         if (!shouldRewrite) return { original: message };
+        const commandOrPath = String(toolInput?.input?.command ?? toolInput?.input?.path ?? "");
+        const lens = (() => {
+          if (!contextLensesEnabled || hostile) return null;
+          try {
+            return extractContextLens(raw, {
+              toolName,
+              command: toolInput?.input?.command,
+              path: toolInput?.input?.path,
+              isError: Boolean(message.isError),
+              exitCode: (message as any).exitCode,
+            });
+          } catch {
+            return null;
+          }
+        })();
+        if (contextLensesEnabled && !lens) routingTelemetry.contextLensMisses += 1;
+        const replacementText = (live: ContextArtifact) => (lens
+          ? contextLensPlaceholder(live, lens, commandOrPath)
+          : brokerPlaceholder(live));
         const artifact = publishToolArtifact({
           toolName,
           input: message.input ?? toolInput?.input,
@@ -786,12 +940,18 @@ export async function registerContextBrokerBeta(pi: ExtensionAPI, options: Conte
           ttlMs: ttlFromNowFor(typeof message.timestamp === "number" ? message.timestamp : undefined),
         });
         if (!artifact) return { original: message };
+        if (lens && contextLensesEnabled) {
+          routingTelemetry.contextLensHits += 1;
+          routingTelemetry.contextLensEmittedBytes += Math.min(rawBytes, lens.maxBytes);
+        }
         routingTelemetry.contextHookToolResultRewrites += 1;
         return {
           original: message,
           rawBytes,
           artifact,
-          rewrite: (live) => ({ ...message, content: [{ type: "text", text: brokerPlaceholder(live) }] }),
+          usedContextLens: Boolean(lens && contextLensesEnabled),
+          contextLensCapBytes: lens?.maxBytes,
+          rewrite: (live) => ({ ...message, content: [{ type: "text", text: replacementText(live) }] }),
           safeFallback: { ...message, content: [{ type: "text", text: prunedPayloadPlaceholder(hostile) }] },
         };
       }
@@ -807,6 +967,24 @@ export async function registerContextBrokerBeta(pi: ExtensionAPI, options: Conte
         const sourceId = typeof message.timestamp === "number"
           ? `bash:${message.timestamp}:${stableHash([message.command ?? "", raw, message.exitCode ?? "", message.cancelled ?? ""].join("\n"))}`
           : `bash:${stableHash([message.command ?? "", raw, message.exitCode ?? "", message.cancelled ?? ""].join("\n"))}`;
+        const command = String(message.command ?? "");
+        const lens = (() => {
+          if (!contextLensesEnabled || hostile) return null;
+          try {
+            return extractContextLens(raw, {
+              toolName: "bash",
+              command,
+              isError: typeof message.exitCode === "number" ? message.exitCode !== 0 : Boolean(message.cancelled),
+              exitCode: message.exitCode,
+            });
+          } catch {
+            return null;
+          }
+        })();
+        if (contextLensesEnabled && !lens) routingTelemetry.contextLensMisses += 1;
+        const replacementText = (live: ContextArtifact) => (lens
+          ? contextLensPlaceholder(live, lens, command)
+          : brokerPlaceholder(live));
         const artifact = publishToolArtifact({
           toolName: "bash",
           input: { command: message.command },
@@ -823,12 +1001,18 @@ export async function registerContextBrokerBeta(pi: ExtensionAPI, options: Conte
           ttlMs: ttlFromNowFor(typeof message.timestamp === "number" ? message.timestamp : undefined),
         });
         if (!artifact) return { original: message };
+        if (lens && contextLensesEnabled) {
+          routingTelemetry.contextLensHits += 1;
+          routingTelemetry.contextLensEmittedBytes += Math.min(rawBytes, lens.maxBytes);
+        }
         routingTelemetry.contextHookBashRewrites += 1;
         return {
           original: message,
           rawBytes,
           artifact,
-          rewrite: (live) => ({ ...message, output: brokerPlaceholder(live), truncated: true }),
+          usedContextLens: Boolean(lens && contextLensesEnabled),
+          contextLensCapBytes: lens?.maxBytes,
+          rewrite: (live) => ({ ...message, output: replacementText(live), truncated: true }),
           safeFallback: { ...message, output: prunedPayloadPlaceholder(hostile), truncated: true },
         };
       }
@@ -846,6 +1030,7 @@ export async function registerContextBrokerBeta(pi: ExtensionAPI, options: Conte
       if (!draft.artifact || !draft.rewrite) return draft.original;
       const live = broker.lookup({ handle: draft.artifact.handle })[0];
       if (!live) {
+        if (draft.usedContextLens) routingTelemetry.contextLensFallbacks += 1;
         for (const parentId of draft.artifact.parentIds) sourceHandles.delete(parentId);
         if (draft.safeFallback) {
           changed = true;
@@ -1028,7 +1213,25 @@ export async function registerContextBrokerBeta(pi: ExtensionAPI, options: Conte
           ctx.ui.notify(`Context broker config updated: rewriteThresholdBytes=${value}\nconfig: ${path}${rewriteThresholdSource !== "config" ? `\nNote: current ${rewriteThresholdSource} override still takes precedence this session.` : ""}`, "info");
           return;
         }
-        ctx.ui.notify(`Usage: /pi-rogue-context config threshold <bytes> (minimum ${MIN_REWRITE_THRESHOLD_BYTES} bytes)`, "warning");
+        if (key === "lenses") {
+          const shouldEnable = parseBooleanish(rawValue);
+          if (shouldEnable === undefined) {
+            ctx.ui.notify(
+              `Usage: /pi-rogue-context config lenses on|off\n` +
+              `  - default is off`,
+              "warning",
+            );
+            return;
+          }
+          const path = saveConfiguredContextLensesEnabled(ctx, shouldEnable);
+          if (lensesEnabledOption === undefined && lensesEnabledEnv === undefined) {
+            contextLensesEnabled = shouldEnable;
+            contextLensesSource = "config";
+          }
+          ctx.ui.notify(`Context broker config updated: contextLensesEnabled=${shouldEnable}\nconfig: ${path}${contextLensesSource !== "config" ? `\nNote: current ${contextLensesSource} override still takes precedence this session.` : ""}`, "info");
+          return;
+        }
+        ctx.ui.notify(`Usage: /pi-rogue-context config threshold <bytes> (minimum ${MIN_REWRITE_THRESHOLD_BYTES} bytes)\n       or /pi-rogue-context config lenses on|off`, "warning");
         return;
       }
 
@@ -1039,7 +1242,7 @@ export async function registerContextBrokerBeta(pi: ExtensionAPI, options: Conte
         return;
       }
 
-      ctx.ui.notify("Usage: /pi-rogue-context status | brief | lookup <handle-or-text> | pin <handle-or-id> | export <handle-or-id> | config | prune", "warning");
+      ctx.ui.notify("Usage: /pi-rogue-context status | brief | lookup <handle-or-text> | pin <handle-or-id> | export <handle-or-id> | config [threshold|lenses] | prune", "warning");
     },
   });
 }
