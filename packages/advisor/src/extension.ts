@@ -1775,11 +1775,12 @@ async function doReview(pi: ExtensionAPI, ctx: any, trigger: string, delta: stri
       ...findMissingReviewArtifacts(cwd, delta, b, brokerBrief),
     ])];
     if (missingArtifacts.length > 0) {
+      const missingSummary = missingArtifacts.slice(0, 4).join(", ");
       finalDecision = "defer";
-      finalReason = `missing review artifacts: ${missingArtifacts.slice(0, 4).join(", ")}`;
+      finalReason = `artifact preflight missing references: ${missingSummary}`;
       markReviewApplied(state, signature, trigger, finalDecision, finalReason, true);
       persistReviewState(state, true);
-      ctx.ui?.notify?.(`Advisor review skipped: missing artifacts ${missingArtifacts.slice(0, 4).join(", ")}`, "warning");
+      ctx.ui?.notify?.(`Advisor artifact preflight blocked model review: missing referenced files ${missingSummary}`, "warning");
       finalized = true;
       return;
     }
