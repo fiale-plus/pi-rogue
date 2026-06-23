@@ -11,7 +11,7 @@ export interface RouterReport {
   generatedAt: string;
   inputs: { events?: string; outcomes?: string; gateReport?: string; trainingRows?: string };
   routeEvents: { total: number; byAction: Record<string, number>; byModel: Record<string, number>; mismatches: number };
-  outcomes: { total: number; byStatus: Record<string, number>; linked: number; missingEvidence: number };
+  outcomes: { total: number; byStatus: Record<string, number>; byBlockedBy: Record<string, number>; linked: number; missingEvidence: number };
   trainingRows: { total: number; labeled: number; unlabeled: number; localRuleExcluded: number; byGate: Record<string, number> };
   gate?: unknown;
 }
@@ -34,14 +34,16 @@ function routeSummary(events: RouteEvent[]): RouterReport["routeEvents"] {
 
 function outcomeSummary(outcomes: RouterOutcome[]): RouterReport["outcomes"] {
   const byStatus: Record<string, number> = {};
+  const byBlockedBy: Record<string, number> = {};
   let linked = 0;
   let missingEvidence = 0;
   for (const outcome of outcomes) {
     increment(byStatus, outcome.taskStatus);
+    if (outcome.evidence.blockedBy) increment(byBlockedBy, outcome.evidence.blockedBy);
     if (outcome.routeEventId || outcome.checkpointId) linked++;
     if (!outcome.evidence.rawSessionRef && !outcome.evidence.notesHash) missingEvidence++;
   }
-  return { total: outcomes.length, byStatus, linked, missingEvidence };
+  return { total: outcomes.length, byStatus, byBlockedBy, linked, missingEvidence };
 }
 
 function trainingSummary(rowsPath?: string): RouterReport["trainingRows"] {
@@ -73,6 +75,7 @@ function markdown(report: RouterReport): string {
     `- route events: ${report.routeEvents.total}`,
     `- route mismatches/overrides: ${report.routeEvents.mismatches}`,
     `- outcomes: ${report.outcomes.total}`,
+    `- route-blocked by: ${Object.entries(report.outcomes.byBlockedBy).sort().map(([key, value]) => `${key}=${value}`).join(", ") || "none"}`,
     `- training rows: ${report.trainingRows.total} (${report.trainingRows.labeled} labeled, ${report.trainingRows.unlabeled} unlabeled)`,
     `- local-rule labels excluded: ${report.trainingRows.localRuleExcluded}`,
     "",

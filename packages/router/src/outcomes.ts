@@ -35,8 +35,9 @@ export interface RouterOutcome {
     rawSessionRef?: RouterCheckpoint["rawSessionRef"];
     routeEventId?: string;
     notesHash?: string;
+    blockedBy?: "policy" | "infra_auth";
   };
-}
+  }
 
 export interface OutcomeWriteSummary {
   schema: "pi-router.outcomes-summary.v1";
@@ -100,6 +101,7 @@ export function buildUnknownOutcome(event: RouteEvent, checkpoint?: RouterCheckp
       source: "inferred",
       rawSessionRef: checkpoint?.rawSessionRef ?? event.rawSessionRef,
       routeEventId: event.eventId,
+      blockedBy: event.observed.blockedBy,
     },
   };
 }
@@ -191,6 +193,7 @@ export function enrichOutcome(outcome: RouterOutcome, options: { checkpoint?: Ro
       rawSessionRef: outcome.evidence.rawSessionRef ?? checkpoint?.rawSessionRef ?? event?.rawSessionRef,
       routeEventId: outcome.evidence.routeEventId ?? event?.eventId,
       notesHash: outcome.evidence.notesHash ?? hashText(notes),
+      blockedBy: outcome.evidence.blockedBy ?? event?.observed.blockedBy,
     },
   };
 }

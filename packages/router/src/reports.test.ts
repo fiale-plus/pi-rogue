@@ -21,7 +21,7 @@ function event(action = "run_verifier") {
     sourceEvent: { index: 0, timestamp: null },
     decision: { schema: "pi-router.route-decision.v1", decisionId: "decision-1", checkpointId: "checkpoint-1", action, reason: "test", confidence: 0.5, policyVersion: "test", alternatives: [] },
     runtime: { activeModel: "qwen", provider: "local", contextTokensApprox: 1000, gitDirty: true },
-    observed: { followed: false, overriddenBy: "continue_current" },
+    observed: { followed: false, overriddenBy: "continue_current", blockedBy: "infra_auth" },
     metrics: { loopScore: 0.2, progressScore: 0.8, sameCommandRepeatedCount: 1, sameErrorRepeatedCount: 0, verifierUsed: true, diffLines: 10, diffFilesChanged: 1 },
   };
 }
@@ -48,7 +48,7 @@ function outcome() {
     frontierCalls: 0,
     localTurns: 2,
     reworkTurns: 0,
-    evidence: { source: "manual", rawSessionRef: rawRef, routeEventId: "event-1", notesHash: "notes" },
+    evidence: { source: "manual", rawSessionRef: rawRef, routeEventId: "event-1", notesHash: "notes", blockedBy: "infra_auth" },
   };
 }
 
@@ -80,9 +80,10 @@ describe("router report", () => {
 
     const report = writeRouterReport({ eventsPath, outcomesPath, trainingRowsPath: rowsPath, gateReportPath: gatePath, outputPath, markdownPath });
 
-    expect(report).toMatchObject({ schema: "pi-router.report.v1", routeEvents: { total: 1, mismatches: 1 }, outcomes: { total: 1, linked: 1 }, trainingRows: { total: 2, labeled: 1, localRuleExcluded: 1 } });
+    expect(report).toMatchObject({ schema: "pi-router.report.v1", routeEvents: { total: 1, mismatches: 1 }, outcomes: { total: 1, linked: 1, byBlockedBy: { infra_auth: 1 } }, trainingRows: { total: 2, labeled: 1, localRuleExcluded: 1 } });
     expect(JSON.parse(readFileSync(outputPath, "utf8")).schema).toBe("pi-router.report.v1");
     expect(readFileSync(markdownPath, "utf8")).toContain("# Pi router report");
+    expect(readFileSync(markdownPath, "utf8")).toContain("route-blocked by: infra_auth=1");
   });
 
   it("requires at least one report input and rejects missing provided inputs", () => {

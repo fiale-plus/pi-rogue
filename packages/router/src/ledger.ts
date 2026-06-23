@@ -26,6 +26,7 @@ export interface RouteEvent {
     followed: boolean | null;
     overriddenBy?: string;
     routingStatus?: "applied" | "policy_noop" | "blocked" | "downgraded";
+    blockedBy?: "policy" | "infra_auth";
   };
   metrics: {
     loopScore: number;
