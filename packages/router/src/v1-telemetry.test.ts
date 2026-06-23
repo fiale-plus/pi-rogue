@@ -143,6 +143,7 @@ describe("router v1 outcome and feature telemetry", () => {
       checkpointId: item.checkpointId,
       routeEventId: event.eventId,
       taskStatus: "unknown",
+      routeStatus: event.observed.routingStatus,
       finalFilesTouched: 2,
       finalDiffLines: 40,
       reworkTurns: 1,
@@ -164,6 +165,7 @@ describe("router v1 outcome and feature telemetry", () => {
       testsPassedAfter: true,
       verifierImproved: true,
       acceptedDiff: true,
+      routeStatus: event.observed.routingStatus,
       finalFilesTouched: 3,
       finalDiffLines: 44,
     });
