@@ -35,6 +35,7 @@ export interface RouterModelApplySummary {
   reason: string;
   fromModel?: string;
   toModel?: string;
+  status?: "applied" | "policy_noop" | "blocked";
 }
 
 export interface AutoModelSwitchPlan {
@@ -109,18 +110,22 @@ export function modelsMatch(current: string | undefined, target: string | undefi
   const c = current.toLowerCase();
   const t = target.toLowerCase();
   const provider = currentProvider?.toLowerCase();
-  const [targetProvider, ...targetModelParts] = t.split("/");
-  if (targetModelParts.length > 0) {
+  const currentHasProvider = c.includes("/");
+  const targetHasProvider = t.includes("/");
+
+  if (targetHasProvider) {
+    const [targetProvider, ...targetModelParts] = t.split("/");
     const targetModel = targetModelParts.join("/");
     if (provider) {
       const currentModel = c.startsWith(`${provider}/`) ? c.slice(provider.length + 1) : c;
       if (provider === targetProvider) return currentModel === targetModel;
-      return currentModel === t;
+      return currentHasProvider ? c === t : false;
     }
-    if (c.includes("/")) return c === t;
-    return false;
+    return c === t;
   }
-  return c === t || modelLeaf(c) === modelLeaf(t) || c.endsWith(`/${modelLeaf(t)}`) || t.endsWith(`/${modelLeaf(c)}`);
+
+  if (currentHasProvider) return false;
+  return c === t || modelLeaf(c) === modelLeaf(t);
 }
 
 function targetForRole(role: RouterObserveSummary["role"], profile: RouterProfile, currentModel?: string): string | undefined {
@@ -189,15 +194,27 @@ function configuredModelMatches(current: string | undefined, currentProvider: st
 }
 
 export async function applyModelRouting(pi: Pick<ExtensionAPI, "setModel"> | undefined, ctx: any, summary: RouterObserveSummary): Promise<RouterModelApplySummary> {
-  if (!summary.targetModel || summary.role === "none" || summary.role === "current") return { applied: false, reason: "no model switch for route action" };
+  if (!summary.targetModel || summary.role === "none" || summary.role === "current") {
+    return { applied: false, status: "policy_noop", reason: "no model switch for route action" };
+  }
   const resolved = findConfiguredModel(ctx, summary.targetModel, summary.currentProvider);
-  if (resolved?.matchedBy === "id" && modelsMatch(summary.currentModel, summary.targetModel, summary.currentProvider)) return { applied: false, reason: "current model already matches target", fromModel: summary.currentModel, toModel: summary.targetModel };
-  if (resolved && configuredModelMatches(summary.currentModel, summary.currentProvider, resolved)) return { applied: false, reason: "current model already matches target", fromModel: summary.currentModel, toModel: summary.targetModel };
-  if (!resolved && modelsMatch(summary.currentModel, summary.targetModel, summary.currentProvider)) return { applied: false, reason: "current model already matches target", fromModel: summary.currentModel, toModel: summary.targetModel };
-  if (!resolved) return { applied: false, reason: `target model not configured: ${summary.targetModel}`, fromModel: summary.currentModel, toModel: summary.targetModel };
+  if (resolved?.matchedBy === "id" && modelsMatch(summary.currentModel, summary.targetModel, summary.currentProvider)) {
+    return { applied: false, status: "policy_noop", reason: "current model already matches target", fromModel: summary.currentModel, toModel: summary.targetModel };
+  }
+  if (resolved && configuredModelMatches(summary.currentModel, summary.currentProvider, resolved)) {
+    return { applied: false, status: "policy_noop", reason: "current model already matches target", fromModel: summary.currentModel, toModel: summary.targetModel };
+  }
+  if (!resolved && modelsMatch(summary.currentModel, summary.targetModel, summary.currentProvider)) {
+    return { applied: false, status: "policy_noop", reason: "current model already matches target", fromModel: summary.currentModel, toModel: summary.targetModel };
+  }
+  if (!resolved) {
+    return { applied: false, status: "blocked", reason: `target model not configured: ${summary.targetModel}`, fromModel: summary.currentModel, toModel: summary.targetModel };
+  }
   const success = await pi?.setModel?.(resolved.model);
-  if (!success) return { applied: false, reason: `target model unavailable or missing auth: ${summary.targetModel}`, fromModel: summary.currentModel, toModel: summary.targetModel };
-  return { applied: true, reason: summary.reason, fromModel: summary.currentModel, toModel: summary.targetModel };
+  if (!success) {
+    return { applied: false, status: "blocked", reason: `target model unavailable or missing auth: ${summary.targetModel}`, fromModel: summary.currentModel, toModel: summary.targetModel };
+  }
+  return { applied: true, status: "applied", reason: summary.reason, fromModel: summary.currentModel, toModel: summary.targetModel };
 }
 
 function nowFromCheckpoint(checkpoint: RouterCheckpoint): number {
@@ -279,6 +296,71 @@ export function planAutoModelSwitch(checkpoint: RouterCheckpoint, summary: Route
   };
 }
 
+export function planAutoModelDowngrade(checkpoint: RouterCheckpoint, summary: RouterObserveSummary, state: RouterState, policy: RouterConfig["autoModel"], workerTarget?: string): AutoModelSwitchPlan {
+  if (summary.role !== "current" || !summary.currentModel || !workerTarget) {
+    return {
+      canApply: false,
+      reason: "no model switch action",
+      statePatch: {
+        autoModelPendingTarget: workerTarget,
+        autoModelPendingStreak: 0,
+        autoModelSwitchHistory: state.autoModelSwitchHistory ?? [],
+      },
+    };
+  }
+
+  if (modelsMatch(summary.currentModel, workerTarget, summary.currentProvider)) {
+    return {
+      canApply: false,
+      reason: "current model already matches target",
+      statePatch: {
+        autoModelPendingTarget: workerTarget,
+        autoModelPendingStreak: 0,
+        autoModelSwitchHistory: state.autoModelSwitchHistory ?? [],
+      },
+    };
+  }
+
+  const nowMs = nowFromCheckpoint(checkpoint);
+  const existingHistory = pruneSwitchHistory(state.autoModelSwitchHistory, nowMs, policy.switchWindowSeconds * 1000);
+  const statePatch: Partial<RouterState> = {
+    autoModelPendingTarget: workerTarget,
+    autoModelPendingStreak: 0,
+    autoModelSwitchHistory: existingHistory,
+  };
+
+  if (summary.confidence < policy.downgradeConfidence) {
+    return {
+      canApply: false,
+      reason: `confidence ${summary.confidence.toFixed(2)} below auto-model downgrade threshold ${policy.downgradeConfidence.toFixed(2)}`,
+      statePatch,
+    };
+  }
+
+  const lastSwitchMs = Date.parse(state.autoModelLastSwitchAt ?? "");
+  if (Number.isFinite(lastSwitchMs) && nowMs - lastSwitchMs < policy.minCooldownSeconds * 1000) {
+    return {
+      canApply: false,
+      reason: `cooldown not elapsed before reverting to worker: ${policy.minCooldownSeconds}s`,
+      statePatch,
+    };
+  }
+
+  if (existingHistory.length >= policy.maxSwitchesPerWindow) {
+    return {
+      canApply: false,
+      reason: `max auto-model flips exceeded: ${existingHistory.length}/${policy.maxSwitchesPerWindow} in ${policy.switchWindowSeconds}s`,
+      statePatch,
+    };
+  }
+
+  return {
+    canApply: true,
+    reason: "auto-model cooldown elapsed; reverting to worker",
+    statePatch,
+  };
+}
+
 export async function observeRouterTurn(ctx: any, pi?: Pick<ExtensionAPI, "setModel">): Promise<RouterObserveSummary | null> {
   const config = loadRouterConfig(ctx);
   if (!config.enabled || (config.print === "off" && config.mode === "observe")) return null;
@@ -307,15 +389,31 @@ export async function observeRouterTurn(ctx: any, pi?: Pick<ExtensionAPI, "setMo
   };
 
   if (config.mode === "auto_model") {
-    const plan = planAutoModelSwitch(checkpoint, summary, state, config.autoModel);
+    const profile = activeProfile(config);
+    const workerTarget = resolvedProfileTarget("worker", profile).targetModel;
+    const escalatePlan = planAutoModelSwitch(checkpoint, summary, state, config.autoModel);
+    const downgradePlan = workerTarget ? planAutoModelDowngrade(checkpoint, summary, state, config.autoModel, workerTarget) : undefined;
+    const plan = summary.match === false ? escalatePlan : downgradePlan ?? escalatePlan;
+    const routingSummary = plan.canApply && summary.match === true && summary.role === "current" && workerTarget
+      ? {
+          ...summary,
+          action: "continue_local" as const,
+          role: "worker" as const,
+          targetModel: workerTarget,
+          match: modelsMatch(summary.currentModel, workerTarget, summary.currentProvider),
+          confidence: Math.max(summary.confidence, config.autoModel.downgradeConfidence),
+          reason: plan.reason,
+        }
+      : summary;
 
     const applySummary = plan.canApply
-      ? await applyModelRouting(pi, ctx, summary)
+      ? await applyModelRouting(pi, ctx, routingSummary)
       : {
           applied: false,
+          status: "policy_noop" as const,
           reason: plan.reason,
           fromModel: summary.currentModel,
-          toModel: summary.targetModel,
+          toModel: routingSummary.targetModel,
         };
 
     nextState.autoModelPendingTarget = plan.statePatch.autoModelPendingTarget;
@@ -329,9 +427,18 @@ export async function observeRouterTurn(ctx: any, pi?: Pick<ExtensionAPI, "setMo
         `router auto-model: APPLIED ${applySummary.fromModel ?? "unknown"} → ${applySummary.toModel ?? "none"} · ${applySummary.reason}`,
         "info",
       );
+    } else if (plan.canApply) {
+      event.observed.followed = false;
+      event.observed.overriddenBy = applySummary.reason;
+      event.observed.routingStatus = applySummary.status ?? (routingSummary.role === "worker" ? "downgraded" : "applied");
+      ctx.ui?.notify?.(
+        `router auto-model: SKIPPED ${applySummary.fromModel ?? "unknown"} → ${applySummary.toModel ?? "none"} · ${applySummary.reason}`,
+        "warning",
+      );
     } else if (summary.match === false) {
       event.observed.followed = false;
       event.observed.overriddenBy = applySummary.reason;
+      event.observed.routingStatus = applySummary.status ?? "policy_noop";
       ctx.ui?.notify?.(
         `router auto-model: SKIPPED ${applySummary.fromModel ?? "unknown"} → ${applySummary.toModel ?? "none"} · ${applySummary.reason}`,
         "warning",
@@ -340,9 +447,7 @@ export async function observeRouterTurn(ctx: any, pi?: Pick<ExtensionAPI, "setMo
 
     if (applySummary.applied) {
       event.observed.followed = true;
-    } else if (summary.match === false) {
-      event.observed.followed = false;
-      event.observed.overriddenBy = applySummary.reason;
+      event.observed.routingStatus = routingSummary.role === "worker" ? "downgraded" : "applied";
     }
   }
 

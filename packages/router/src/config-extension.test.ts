@@ -22,7 +22,7 @@ import {
 import type { RouterState } from "./config.js";
 import { registerRouter } from "./extension.js";
 import { decideRoute } from "./decision.js";
-import { applyModelRouting, modelsMatch, observeRouterTurn, planAutoModelSwitch, summarizeRouterDecision } from "./observe.js";
+import { applyModelRouting, modelsMatch, observeRouterTurn, planAutoModelDowngrade, planAutoModelSwitch, summarizeRouterDecision } from "./observe.js";
 import type { RouterCheckpoint } from "./types.js";
 
 function ctxMock(sessionPath?: string) {
@@ -253,6 +253,37 @@ describe("auto-model policy planning", () => {
     expect(second.canApply).toBe(true);
   });
 
+  it("reverts an elevated current model back to worker after cooldown", () => {
+    const config = { ...loadRouterConfig(ctxMock()), enabled: true, activeProfile: "spark-smart", mode: "auto_model" as const };
+    const checkpointEvent = checkpoint({ activeModel: "openai-codex/gpt-5.5", provider: "openai-codex" });
+    const summary = {
+      checkpointId: checkpointEvent.checkpointId,
+      action: "continue_current" as const,
+      role: "current" as const,
+      targetModel: checkpointEvent.activeModel,
+      currentModel: checkpointEvent.activeModel,
+      currentProvider: checkpointEvent.provider,
+      match: true,
+      confidence: 0.82,
+      reason: "continue current",
+      text: "router: MATCH continue_current → current(current) · current=openai-codex/gpt-5.5 · 0.82 · continue current",
+    };
+    const state: RouterState = {
+      autoModelLastSwitchAt: new Date(Date.parse(checkpointEvent.createdAt) - 60_000).toISOString(),
+      autoModelPendingTarget: checkpointEvent.activeModel,
+      autoModelPendingStreak: 0,
+      autoModelSwitchHistory: [new Date(Date.parse(checkpointEvent.createdAt) - 120_000).toISOString()],
+    };
+
+    const workerTarget = config.profiles[config.activeProfile].worker;
+    const plan = planAutoModelDowngrade(checkpointEvent, summary, state, config.autoModel, workerTarget);
+
+    expect(plan.canApply).toBe(true);
+    expect(plan.reason).toContain("reverting to worker");
+    expect(plan.statePatch.autoModelPendingTarget).toBe(workerTarget);
+    expect(plan.statePatch.autoModelPendingStreak).toBe(0);
+  });
+
   it("blocks auto-model switch during cooldown and window cap", () => {
     const config = { ...loadRouterConfig(ctxMock()), enabled: true, activeProfile: "spark-smart", mode: "auto_model" as const };
     const checkpointEvent = checkpoint();
@@ -450,11 +481,12 @@ describe("router extension", () => {
 
     const applied = await applyModelRouting(pi, ctx, summary);
 
-    expect(applied).toMatchObject({ applied: true, fromModel: "gpt-5.3-codex-spark", toModel: "openai-codex/gpt-5.5" });
+    expect(applied).toMatchObject({ applied: true, status: "applied", fromModel: "gpt-5.3-codex-spark", toModel: "openai-codex/gpt-5.5" });
     expect(pi.selectedModels).toEqual([{ provider: "openai-codex", id: "gpt-5.5" }]);
 
     const none = await applyModelRouting(pi, ctx, { ...summary, role: "none", targetModel: undefined, match: null });
     expect(none.applied).toBe(false);
+    expect(none.status).toBe("policy_noop");
     expect(pi.selectedModels).toHaveLength(1);
   });
 
@@ -476,10 +508,12 @@ describe("router extension", () => {
     expect(qualifiedWithoutProvider.match).toBe(false);
     expect(leafWithoutProvider.match).toBe(false);
     expect(modelsMatch("zai/kimi-k2.6", "openrouter/moonshotai/kimi-k2.6", "openrouter")).toBe(false);
+    expect(modelsMatch("openrouter/moonshotai/kimi-k2.6", "moonshotai/kimi-k2.6")).toBe(false);
     expect(modelsMatch("moonshotai/kimi-k2.6", "openrouter/moonshotai/kimi-k2.6", "openrouter")).toBe(true);
     const applied = await applyModelRouting(pi, ctx, summary);
 
     expect(applied.applied).toBe(true);
+    expect(applied.status).toBe("applied");
     expect(pi.selectedModels).toEqual([{ provider: "openai-codex", id: "gpt-5.5" }]);
   });
 
@@ -510,9 +544,13 @@ describe("router extension", () => {
     const ambiguous = await applyModelRouting(pi, ambiguousCtx, { checkpointId: "c", action: "ask_micro_hint", role: "smart", currentModel: "other", targetModel: "ambiguous", match: false, confidence: 0.8, reason: "test", text: "test" });
 
     expect(applied.applied).toBe(true);
+    expect(applied.status).toBe("applied");
     expect(skipped.applied).toBe(false);
+    expect(skipped.status).toBe("policy_noop");
     expect(duplicateSkipped.applied).toBe(false);
+    expect(duplicateSkipped.status).toBe("policy_noop");
     expect(ambiguous.applied).toBe(false);
+    expect(ambiguous.status).toBe("blocked");
     expect(ambiguous.reason).toContain("target model not configured");
     expect(pi.selectedModels).toEqual([{ provider: "openrouter", id: "moonshotai/kimi-k2.6" }]);
   });

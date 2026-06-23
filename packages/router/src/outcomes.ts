@@ -22,6 +22,7 @@ export interface RouterOutcome {
   acceptedDiff: boolean | null;
   userInterrupted: boolean;
   userOverrodeDecision: boolean;
+  routeStatus?: RouteEvent["observed"]["routingStatus"];
   finalFilesTouched: number;
   finalDiffLines: number;
   wallTimeMs: number | null;
@@ -87,6 +88,7 @@ export function buildUnknownOutcome(event: RouteEvent, checkpoint?: RouterCheckp
     acceptedDiff: null,
     userInterrupted: false,
     userOverrodeDecision: Boolean(event.observed.overriddenBy),
+    routeStatus: event.observed.routingStatus,
     finalFilesTouched: checkpoint ? ((checkpoint.features.diffFilesChanged ?? 0) > 0 ? (checkpoint.features.diffFilesChanged ?? 0) : checkpoint.features.filesTouched) : 0,
     finalDiffLines: checkpoint?.features.diffLines ?? 0,
     wallTimeMs: null,
@@ -180,6 +182,7 @@ export function enrichOutcome(outcome: RouterOutcome, options: { checkpoint?: Ro
     acceptedDiff,
     userInterrupted: outcome.userInterrupted || Boolean(event?.decision.action === "stop_and_ask_user" && event.observed.followed === true && !event.observed.overriddenBy),
     userOverrodeDecision: outcome.userOverrodeDecision || Boolean(event?.observed.overriddenBy),
+    routeStatus: outcome.routeStatus ?? event?.observed.routingStatus,
     finalFilesTouched,
     finalDiffLines,
     reworkTurns,
