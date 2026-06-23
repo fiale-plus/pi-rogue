@@ -3,8 +3,8 @@ import { homedir } from "node:os";
 import { resolve } from "node:path";
 
 const EXTENSIONS = "md|json|txt|yaml|yml|toml|ts|js|tsx|jsx";
-const HOME_REVIEW_ARTIFACT_RE = new RegExp(String.raw`~/(?:[^\s\`'"<>),;:]+/)*[^\s\`'"<>),;:]+\.(?:${EXTENSIONS})`, "g");
-const ABSOLUTE_REVIEW_ARTIFACT_RE = new RegExp(String.raw`/(?:[^\s\`'"<>),;:]+/)*[^\s\`'"<>),;:]+\.(?:${EXTENSIONS})`, "g");
+const HOME_REVIEW_ARTIFACT_RE = new RegExp(String.raw`(?<![A-Za-z0-9._/-])~/(?:[^\s\`'"<>),;:]+/)*[^\s\`'"<>),;:]+\.(?:${EXTENSIONS})`, "g");
+const ABSOLUTE_REVIEW_ARTIFACT_RE = new RegExp(String.raw`(?<![A-Za-z0-9._~/-])/(?:[^\s\`'"<>),;:]+/)*[^\s\`'"<>),;:]+\.(?:${EXTENSIONS})`, "g");
 const REVIEW_DOC_RE = new RegExp(String.raw`(?:^|[\s\`'"])((?:\.{1,2}/)?(?:[A-Za-z0-9._-]+/)*(?:plan|progress)\.md)(?=$|[\s\`'"),.;:])`, "g");
 
 function normalizeArtifactRef(ref: string): string {

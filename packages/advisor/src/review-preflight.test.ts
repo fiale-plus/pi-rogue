@@ -20,8 +20,8 @@ describe("review preflight", () => {
     expect(refs).toEqual(expect.arrayContaining(["plan.md", "./progress.md", "docs/review/progress.md", "/var/folders/pi-review-summary.json"]));
   });
 
-  it("does not treat URL paths as local review artifacts", () => {
-    const refs = extractReviewArtifactHints("see https://example.com/docs/progress.md and then read progress.md");
+  it("does not treat URL paths or relative-path suffixes as local review artifacts", () => {
+    const refs = extractReviewArtifactHints("see https://example.com/docs/progress.md, inspect packages/context-broker/src/extension.ts, and then read progress.md");
     expect(refs).toEqual(["progress.md"]);
   });
 
