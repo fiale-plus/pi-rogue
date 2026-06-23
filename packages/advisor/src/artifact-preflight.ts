@@ -30,7 +30,7 @@ function escapeRegExp(value: string): string {
 function bareRefLooksRequired(raw: string, ref: string): boolean {
   const quoted = String.raw`[\`'\"]?${escapeRegExp(ref)}[\`'\"]?`;
   const imperativeBeforeRef = new RegExp(String.raw`\b(?:read|open|review|check|inspect|see|use|load)\s+(?:the\s+)?${quoted}\b`, "i");
-  const artifactNounBeforeRef = new RegExp(String.raw`\b(?:artifact|file|path|bundle)\s+(?:at\s+|is\s+|=\s+)?${quoted}\b`, "i");
+  const artifactNounBeforeRef = new RegExp(String.raw`\b(?:artifact|file|path|bundle)\s*(?::\s+|at\s+|is\s+|=\s+|\s+)${quoted}\b`, "i");
   return imperativeBeforeRef.test(raw) || artifactNounBeforeRef.test(raw);
 }
 

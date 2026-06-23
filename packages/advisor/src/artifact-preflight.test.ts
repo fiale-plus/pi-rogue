@@ -42,8 +42,8 @@ describe("artifact preflight", () => {
   });
 
   it("extracts explicitly requested bare filenames", () => {
-    const refs = extractArtifactReferences("Please read `config.json` before continuing");
-    expect(refs).toEqual(["config.json"]);
+    const refs = extractArtifactReferences("Please read `config.json` before continuing; bundle: `summary.json`");
+    expect(refs).toEqual(["config.json", "summary.json"]);
   });
 
   it("ignores prose-like bare markdown filenames that are not review docs", () => {
