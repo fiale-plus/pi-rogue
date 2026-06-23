@@ -446,11 +446,8 @@ export async function observeRouterTurn(ctx: any, pi?: Pick<ExtensionAPI, "setMo
     }
 
     if (applySummary.applied) {
-      event.observed.followed = routingSummary.role === "worker" ? false : true;
+      event.observed.followed = true;
       event.observed.routingStatus = routingSummary.role === "worker" ? "downgraded" : "applied";
-      if (routingSummary.role === "worker") {
-        event.observed.overriddenBy = applySummary.reason;
-      }
     }
   }
 
