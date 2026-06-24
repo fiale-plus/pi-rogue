@@ -19,9 +19,10 @@ For each mode, Rogue resolves `pi-dedicated` through the Pi Rogue router config 
 Set these in your shell or runtime environment:
 
 ```sh
-export PORTKEY_BASE_URL="https://your-portkey-or-openai-compatible-endpoint/v1"
-export PORTKEY_API_KEY="..."
+export PORTKEY_BASE_URL="http://127.0.0.1:8787/v1"
+export PORTKEY_API_KEY=""                  # optional for self-host; set if your deployment requires auth
 export PORTKEY_AUTH_HEADER="x-portkey-api-key" # optional
+export PORTKEY_AUTH_SCHEME="Bearer"        # optional
 export PI_ROGUE_CONFIG_PATH="$HOME/.pi/agent/pi-rogue/config.json"
 export PI_ROGUE_ROUTER_CONFIG_PATH="$HOME/.pi/agent/pi-rogue/router/config.json"
 ```
@@ -41,6 +42,10 @@ export EXPECTED_OUTPUT_TOKENS="900"
 From repo root:
 
 ```sh
+cp packages/rogue-gateway/.env.example packages/rogue-gateway/.env
+# optionally edit packages/rogue-gateway/.env to match your local paths / auth
+
+docker compose --env-file packages/rogue-gateway/.env -f packages/rogue-gateway/docker-compose.yml up -d
 npm run measure:portkey --workspace @fiale-plus/pi-rogue-gateway
 ```
 
@@ -57,5 +62,5 @@ A JSON report containing:
 ## What is still missing for live execution
 
 - A real Portkey/OpenAI-compatible base URL
-- A real API key in the runtime environment
 - A running Portkey self-host instance (or other compatible endpoint)
+- Optional auth only if your deployment requires it

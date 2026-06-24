@@ -10,7 +10,6 @@ function requireEnv(name: string): string {
 
 async function main(): Promise<void> {
   requireEnv("PORTKEY_BASE_URL");
-  requireEnv("PORTKEY_API_KEY");
 
   const report = await measurePiDedicatedModes({
     env: process.env,
