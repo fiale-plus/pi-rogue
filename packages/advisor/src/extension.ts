@@ -617,9 +617,8 @@ function taskSimilarity(previousTask: string, nextTask: string): number {
     if (nextTokens.has(token)) overlap += 1;
   }
   const smaller = Math.min(prevTokens.size, nextTokens.size);
-  if (smaller < 3) {
-    return smaller >= 2 && overlap === smaller ? 1 : 0;
-  }
+  if (smaller >= 2 && overlap === smaller) return 1;
+  if (smaller < 3) return 0;
   return overlap / Math.max(prevTokens.size, nextTokens.size);
 }
 

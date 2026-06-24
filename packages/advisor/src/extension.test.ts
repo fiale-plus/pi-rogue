@@ -199,6 +199,7 @@ describe("review output schema parsing", () => {
     expect(isTaskContinuation("run advisor review on original task", "rotate hf token for benchmark credentials")).toBe(false);
     expect(isTaskContinuation("fix", "fix the auth token bug")).toBe(false);
     expect(isTaskContinuation("failing tests", "fix failing tests")).toBe(true);
+    expect(isTaskContinuation("fix auth token bug", "fix auth token bug in package advisor by updating env parsing")).toBe(true);
 
     const legacyState = {
       followUp: "old unscoped follow-up",
