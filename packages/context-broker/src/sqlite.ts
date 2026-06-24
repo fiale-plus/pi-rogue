@@ -19,6 +19,7 @@ import type {
 export interface SqliteContextBrokerOptions extends ContextBrokerOptions {
   path?: string;
   dir?: string;
+  busyTimeoutMs?: number;
 }
 
 const DEFAULT_MAX_RECORDS = 256;
@@ -26,6 +27,7 @@ const DEFAULT_MAX_BYTES = 128 * 1024 * 1024;
 const DEFAULT_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 const DEFAULT_SUMMARY_BYTES = 320;
 const DEFAULT_BRIEF_BYTES = 2_000;
+const DEFAULT_BUSY_TIMEOUT_MS = 2_500;
 const TIER_ORDER: Record<ContextArtifactTier, number> = { hot: 0, warm: 1, cold: 2 };
 const TIER_REMOVAL_ORDER: Record<ContextArtifactTier, number> = { cold: 0, warm: 1, hot: 2 };
 
@@ -162,6 +164,12 @@ function stableSource(input: ContextArtifactInput): string | undefined {
   return input.parentIds?.find(Boolean);
 }
 
+function isSqliteLockedError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  const code = typeof error === "object" && error !== null && "code" in error ? String((error as { code?: unknown }).code ?? "") : "";
+  return code === "SQLITE_BUSY" || code === "SQLITE_LOCKED" || /database is locked|database table is locked/i.test(message);
+}
+
 function initialize(db: DatabaseSync): void {
   db.exec(`
     PRAGMA journal_mode = WAL;
@@ -213,6 +221,7 @@ export function createSqliteContextBroker(options: SqliteContextBrokerOptions = 
   const dbPath = defaultSqlitePath(options);
   if (dbPath !== ":memory:" && !existsSync(dirname(dbPath))) ensureParent(dbPath);
   const db = new DatabaseSync(dbPath);
+  db.exec(`PRAGMA busy_timeout = ${Math.max(0, Math.floor(options.busyTimeoutMs ?? DEFAULT_BUSY_TIMEOUT_MS))}`);
   initialize(db);
 
   const maxRecords = Math.max(1, Math.floor(options.maxRecords ?? DEFAULT_MAX_RECORDS));
@@ -253,8 +262,29 @@ export function createSqliteContextBroker(options: SqliteContextBrokerOptions = 
   }
 
   function deleteArtifact(id: string): boolean {
-    db.prepare("DELETE FROM artifact_fts WHERE id = ?").run(id);
-    return db.prepare("DELETE FROM artifacts WHERE id = ?").run(id).changes > 0;
+    db.exec("SAVEPOINT delete_artifact");
+    try {
+      db.prepare("DELETE FROM artifact_fts WHERE id = ?").run(id);
+      const removed = db.prepare("DELETE FROM artifacts WHERE id = ?").run(id).changes > 0;
+      db.exec("RELEASE delete_artifact");
+      return removed;
+    } catch (error) {
+      try {
+        db.exec("ROLLBACK TO delete_artifact");
+      } catch {
+        // ignore rollback noise after a failed delete
+      }
+      try {
+        db.exec("RELEASE delete_artifact");
+      } catch {
+        // ignore release noise after rollback
+      }
+      if (isSqliteLockedError(error)) {
+        console.warn("SQLite delete skipped because the database is locked", error);
+        return false;
+      }
+      throw error;
+    }
   }
 
   function maintainStorage(removedCount: number, options: { purge?: boolean } = {}): void {
@@ -392,26 +422,39 @@ export function createSqliteContextBroker(options: SqliteContextBrokerOptions = 
     let removedCount = dropExpired(now, protectedIds);
     applyCooling(now, protectedIds);
     const sessions = db.prepare("SELECT DISTINCT sessionId FROM artifacts").all().map((row) => String(row.sessionId));
+    let deletionBlocked = false;
     for (const sessionId of sessions) {
       for (const tier of ["cold", "warm", "hot"] as ContextArtifactTier[]) {
         while (!withinCaps(sessionId, tier)) {
           const id = removalCandidate(sessionId, protectedIds, tier);
           if (!id) break;
           if (deleteArtifact(id)) removedCount += 1;
+          else {
+            deletionBlocked = true;
+            break;
+          }
         }
+        if (deletionBlocked) break;
       }
+      if (deletionBlocked) break;
 
       while (!withinCaps(sessionId)) {
         const id = removalCandidate(sessionId, protectedIds);
         if (!id) break;
         if (deleteArtifact(id)) removedCount += 1;
+        else {
+          deletionBlocked = true;
+          break;
+        }
       }
+      if (deletionBlocked) break;
     }
 
-    while (!withinGlobalCaps()) {
+    while (!deletionBlocked && !withinGlobalCaps()) {
       const id = removalCandidateGlobal(protectedIds);
       if (!id) break;
       if (deleteArtifact(id)) removedCount += 1;
+      else deletionBlocked = true;
     }
     const status = currentStatus();
     maintainStorage(removedCount, { purge: false });
