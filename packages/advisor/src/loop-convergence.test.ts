@@ -60,6 +60,7 @@ const ADVISOR_STATE_DIR = join(homedir(), ".pi", "agent", "pi-rogue", "advisor")
 const ADVISOR_STATE_PATH = advisorSessionStatePath("session");
 const ADVISOR_CONFIG_PATH = join(ADVISOR_STATE_DIR, "config.json");
 const ADVISOR_CACHE_PATH = join(ADVISOR_STATE_DIR, "cache.json");
+const ADVISOR_DIAGNOSTICS_PATH = join(ADVISOR_STATE_DIR, "diagnostics.jsonl");
 const ADVISOR_CURRENT_PATH = join(dirname(ADVISOR_STATE_PATH), "current.md");
 
 function readAdvisorState(): any {
@@ -114,6 +115,7 @@ describe("advisor two-agent convergence", () => {
     mkdirSync(dirname(ADVISOR_STATE_PATH), { recursive: true });
     writeFileSync(ADVISOR_CONFIG_PATH, JSON.stringify({ mode: "auto", review: "light", checkins: "off", checkinIntervalMinutes: 30 }, null, 2), "utf8");
     writeFileSync(ADVISOR_CACHE_PATH, "{}", "utf8");
+    writeFileSync(ADVISOR_DIAGNOSTICS_PATH, "", "utf8");
     writeFileSync(ADVISOR_STATE_PATH, JSON.stringify({
       turns: 0,
       lastTask: "",
@@ -224,6 +226,27 @@ describe("advisor two-agent convergence", () => {
 
     const withoutFollowUp = await preflight![0]({ systemPrompt: "SYS", prompt: basePrompt }, ctx);
     expect(String(withoutFollowUp?.systemPrompt)).not.toContain("Advisor follow-up");
+  });
+
+  it("does re-run repeated failed snapshots instead of suppressing safety-critical review", async () => {
+    const preflight = handlers.before_agent_start;
+    const turnEnd = handlers.turn_end;
+    expect(preflight?.length).toBe(1);
+    expect(turnEnd?.length).toBe(1);
+
+    await handlers.session_start?.[0]?.({}, ctx);
+    await preflight![0]({ systemPrompt: "SYS", prompt: "Continue the current goal" }, ctx);
+
+    const failureEvent = {
+      toolResults: [{ toolName: "bash", status: "error", error: "npm test failed" }],
+      message: { role: "assistant", content: "npm test failed" },
+    };
+
+    await turnEnd![0](failureEvent, ctx);
+    await turnEnd![0](failureEvent, ctx);
+
+    expect(completeSimpleMock).toHaveBeenCalledTimes(2);
+    expect(readAdvisorState().reviewControl.lastReason).not.toBe("repeated material snapshot");
   });
 
   it("normalizes string actions in advisor handoffs", async () => {
@@ -393,6 +416,74 @@ describe("advisor two-agent convergence", () => {
     const promptText = JSON.stringify(messages ?? completeSimpleMock.mock.calls.at(-1));
     expect(promptText).toContain("Context broker brief");
     expect(promptText).toContain("ctx://session/s/tool_output/abc/ctx-1");
+  });
+
+  it("detects repetitive advisory answers when the context changes", async () => {
+    expect(commands["pi-rogue-advisor"]).toBeTruthy();
+    completeSimpleMock.mockResolvedValue({
+      content: [{ type: "text", text: "Keep the current approach and inspect the latest brief." }],
+    });
+
+    const bumpContext = (label: string) => {
+      const next = readAdvisorState();
+      next.turns = (next.turns ?? 0) + 1;
+      next.lastTask = "same underlying task";
+      next.notes = [...(next.notes ?? []), `context ${label}`];
+      writeFileSync(ADVISOR_STATE_PATH, `${JSON.stringify(next, null, 2)}\n`, "utf8");
+    };
+
+    bumpContext("first");
+    await commands["pi-rogue-advisor"].handler("should I keep going?", ctx);
+    bumpContext("second");
+    await commands["pi-rogue-advisor"].handler("should I keep going?", ctx);
+    bumpContext("third");
+    await commands["pi-rogue-advisor"].handler("should I keep going?", ctx);
+
+    const lastMessage = sendMessageMock.mock.calls.at(-1)?.[0];
+    expect(String(lastMessage?.content)).toContain("Advisor loop detected");
+    expect(String(lastMessage?.content)).not.toContain("Keep the current approach");
+    expect(readFileSync(ADVISOR_DIAGNOSTICS_PATH, "utf8")).toContain("advisor_loop_detected");
+    expect(completeSimpleMock).toHaveBeenCalledTimes(3);
+  });
+
+  it("does not carry manual loop detection across unrelated tasks", async () => {
+    expect(commands["pi-rogue-advisor"]).toBeTruthy();
+    completeSimpleMock.mockResolvedValue({
+      content: [{ type: "text", text: "Use the latest evidence and run one focused check." }],
+    });
+
+    for (const task of ["fix advisor loop guard", "rotate hf token", "repair context broker cache"]) {
+      const next = readAdvisorState();
+      next.turns = (next.turns ?? 0) + 1;
+      next.lastTask = task;
+      next.notes = [...(next.notes ?? []), `working on ${task}`];
+      writeFileSync(ADVISOR_STATE_PATH, `${JSON.stringify(next, null, 2)}\n`, "utf8");
+      await commands["pi-rogue-advisor"].handler("should I keep going?", ctx);
+    }
+
+    const lastMessage = sendMessageMock.mock.calls.at(-1)?.[0];
+    expect(String(lastMessage?.content)).not.toContain("Advisor loop detected");
+  });
+
+  it("detects oscillating repetitive advisory answers", async () => {
+    expect(commands["pi-rogue-advisor"]).toBeTruthy();
+    completeSimpleMock
+      .mockResolvedValueOnce({ content: [{ type: "text", text: "Advice A: inspect the latest brief before continuing." }] })
+      .mockResolvedValueOnce({ content: [{ type: "text", text: "Advice B: run one focused validation before continuing." }] })
+      .mockResolvedValueOnce({ content: [{ type: "text", text: "Advice A - inspect the latest brief before continuing." }] })
+      .mockResolvedValueOnce({ content: [{ type: "text", text: "Advice B - run one focused validation before continuing." }] });
+
+    for (const label of ["one", "two", "three", "four"]) {
+      const next = readAdvisorState();
+      next.turns = (next.turns ?? 0) + 1;
+      next.lastTask = "same underlying task";
+      next.notes = [...(next.notes ?? []), `context ${label}`];
+      writeFileSync(ADVISOR_STATE_PATH, `${JSON.stringify(next, null, 2)}\n`, "utf8");
+      await commands["pi-rogue-advisor"].handler("should I keep going?", ctx);
+    }
+
+    const lastMessage = sendMessageMock.mock.calls.at(-1)?.[0];
+    expect(String(lastMessage?.content)).toContain("Advisor loop detected");
   });
 
   it("does not re-run advisory review on repeated agent-end material snapshots", async () => {

@@ -6,7 +6,7 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Box, Text } from "@earendil-works/pi-tui";
 import { completeSimple, type ThinkingLevel } from "@earendil-works/pi-ai";
 import { Type } from "typebox";
-import { featureDir, featureFile, readText, truncate, writeText, atomicWriteText } from "./internal.js";
+import { appendText, featureDir, featureFile, readText, truncate, writeText, atomicWriteText } from "./internal.js";
 import { advisorArgumentCompletions, piRogueArgumentCompletions } from "./completions.js";
 import {
   appendRouteLog,
@@ -53,6 +53,7 @@ const CONFIG_PATH = featureFile("advisor", "config.json");
 const LEGACY_STATE_PATH = featureFile("advisor", "state.json");
 const CACHE_PATH = featureFile("advisor", "cache.json");
 const HISTORY_PATH = featureFile("advisor", "history.jsonl");
+const DIAGNOSTICS_PATH = featureFile("advisor", "diagnostics.jsonl");
 const SESSION_STATE_PROP = "__piRogueAdvisorStatePath";
 const ORCHESTRATION_DIR = join(homedir(), ".pi", "agent", "fiale-plus", "orchestration");
 
@@ -64,6 +65,7 @@ const MIN_CHECKIN_INTERVAL_MINUTES = 10;
 const MAX_CHECKIN_INTERVAL_MINUTES = 240;
 const STATE_VERSION = 1;
 const checkinLocks = new Set<string>();
+const reviewLocks = new Set<string>();
 
 const REVIEW_TASK_ACTIONS_LIMIT = 2;
 const ADVISORY_SIGNALS_LIMIT = 4;
@@ -103,6 +105,7 @@ interface SessionState {
     queuedReason?: string;
   };
   reviewControl: ReviewControlState;
+  advisorLoop?: AdvisorLoopState;
   advisorPauseUntilTurn?: number;
 }
 function defaultReviewControl(): ReviewControlState {
@@ -130,6 +133,7 @@ function defaultState(): SessionState {
     router: {},
     checkin: { queued: false },
     reviewControl: defaultReviewControl(),
+    advisorLoop: defaultAdvisorLoopState(),
   };
 }
 
@@ -259,6 +263,24 @@ function loadStateFromPath(path: string): SessionState {
       lastTrigger: control?.lastTrigger,
       lastAppliedAt: control?.lastAppliedAt,
     },
+    advisorLoop: raw.advisorLoop && typeof raw.advisorLoop === "object" ? {
+      repeatCount: Number((raw.advisorLoop as { repeatCount?: unknown }).repeatCount) || 0,
+      recent: Array.isArray((raw.advisorLoop as { recent?: unknown }).recent)
+        ? (raw.advisorLoop as { recent: unknown[] }).recent.map((entry) => entry && typeof entry === "object" ? entry as Partial<AdvisorLoopEntry> : undefined).filter((entry): entry is Partial<AdvisorLoopEntry> => Boolean(entry?.outputHash && entry?.contextHash && entry?.familyHash && entry?.source)).map((entry) => ({
+          outputHash: String(entry.outputHash),
+          outputText: String(entry.outputText ?? ""),
+          contextHash: String(entry.contextHash),
+          familyHash: String(entry.familyHash),
+          source: String(entry.source),
+          at: String(entry.at ?? ""),
+        })).slice(-8)
+        : [],
+      lastOutputHash: typeof (raw.advisorLoop as { lastOutputHash?: unknown }).lastOutputHash === "string" ? (raw.advisorLoop as { lastOutputHash?: string }).lastOutputHash : undefined,
+      lastOutputText: typeof (raw.advisorLoop as { lastOutputText?: unknown }).lastOutputText === "string" ? (raw.advisorLoop as { lastOutputText?: string }).lastOutputText : undefined,
+      lastContextHash: typeof (raw.advisorLoop as { lastContextHash?: unknown }).lastContextHash === "string" ? (raw.advisorLoop as { lastContextHash?: string }).lastContextHash : undefined,
+      lastSource: typeof (raw.advisorLoop as { lastSource?: unknown }).lastSource === "string" ? (raw.advisorLoop as { lastSource?: string }).lastSource : undefined,
+      lastObservedAt: typeof (raw.advisorLoop as { lastObservedAt?: unknown }).lastObservedAt === "string" ? (raw.advisorLoop as { lastObservedAt?: string }).lastObservedAt : undefined,
+    } : defaultAdvisorLoopState(),
     advisorPauseUntilTurn: Number.isFinite(pauseUntil) ? pauseUntil : undefined,
   }, path);
 }
@@ -431,6 +453,29 @@ function squish(t: unknown, max = 200): string {
   return s.length <= max ? s : s.slice(0, max - 1).trimEnd() + "…";
 }
 
+function sanitizeDiagnosticValue(value: unknown): unknown {
+  if (typeof value === "string") {
+    return squish(value
+      .replace(/\b(sk-[A-Za-z0-9_-]{12,})\b/g, "[REDACTED_API_KEY]")
+      .replace(/\b(gh[pousr]_[A-Za-z0-9_]{12,})\b/g, "[REDACTED_GITHUB_TOKEN]")
+      .replace(/([\"']?(?:api[_-]?key|token|secret|password|credential)[\w.-]*[\"']?\s*[:=]\s*[\"']?)([^\s'\",;}]+)/gi, "$1[REDACTED]"), 300);
+  }
+  if (Array.isArray(value)) return value.map((item) => sanitizeDiagnosticValue(item));
+  if (value && typeof value === "object") {
+    return Object.fromEntries(Object.entries(value as Record<string, unknown>).map(([key, item]) => [key, sanitizeDiagnosticValue(item)]));
+  }
+  return value;
+}
+
+function appendAdvisorDiagnostic(event: string, details: Record<string, unknown> = {}): void {
+  try {
+    const safeDetails = sanitizeDiagnosticValue(details) as Record<string, unknown>;
+    appendText(DIAGNOSTICS_PATH, `${JSON.stringify({ at: new Date().toISOString(), event, ...safeDetails })}\n`);
+  } catch {
+    // Diagnostics are operational evidence only; they must never break advisor execution.
+  }
+}
+
 function noteText(note: unknown): string {
   const text = contentText(note);
   if (/^\[object Object\](,\[object Object\])*$/.test(text)) return "";
@@ -530,7 +575,7 @@ export function parseReviewPayload(raw: string, activeTask: string): ParsedRevie
 export function isTaskContinuation(previousTask: string, nextTask: string): boolean {
   const prev = normalizeTask(previousTask);
   const next = normalizeTask(nextTask);
-  if (!prev || !next) return true;
+  if (!prev || !next) return false;
   if (prev === next) return true;
 
   const prevRefs = githubIssueRefs(prev);
@@ -553,11 +598,28 @@ export function isTaskContinuation(previousTask: string, nextTask: string): bool
     }
   }
 
-  return prev.includes(next) || next.includes(prev);
+  return taskSimilarity(prev, next) >= 0.62;
+}
+
+const TASK_STOPWORDS = new Set(["the", "and", "for", "with", "from", "into", "this", "that", "then", "task", "work", "please", "need", "needs", "should", "would", "could", "have", "has", "had", "been", "about", "onto", "your", "here"]);
+
+function taskTokens(task: string): Set<string> {
+  return new Set(normalizeTask(task).split(" ").filter((token) => token.length > 2 && !TASK_STOPWORDS.has(token)));
+}
+
+function taskSimilarity(previousTask: string, nextTask: string): number {
+  const prevTokens = taskTokens(previousTask);
+  const nextTokens = taskTokens(nextTask);
+  if (prevTokens.size < 3 || nextTokens.size < 3) return 0;
+  let overlap = 0;
+  for (const token of prevTokens) {
+    if (nextTokens.has(token)) overlap += 1;
+  }
+  return overlap / Math.max(prevTokens.size, nextTokens.size);
 }
 
 function normalizeTask(task: string): string {
-  return squish(task, 200).toLowerCase();
+  return sanitizeAdvisorText(task).toLowerCase().replace(/[^a-z0-9#/:.-]+/g, " ").replace(/\s+/g, " ").trim();
 }
 
 function githubIssueRefs(task: string): string[] {
@@ -664,6 +726,7 @@ function consumeReviewFollowUp(state: SessionState): void {
 }
 
 function markReviewSkipped(state: SessionState, signature: string, trigger: string): void {
+  appendAdvisorDiagnostic("review_repeated_snapshot_skipped", { signature, trigger, task: state.lastTask });
   state.reviewControl = {
     ...state.reviewControl,
     status: "consumed",
@@ -708,6 +771,7 @@ function markReviewApplied(state: SessionState, signature: string, trigger: stri
 function persistReviewState(state: SessionState, includeReviewRoute: boolean): void {
   const persisted = loadStateFromPath(statePathFor(state));
   persisted.reviewControl = state.reviewControl;
+  persisted.advisorLoop = state.advisorLoop;
   persisted.followUp = state.followUp;
   persisted.followUpTask = state.followUpTask;
   persisted.reviewSignals = state.reviewSignals;
@@ -727,10 +791,12 @@ function hasCleanCloseoutEvidence(delta: string, meta: ReviewMaterialMeta): bool
 }
 
 function clearResolvedReviewWarning(state: SessionState, ctx: any, reason: string): void {
+  appendAdvisorDiagnostic("review_closeout_cleared", { reason, task: state.lastTask });
   state.followUp = "";
   state.followUpTask = undefined;
   state.reviewSignals = [];
   state.reviewSignalsTask = undefined;
+  state.advisorLoop = defaultAdvisorLoopState();
   if (state.router.review) {
     state.router.review = {
       ...state.router.review,
@@ -750,11 +816,13 @@ function recoverReviewControl(state: SessionState): void {
   if (!state.reviewControl.running) return;
 
   const pending = Boolean(state.reviewControl.pending);
+  appendAdvisorDiagnostic("review_running_recovered", { pending, task: state.lastTask, lastTrigger: state.reviewControl.lastTrigger });
   state.reviewControl = {
     ...state.reviewControl,
     running: false,
     status: pending ? "needed" : state.reviewControl.status === "needed" ? "needed" : "idle",
     consumed: !pending,
+    lastMaterialSignature: undefined,
     lastAppliedAt: new Date().toISOString(),
   };
 }
@@ -778,6 +846,29 @@ type ReviewControlState = {
   lastTrigger?: string;
   lastAppliedAt?: string;
 };
+
+type AdvisorLoopEntry = {
+  outputHash: string;
+  outputText: string;
+  contextHash: string;
+  familyHash: string;
+  source: string;
+  at: string;
+};
+
+type AdvisorLoopState = {
+  repeatCount: number;
+  recent: AdvisorLoopEntry[];
+  lastOutputHash?: string;
+  lastOutputText?: string;
+  lastContextHash?: string;
+  lastSource?: string;
+  lastObservedAt?: string;
+};
+
+function defaultAdvisorLoopState(): AdvisorLoopState {
+  return { repeatCount: 0, recent: [] };
+}
 
 type ReviewMaterialMeta = {
   fileChanged: boolean;
@@ -826,7 +917,8 @@ function buildAdvisorySignalsBlock(task: string, advisorySignals: string[], pivo
 export function consumeTaskScopedReviewSignals(state: SessionState, task: string): string {
   if (!state.reviewSignals.length) return "";
   const signalTask = state.reviewSignalsTask ?? "";
-  if (signalTask && !isTaskContinuation(signalTask, task)) {
+  if (!signalTask || !task || !isTaskContinuation(signalTask, task)) {
+    appendAdvisorDiagnostic("stale_review_signals_dropped", { signalTask, task, count: state.reviewSignals.length });
     state.reviewSignals = [];
     state.reviewSignalsTask = undefined;
     return "";
@@ -839,12 +931,14 @@ export function consumeTaskScopedReviewSignals(state: SessionState, task: string
 
 export function consumeTaskScopedFollowUp(state: SessionState, task: string): string {
   if (!state.followUp) return "";
-  if (!state.followUpTask) {
-    const text = state.followUp;
+  if (!state.followUpTask || !task) {
+    appendAdvisorDiagnostic("stale_followup_dropped", { followUpTask: state.followUpTask ?? "", task, reason: "missing_task_scope" });
     state.followUp = "";
-    return text;
+    state.followUpTask = undefined;
+    return "";
   }
   if (!isTaskContinuation(state.followUpTask, task)) {
+    appendAdvisorDiagnostic("stale_followup_dropped", { followUpTask: state.followUpTask, task, reason: "task_changed" });
     state.followUp = "";
     state.followUpTask = undefined;
     return "";
@@ -879,6 +973,87 @@ function distinctAdvisorSummary(reason: string, summary: string): string {
   return isRedundantAdvisorSummary(reason, cleanSummary) ? "" : cleanSummary;
 }
 
+const ADVISOR_LOOP_REPEAT_LIMIT = 3;
+
+function comparableAdvisorLoopText(text: string): string {
+  return sanitizeAdvisorText(text)
+    .toLowerCase()
+    .replace(/\b(?:advisor verdict|reason|summary|actions|status|nudge|full handoff|loop detected)\b[:.-]*/g, " ")
+    .replace(/[^a-z0-9]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function advisorLoopSimilarity(left: string, right: string): number {
+  const tokens = (text: string) => new Set(comparableAdvisorLoopText(text).split(" ").filter((token) => token.length > 2));
+  const leftTokens = tokens(left);
+  const rightTokens = tokens(right);
+  if (!leftTokens.size || !rightTokens.size) return 0;
+  let overlap = 0;
+  for (const token of leftTokens) {
+    if (rightTokens.has(token)) overlap += 1;
+  }
+  return overlap / Math.max(1, Math.min(leftTokens.size, rightTokens.size));
+}
+
+function isRepeatedAdvisorOutput(previous: string, current: string): boolean {
+  const a = comparableAdvisorLoopText(previous);
+  const b = comparableAdvisorLoopText(current);
+  if (!a || !b) return false;
+  if (a === b) return true;
+  if (Math.min(a.length, b.length) >= 60 && (a.includes(b) || b.includes(a))) return true;
+  return advisorLoopSimilarity(a, b) >= 0.85;
+}
+
+function advisorLoopContextHash(parts: string[]): string {
+  return hash("advisor-loop-context", ...parts.map((part) => squish(part, 400)));
+}
+
+function advisorLoopWarning(source: string, repeatCount: number): string {
+  return `Advisor loop detected: ${source} repeated near-identical guidance across changing context ${repeatCount} times. Re-anchor to the latest brief before repeating it.`;
+}
+
+function advisorLoopFamilyHash(parts: string[]): string {
+  return hash("advisor-loop-family", ...parts.map((part) => squish(part, 300)));
+}
+
+function observeAdvisorLoop(state: SessionState, source: string, familyHash: string, contextHash: string, outputText: string): { text: string; loopDetected: boolean; repeatCount: number } {
+  const normalized = comparableAdvisorLoopText(outputText);
+  if (!normalized) return { text: outputText, loopDetected: false, repeatCount: 0 };
+
+  const outputHash = hash("advisor-loop-output", normalized);
+  const previous = state.advisorLoop ?? defaultAdvisorLoopState();
+  const recent = previous.recent ?? [];
+  const matches = recent.filter((entry) => entry.source === source
+    && entry.familyHash === familyHash
+    && entry.contextHash !== contextHash
+    && (entry.outputHash === outputHash || isRepeatedAdvisorOutput(entry.outputText, outputText)));
+  const repeatCount = matches.length ? (previous.repeatCount ?? 1) + 1 : 1;
+  const loopDetected = repeatCount >= ADVISOR_LOOP_REPEAT_LIMIT;
+  const now = new Date().toISOString();
+  const outputSnapshot = sanitizeAdvisorText(outputText).trim().slice(0, 1200);
+
+  state.advisorLoop = {
+    repeatCount,
+    recent: [...recent, { outputHash, outputText: outputSnapshot, contextHash, familyHash, source, at: now }].slice(-8),
+    lastOutputHash: outputHash,
+    lastOutputText: outputSnapshot,
+    lastContextHash: contextHash,
+    lastSource: source,
+    lastObservedAt: now,
+  };
+
+  if (loopDetected) {
+    appendAdvisorDiagnostic("advisor_loop_detected", { source, repeatCount, contextHash, familyHash, output: outputSnapshot });
+  }
+
+  return {
+    text: loopDetected ? advisorLoopWarning(source, repeatCount) : outputText,
+    loopDetected,
+    repeatCount,
+  };
+}
+
 function advisorHandoffText(decision: "continue" | "review" | "defer", reason: string, summary: string, actions: unknown = []): string {
   const limitedActions = normalizeAdvisorActions(actions);
   const cleanReason = sanitizeAdvisorText(reason);
@@ -891,19 +1066,22 @@ function advisorHandoffText(decision: "continue" | "review" | "defer", reason: s
   ].filter(Boolean).join("\n");
 }
 
-function sendAdvisorHint(pi: ExtensionAPI, decision: "continue" | "review" | "defer", reason: string, summary: string, actions: unknown = []) {
+function sendAdvisorHint(pi: ExtensionAPI, state: SessionState, familyHash: string, contextHash: string, decision: "continue" | "review" | "defer", reason: string, summary: string, actions: unknown = []): { text: string; loopDetected: boolean; repeatCount: number } {
   const cleanReason = sanitizeAdvisorText(reason);
   const cleanSummary = distinctAdvisorSummary(cleanReason, summary);
   const limitedActions = normalizeAdvisorActions(actions);
+  const advisorText = advisorHandoffText(decision, cleanReason, cleanSummary, limitedActions);
+  const loop = observeAdvisorLoop(state, "handoff", familyHash, contextHash, advisorText);
   pi.sendMessage(
     {
       customType: "advisor:llm",
-      content: advisorHandoffText(decision, cleanReason, cleanSummary, limitedActions),
+      content: loop.text,
       display: true,
-      details: { kind: "handoff", decision, reason: cleanReason, summary: cleanSummary, actions: limitedActions },
+      details: { kind: "handoff", decision, reason: cleanReason, summary: cleanSummary, actions: limitedActions, loopDetected: loop.loopDetected, loopRepeatCount: loop.repeatCount },
     },
     { deliverAs: "followUp" },
   );
+  return loop;
 }
 
 function sendAdvisorAnswer(pi: ExtensionAPI, text: string) {
@@ -1191,9 +1369,11 @@ async function maybeAdvisorCheckin(pi: ExtensionAPI, ctx: any, source: string): 
       lastReason: reason,
       queued: false,
     };
+    const loopFamilyHash = advisorLoopFamilyHash(["checkin", source, state.lastTask || ""]);
+    const loopContextHash = advisorLoopContextHash(["checkin", source, prompt, orchestrationSnapshotText(ctx), brief(next)]);
+    sendAdvisorHint(pi, next, loopFamilyHash, loopContextHash, "review", "mid-hour check-in", completed.text, [completed.text]);
     saveState(next);
     setPiRogueStatus(ctx, config, next);
-    sendAdvisorHint(pi, "review", "mid-hour check-in", completed.text, [completed.text]);
     return true;
   } finally {
     checkinLocks.delete(key);
@@ -1744,24 +1924,47 @@ async function askAdvisor(pi: ExtensionAPI, ctx: any, question: string, scope: s
   const completed = await completeWithModelFallback(ctx, config, ADVISOR_SYSTEM, msgs, { maxTokens: 600, reasoning: "medium" as ThinkingLevel });
   if (!completed) return { text: "No model available. Install one via pi config.", error: "no_model" };
   const text = completed.text;
-  if (text && text !== "(empty)") { cache[ck] = text; saveCache(cache); }
+  const loopFamilyHash = advisorLoopFamilyHash(["question", question, scope, state.lastTask || ""]);
+  const loopContextHash = advisorLoopContextHash(["question", config.model ?? "auto", question, scope, includeWork ? brief(state) : "", brokerBrief]);
+  const loop = observeAdvisorLoop(state, "question", loopFamilyHash, loopContextHash, text);
+  if (!loop.loopDetected && text && text !== "(empty)") { cache[ck] = text; saveCache(cache); }
   state.advisorCalls++;
   saveState(state);
-  return { text, model: completed.model, fallback: completed.fallback };
+  return { text: loop.text, model: completed.model, fallback: completed.fallback, loopDetected: loop.loopDetected };
 }
 
 async function doReview(pi: ExtensionAPI, ctx: any, trigger: string, delta: string, meta: ReviewMaterialMeta) {
   const config = loadConfig();
   if (config.review === "off") return;
   const state = loadState(ctx);
+  const reviewLockKey = statePathFor(state);
+  if (reviewLocks.has(reviewLockKey)) return;
+  reviewLocks.add(reviewLockKey);
 
+  const phase: AdvisorRouteInput["phase"] = meta.isAgentEnd ? "closeout" : "review";
+  const trajectory = buildTrajectoryContext(ctx, {
+    phase,
+    turns: state.turns,
+    fileChanged: meta.fileChanged,
+    failed: meta.failed,
+  });
+  const reviewInput: AdvisorRouteInput = {
+    phase,
+    text: delta || "(none)",
+    brief: brief(state),
+    fileChanged: meta.fileChanged,
+    failed: meta.failed,
+  };
+  const reviewHeuristic = { ...heuristicRoute(reviewInput), trajectory };
   const signature = reviewMaterialSignature(state, delta, meta);
   if (state.reviewControl.running) {
+    reviewLocks.delete(reviewLockKey);
     return;
   }
-  if (shouldSkipReview(state, signature)) {
+  if (shouldSkipReview(state, signature) && !reviewHeuristic.safety && !meta.failed) {
     markReviewSkipped(state, signature, trigger);
     persistReviewState(state, false);
+    reviewLocks.delete(reviewLockKey);
     return;
   }
 
@@ -1773,21 +1976,6 @@ async function doReview(pi: ExtensionAPI, ctx: any, trigger: string, delta: stri
   let finalReason = "pending review";
 
   try {
-    const phase: AdvisorRouteInput["phase"] = meta.isAgentEnd ? "closeout" : "review";
-    const trajectory = buildTrajectoryContext(ctx, {
-      phase,
-      turns: state.turns,
-      fileChanged: meta.fileChanged,
-      failed: meta.failed,
-    });
-    const reviewInput: AdvisorRouteInput = {
-      phase,
-      text: delta || "(none)",
-      brief: brief(state),
-      fileChanged: meta.fileChanged,
-      failed: meta.failed,
-    };
-    const reviewHeuristic = { ...heuristicRoute(reviewInput), trajectory };
     const gatePrediction = binaryGatePredict(reviewInput.text, phase, trajectory);
     let reviewRoute = reviewHeuristic;
     if (gatePrediction && gatePrediction.trusted && !reviewHeuristic.safety) {
@@ -1961,11 +2149,14 @@ async function doReview(pi: ExtensionAPI, ctx: any, trigger: string, delta: stri
     writeText(advisorCurrentPath(ctx), `${display}\n`);
 
     const reviewTask = parsed.activeTask || state.lastTask || "";
+    const reviewFamilyHash = advisorLoopFamilyHash(["review", reviewTask, String(meta.isAgentEnd)]);
+    const reviewContextHash = advisorLoopContextHash(["review", trigger, reviewRoute.promptHash ?? "", reviewTask, b, brokerBrief, delta, String(meta.fileChanged), String(meta.failed), String(meta.isAgentEnd)]);
     const hasTaskActions = parsed.taskActions.length > 0;
     if (hasTaskActions) {
-      state.followUp = [sanitizeAdvisorText(parsed.summary), ...parsed.taskActions].filter(Boolean).join(" — ");
+      const intendedFollowUp = [sanitizeAdvisorText(parsed.summary), ...parsed.taskActions].filter(Boolean).join(" — ");
+      const hint = sendAdvisorHint(pi, state, reviewFamilyHash, reviewContextHash, decision, finalReason, parsed.summary || "", parsed.taskActions);
+      state.followUp = hint.loopDetected ? hint.text : intendedFollowUp;
       state.followUpTask = reviewTask;
-      sendAdvisorHint(pi, decision, finalReason, parsed.summary || "", parsed.taskActions);
     } else {
       state.followUp = "";
       state.followUpTask = undefined;
@@ -1973,9 +2164,10 @@ async function doReview(pi: ExtensionAPI, ctx: any, trigger: string, delta: stri
 
     const advisoryText = buildAdvisorySignalsBlock(reviewTask, parsed.advisorySignals, parsed.pivot);
     if (advisoryText) {
-      state.reviewSignals = [advisoryText];
+      const advisoryLoop = observeAdvisorLoop(state, "review-signals", reviewFamilyHash, reviewContextHash, advisoryText);
+      state.reviewSignals = [advisoryLoop.text];
       state.reviewSignalsTask = reviewTask;
-      sendAdvisorAnswer(pi, advisoryText);
+      sendAdvisorAnswer(pi, advisoryLoop.text);
     } else {
       state.reviewSignals = [];
       state.reviewSignalsTask = undefined;
@@ -1989,6 +2181,7 @@ async function doReview(pi: ExtensionAPI, ctx: any, trigger: string, delta: stri
       markReviewApplied(state, signature, trigger, finalDecision, finalReason, false);
       persistReviewState(state, true);
     }
+    reviewLocks.delete(reviewLockKey);
   }
 }
 
@@ -2245,12 +2438,14 @@ export function registerAdvisor(pi: ExtensionAPI): void {
         const resolved = await resolveModel(ctx, cfg);
         const route = state.router.review ?? state.router.preflight;
         const pause = advisorPauseRemaining(state, state.turns);
+        const loop = state.advisorLoop;
         ctx.ui.notify([
           note ? `🧭 ${truncate(note, 200)}` : "",
           route ? `Router: ${summarizeRoute(route)}${route.safety ? " · safety" : ""}` : "",
           "",
           `Mode: ${cfg.mode} | Review: ${cfg.review} | Check-ins: ${checkinDescription(cfg)} (orchestration-managed) | Model: ${resolved?.label || cfg.model || "auto"}`,
           pause > 0 ? `Advisor pause: ${pause} turn${pause === 1 ? "" : "s"} remaining` : "Advisor pause: off",
+          loop?.repeatCount && loop.repeatCount > 1 ? `Advisor loop guard: ${loop.repeatCount} repeated outputs across changing context` : "Advisor loop guard: idle",
           `Turns: ${state.turns} | Calls: ${state.advisorCalls} | Cache hits: ${state.cacheHits}`,
           state.checkin.lastAt ? `Last check-in: ${new Date(state.checkin.lastAt).toLocaleString()} (${state.checkin.lastReason || "mid-hour"})` : "Last check-in: never",
           state.checkin.queued ? `Queued check-in: ${state.checkin.queuedReason || "due"}` : "",
