@@ -53,7 +53,7 @@ const CONFIG_PATH = featureFile("advisor", "config.json");
 const LEGACY_STATE_PATH = featureFile("advisor", "state.json");
 const CACHE_PATH = featureFile("advisor", "cache.json");
 const HISTORY_PATH = featureFile("advisor", "history.jsonl");
-const DIAGNOSTICS_PATH = featureFile("advisor", "diagnostics.jsonl");
+const DEFAULT_DIAGNOSTICS_PATH = featureFile("advisor", "diagnostics.jsonl");
 const SESSION_STATE_PROP = "__piRogueAdvisorStatePath";
 const ORCHESTRATION_DIR = join(homedir(), ".pi", "agent", "fiale-plus", "orchestration");
 
@@ -468,10 +468,14 @@ function sanitizeDiagnosticValue(value: unknown): unknown {
   return value;
 }
 
+function advisorDiagnosticsPath(): string {
+  return process.env.PI_ROGUE_ADVISOR_DIAGNOSTICS_PATH || DEFAULT_DIAGNOSTICS_PATH;
+}
+
 function appendAdvisorDiagnostic(event: string, details: Record<string, unknown> = {}): void {
   try {
     const safeDetails = sanitizeDiagnosticValue(details) as Record<string, unknown>;
-    appendText(DIAGNOSTICS_PATH, `${JSON.stringify({ at: new Date().toISOString(), event, ...safeDetails })}\n`);
+    appendText(advisorDiagnosticsPath(), `${JSON.stringify({ at: new Date().toISOString(), event, ...safeDetails })}\n`);
   } catch {
     // Diagnostics are operational evidence only; they must never break advisor execution.
   }

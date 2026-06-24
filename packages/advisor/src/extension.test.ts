@@ -178,39 +178,48 @@ describe("review output schema parsing", () => {
   });
 
   it("stale task-change helper aligns follow-up only with matching task", () => {
-    const nextTask = "run advisor review on original task";
-    const staleState = {
-      followUp: "run focused check",
-      followUpTask: "run advisor review on original task",
-      reviewSignals: [],
-      reviewSignalsTask: undefined,
-    } as any;
-    expect(consumeTaskScopedFollowUp(staleState, nextTask)).toBe("run focused check");
-    expect(staleState.followUp).toBe("");
+    const oldDiagnostics = process.env.PI_ROGUE_ADVISOR_DIAGNOSTICS_PATH;
+    const diagnosticsDir = mkdtempSync(join(tmpdir(), "pi-rogue-advisor-diagnostics-"));
+    process.env.PI_ROGUE_ADVISOR_DIAGNOSTICS_PATH = join(diagnosticsDir, "diagnostics.jsonl");
+    try {
+      const nextTask = "run advisor review on original task";
+      const staleState = {
+        followUp: "run focused check",
+        followUpTask: "run advisor review on original task",
+        reviewSignals: [],
+        reviewSignalsTask: undefined,
+      } as any;
+      expect(consumeTaskScopedFollowUp(staleState, nextTask)).toBe("run focused check");
+      expect(staleState.followUp).toBe("");
 
-    const driftState = {
-      followUp: "run focused check",
-      followUpTask: "rotate hf token for benchmark credentials",
-      reviewSignals: ["old signal"],
-      reviewSignalsTask: "rotate hf token for benchmark credentials",
-    } as any;
-    expect(consumeTaskScopedFollowUp(driftState, nextTask)).toBe("");
-    expect(driftState.followUp).toBe("");
-    expect(isTaskContinuation("run advisor review on original task", "rotate hf token for benchmark credentials")).toBe(false);
-    expect(isTaskContinuation("fix", "fix the auth token bug")).toBe(false);
-    expect(isTaskContinuation("failing tests", "fix failing tests")).toBe(true);
-    expect(isTaskContinuation("fix auth token bug", "fix auth token bug in package advisor by updating env parsing")).toBe(true);
-    expect(isTaskContinuation("fix auth token bug", "fix ui bug")).toBe(false);
-    expect(isTaskContinuation("fix auth token bug", "rotate auth token for benchmark credentials")).toBe(false);
+      const driftState = {
+        followUp: "run focused check",
+        followUpTask: "rotate hf token for benchmark credentials",
+        reviewSignals: ["old signal"],
+        reviewSignalsTask: "rotate hf token for benchmark credentials",
+      } as any;
+      expect(consumeTaskScopedFollowUp(driftState, nextTask)).toBe("");
+      expect(driftState.followUp).toBe("");
+      expect(isTaskContinuation("run advisor review on original task", "rotate hf token for benchmark credentials")).toBe(false);
+      expect(isTaskContinuation("fix", "fix the auth token bug")).toBe(false);
+      expect(isTaskContinuation("failing tests", "fix failing tests")).toBe(true);
+      expect(isTaskContinuation("fix auth token bug", "fix auth token bug in package advisor by updating env parsing")).toBe(true);
+      expect(isTaskContinuation("fix auth token bug", "fix ui bug")).toBe(false);
+      expect(isTaskContinuation("fix auth token bug", "rotate auth token for benchmark credentials")).toBe(false);
 
-    const legacyState = {
-      followUp: "old unscoped follow-up",
-      followUpTask: undefined,
-      reviewSignals: [],
-      reviewSignalsTask: undefined,
-    } as any;
-    expect(consumeTaskScopedFollowUp(legacyState, nextTask)).toBe("");
-    expect(legacyState.followUp).toBe("");
+      const legacyState = {
+        followUp: "old unscoped follow-up",
+        followUpTask: undefined,
+        reviewSignals: [],
+        reviewSignalsTask: undefined,
+      } as any;
+      expect(consumeTaskScopedFollowUp(legacyState, nextTask)).toBe("");
+      expect(legacyState.followUp).toBe("");
+    } finally {
+      if (oldDiagnostics === undefined) delete process.env.PI_ROGUE_ADVISOR_DIAGNOSTICS_PATH;
+      else process.env.PI_ROGUE_ADVISOR_DIAGNOSTICS_PATH = oldDiagnostics;
+      rmSync(diagnosticsDir, { recursive: true, force: true });
+    }
   });
 });
 
