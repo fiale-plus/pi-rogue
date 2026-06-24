@@ -36,6 +36,7 @@ export interface RouterModelApplySummary {
   fromModel?: string;
   toModel?: string;
   status?: "applied" | "policy_noop" | "blocked";
+  blockedBy?: "policy" | "infra_auth";
 }
 
 export interface AutoModelSwitchPlan {
@@ -195,24 +196,24 @@ function configuredModelMatches(current: string | undefined, currentProvider: st
 
 export async function applyModelRouting(pi: Pick<ExtensionAPI, "setModel"> | undefined, ctx: any, summary: RouterObserveSummary): Promise<RouterModelApplySummary> {
   if (!summary.targetModel || summary.role === "none" || summary.role === "current") {
-    return { applied: false, status: "policy_noop", reason: "no model switch for route action" };
+    return { applied: false, status: "policy_noop", reason: "no model switch for route action", blockedBy: "policy" };
   }
   const resolved = findConfiguredModel(ctx, summary.targetModel, summary.currentProvider);
   if (resolved?.matchedBy === "id" && modelsMatch(summary.currentModel, summary.targetModel, summary.currentProvider)) {
-    return { applied: false, status: "policy_noop", reason: "current model already matches target", fromModel: summary.currentModel, toModel: summary.targetModel };
+    return { applied: false, status: "policy_noop", reason: "current model already matches target", fromModel: summary.currentModel, toModel: summary.targetModel, blockedBy: "policy" };
   }
   if (resolved && configuredModelMatches(summary.currentModel, summary.currentProvider, resolved)) {
-    return { applied: false, status: "policy_noop", reason: "current model already matches target", fromModel: summary.currentModel, toModel: summary.targetModel };
+    return { applied: false, status: "policy_noop", reason: "current model already matches target", fromModel: summary.currentModel, toModel: summary.targetModel, blockedBy: "policy" };
   }
   if (!resolved && modelsMatch(summary.currentModel, summary.targetModel, summary.currentProvider)) {
-    return { applied: false, status: "policy_noop", reason: "current model already matches target", fromModel: summary.currentModel, toModel: summary.targetModel };
+    return { applied: false, status: "policy_noop", reason: "current model already matches target", fromModel: summary.currentModel, toModel: summary.targetModel, blockedBy: "policy" };
   }
   if (!resolved) {
-    return { applied: false, status: "blocked", reason: `target model not configured: ${summary.targetModel}`, fromModel: summary.currentModel, toModel: summary.targetModel };
+    return { applied: false, status: "blocked", reason: `target model not configured: ${summary.targetModel}`, fromModel: summary.currentModel, toModel: summary.targetModel, blockedBy: "policy" };
   }
   const success = await pi?.setModel?.(resolved.model);
   if (!success) {
-    return { applied: false, status: "blocked", reason: `target model unavailable or missing auth: ${summary.targetModel}`, fromModel: summary.currentModel, toModel: summary.targetModel };
+    return { applied: false, status: "blocked", reason: `target model unavailable or missing auth: ${summary.targetModel}`, fromModel: summary.currentModel, toModel: summary.targetModel, blockedBy: "infra_auth" };
   }
   return { applied: true, status: "applied", reason: summary.reason, fromModel: summary.currentModel, toModel: summary.targetModel };
 }
@@ -431,6 +432,7 @@ export async function observeRouterTurn(ctx: any, pi?: Pick<ExtensionAPI, "setMo
       event.observed.followed = false;
       event.observed.overriddenBy = applySummary.reason;
       event.observed.routingStatus = applySummary.status ?? (routingSummary.role === "worker" ? "downgraded" : "applied");
+      event.observed.blockedBy = applySummary.blockedBy;
       ctx.ui?.notify?.(
         `router auto-model: SKIPPED ${applySummary.fromModel ?? "unknown"} → ${applySummary.toModel ?? "none"} · ${applySummary.reason}`,
         "warning",
@@ -439,6 +441,7 @@ export async function observeRouterTurn(ctx: any, pi?: Pick<ExtensionAPI, "setMo
       event.observed.followed = false;
       event.observed.overriddenBy = applySummary.reason;
       event.observed.routingStatus = applySummary.status ?? "policy_noop";
+      event.observed.blockedBy = applySummary.blockedBy;
       ctx.ui?.notify?.(
         `router auto-model: SKIPPED ${applySummary.fromModel ?? "unknown"} → ${applySummary.toModel ?? "none"} · ${applySummary.reason}`,
         "warning",
@@ -448,6 +451,7 @@ export async function observeRouterTurn(ctx: any, pi?: Pick<ExtensionAPI, "setMo
     if (applySummary.applied) {
       event.observed.followed = true;
       event.observed.routingStatus = routingSummary.role === "worker" ? "downgraded" : "applied";
+      event.observed.blockedBy = applySummary.blockedBy;
     }
   }
 
