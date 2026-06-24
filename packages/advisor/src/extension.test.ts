@@ -204,6 +204,7 @@ describe("review output schema parsing", () => {
       expect(isTaskContinuation("fix", "fix the auth token bug")).toBe(false);
       expect(isTaskContinuation("failing tests", "fix failing tests")).toBe(true);
       expect(isTaskContinuation("fix auth token bug", "fix auth token bug in package advisor by updating env parsing")).toBe(true);
+      expect(isTaskContinuation("investigate failing tests", "fix failing tests")).toBe(true);
       expect(isTaskContinuation("fix auth token bug", "fix ui bug")).toBe(false);
       expect(isTaskContinuation("fix auth token bug", "rotate auth token for benchmark credentials")).toBe(false);
 

@@ -607,7 +607,8 @@ export function isTaskContinuation(previousTask: string, nextTask: string): bool
   return taskSimilarity(prev, next) >= 0.62;
 }
 
-const TASK_ACTION_WORDS = new Set(["fix", "fixes", "fixed", "repair", "repairs", "repaired", "rotate", "rotates", "rotated", "replace", "replaces", "replaced", "add", "adds", "added", "implement", "implements", "implemented", "update", "updates", "updated", "remove", "removes", "removed", "delete", "deletes", "deleted", "refactor", "refactors", "refactored", "review", "reviews", "reviewed", "diagnose", "diagnoses", "diagnosed", "investigate", "investigates", "investigated"]);
+const TASK_DIAGNOSTIC_ACTION_WORDS = new Set(["review", "reviews", "reviewed", "diagnose", "diagnoses", "diagnosed", "investigate", "investigates", "investigated", "inspect", "inspects", "inspected", "debug", "debugs", "debugged", "analyze", "analyzes", "analyzed"]);
+const TASK_ACTION_WORDS = new Set(["fix", "fixes", "fixed", "repair", "repairs", "repaired", "rotate", "rotates", "rotated", "replace", "replaces", "replaced", "add", "adds", "added", "implement", "implements", "implemented", "update", "updates", "updated", "remove", "removes", "removed", "delete", "deletes", "deleted", "refactor", "refactors", "refactored", ...TASK_DIAGNOSTIC_ACTION_WORDS]);
 const TASK_STOPWORDS = new Set(["the", "and", "for", "with", "from", "into", "this", "that", "then", "task", "work", "please", "need", "needs", "should", "would", "could", "have", "has", "had", "been", "about", "onto", "your", "here", "fix", "fixes", "fixed", "bug", "bugs", "issue", "issues", "update", "updates", "updated", "updating", "add", "adds", "added", "implement", "implements", "implemented", "implementing"]);
 
 function taskTokens(task: string): Set<string> {
@@ -622,6 +623,8 @@ function hasConflictingTaskActions(previousTask: string, nextTask: string): bool
   const prevActions = taskActionTokens(previousTask);
   const nextActions = taskActionTokens(nextTask);
   if (!prevActions.size || !nextActions.size) return false;
+  const hasDiagnosticAction = (actions: Set<string>) => [...actions].some((action) => TASK_DIAGNOSTIC_ACTION_WORDS.has(action));
+  if (hasDiagnosticAction(prevActions) || hasDiagnosticAction(nextActions)) return false;
   for (const action of prevActions) {
     if (nextActions.has(action)) return false;
   }
