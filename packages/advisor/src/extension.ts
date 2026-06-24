@@ -602,7 +602,7 @@ export function isTaskContinuation(previousTask: string, nextTask: string): bool
   return taskSimilarity(prev, next) >= 0.62;
 }
 
-const TASK_STOPWORDS = new Set(["the", "and", "for", "with", "from", "into", "this", "that", "then", "task", "work", "please", "need", "needs", "should", "would", "could", "have", "has", "had", "been", "about", "onto", "your", "here"]);
+const TASK_STOPWORDS = new Set(["the", "and", "for", "with", "from", "into", "this", "that", "then", "task", "work", "please", "need", "needs", "should", "would", "could", "have", "has", "had", "been", "about", "onto", "your", "here", "fix", "fixes", "fixed", "bug", "bugs", "issue", "issues", "update", "updates", "updated", "updating", "add", "adds", "added", "implement", "implements", "implemented", "implementing"]);
 
 function taskTokens(task: string): Set<string> {
   return new Set(normalizeTask(task).split(" ").filter((token) => token.length > 2 && !TASK_STOPWORDS.has(token)));
