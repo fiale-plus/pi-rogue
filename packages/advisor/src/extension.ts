@@ -610,10 +610,14 @@ function taskTokens(task: string): Set<string> {
 function taskSimilarity(previousTask: string, nextTask: string): number {
   const prevTokens = taskTokens(previousTask);
   const nextTokens = taskTokens(nextTask);
-  if (prevTokens.size < 3 || nextTokens.size < 3) return 0;
+  if (prevTokens.size === 0 || nextTokens.size === 0) return 0;
   let overlap = 0;
   for (const token of prevTokens) {
     if (nextTokens.has(token)) overlap += 1;
+  }
+  const smaller = Math.min(prevTokens.size, nextTokens.size);
+  if (smaller < 3) {
+    return smaller >= 2 && overlap === smaller ? 1 : 0;
   }
   return overlap / Math.max(prevTokens.size, nextTokens.size);
 }
