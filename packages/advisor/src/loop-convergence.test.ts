@@ -229,21 +229,25 @@ describe("advisor two-agent convergence", () => {
   });
 
   it("does re-run repeated failed snapshots instead of suppressing safety-critical review", async () => {
-    const preflight = handlers.before_agent_start;
-    const turnEnd = handlers.turn_end;
-    expect(preflight?.length).toBe(1);
-    expect(turnEnd?.length).toBe(1);
+    const agentEnd = handlers.agent_end;
+    expect(agentEnd?.length).toBe(1);
 
     await handlers.session_start?.[0]?.({}, ctx);
-    await preflight![0]({ systemPrompt: "SYS", prompt: "Continue the current goal" }, ctx);
+    const state = readAdvisorState();
+    state.lastTask = "fix failing tests";
+    state.turns = 1;
+    state.notes = ["validation is failing"];
+    writeFileSync(ADVISOR_STATE_PATH, JSON.stringify(state, null, 2), "utf8");
 
     const failureEvent = {
-      toolResults: [{ toolName: "bash", status: "error", error: "npm test failed" }],
-      message: { role: "assistant", content: "npm test failed" },
+      messages: [
+        { role: "assistant", content: "npm test failed" },
+        { role: "toolResult", status: "error", error: "npm test failed", content: "npm test failed" },
+      ],
     };
 
-    await turnEnd![0](failureEvent, ctx);
-    await turnEnd![0](failureEvent, ctx);
+    await agentEnd![0](failureEvent, ctx);
+    await agentEnd![0](failureEvent, ctx);
 
     expect(completeSimpleMock).toHaveBeenCalledTimes(2);
     expect(readAdvisorState().reviewControl.lastReason).not.toBe("repeated material snapshot");

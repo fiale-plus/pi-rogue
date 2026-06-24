@@ -1983,7 +1983,7 @@ async function doReview(pi: ExtensionAPI, ctx: any, trigger: string, delta: stri
   try {
     const gatePrediction = binaryGatePredict(reviewInput.text, phase, trajectory);
     let reviewRoute = reviewHeuristic;
-    if (gatePrediction && gatePrediction.trusted && !reviewHeuristic.safety) {
+    if (gatePrediction && gatePrediction.trusted && !reviewHeuristic.safety && !meta.failed) {
       const gateContinues = gatePrediction.decision === "continue";
       reviewRoute = {
         ...reviewHeuristic,
@@ -2001,7 +2001,7 @@ async function doReview(pi: ExtensionAPI, ctx: any, trigger: string, delta: stri
     state.router.review = reviewRoute;
     persistReviewState(state, true);
 
-    if (gatePrediction && gatePrediction.trusted && gatePrediction.decision === "continue" && !reviewHeuristic.safety) {
+    if (gatePrediction && gatePrediction.trusted && gatePrediction.decision === "continue" && !reviewHeuristic.safety && !meta.failed) {
       finalDecision = "continue";
       finalReason = "local gate continue";
       if (hasCleanCloseoutEvidence(delta, meta)) {
@@ -2074,8 +2074,9 @@ async function doReview(pi: ExtensionAPI, ctx: any, trigger: string, delta: stri
     }
 
     const rk = hash("rev", trigger, b, brokerBrief, delta, String(meta.fileChanged), String(meta.failed), String(meta.isAgentEnd), String(reviewRoute.label), signature);
+    const bypassReviewCache = Boolean(meta.failed || reviewHeuristic.safety);
     const cache = loadCache();
-    if (cache[rk]) {
+    if (!bypassReviewCache && cache[rk]) {
       const cachedParsed = parseReviewPayload(cache[rk], state.lastTask);
       if (cachedParsed?.verdict === "on_track") {
         finalDecision = "continue";
@@ -2113,8 +2114,10 @@ async function doReview(pi: ExtensionAPI, ctx: any, trigger: string, delta: stri
       return;
     }
 
-    cache[rk] = raw;
-    saveCache(cache);
+    if (!bypassReviewCache) {
+      cache[rk] = raw;
+      saveCache(cache);
+    }
 
     const parsed = parseReviewPayload(raw, state.lastTask);
     if (!parsed) {
