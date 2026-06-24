@@ -599,13 +599,29 @@ export function isTaskContinuation(previousTask: string, nextTask: string): bool
     }
   }
 
+  if (hasConflictingTaskActions(prev, next)) return false;
   return taskSimilarity(prev, next) >= 0.62;
 }
 
+const TASK_ACTION_WORDS = new Set(["fix", "fixes", "fixed", "repair", "repairs", "repaired", "rotate", "rotates", "rotated", "replace", "replaces", "replaced", "add", "adds", "added", "implement", "implements", "implemented", "update", "updates", "updated", "remove", "removes", "removed", "delete", "deletes", "deleted", "refactor", "refactors", "refactored", "review", "reviews", "reviewed", "diagnose", "diagnoses", "diagnosed", "investigate", "investigates", "investigated"]);
 const TASK_STOPWORDS = new Set(["the", "and", "for", "with", "from", "into", "this", "that", "then", "task", "work", "please", "need", "needs", "should", "would", "could", "have", "has", "had", "been", "about", "onto", "your", "here", "fix", "fixes", "fixed", "bug", "bugs", "issue", "issues", "update", "updates", "updated", "updating", "add", "adds", "added", "implement", "implements", "implemented", "implementing"]);
 
 function taskTokens(task: string): Set<string> {
   return new Set(normalizeTask(task).split(" ").filter((token) => token.length > 2 && !TASK_STOPWORDS.has(token)));
+}
+
+function taskActionTokens(task: string): Set<string> {
+  return new Set(normalizeTask(task).split(" ").filter((token) => TASK_ACTION_WORDS.has(token)));
+}
+
+function hasConflictingTaskActions(previousTask: string, nextTask: string): boolean {
+  const prevActions = taskActionTokens(previousTask);
+  const nextActions = taskActionTokens(nextTask);
+  if (!prevActions.size || !nextActions.size) return false;
+  for (const action of prevActions) {
+    if (nextActions.has(action)) return false;
+  }
+  return true;
 }
 
 function taskSimilarity(previousTask: string, nextTask: string): number {
