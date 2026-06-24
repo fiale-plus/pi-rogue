@@ -53,6 +53,8 @@ Issue #207 requires an explicit check against LiteLLM/Portkey-style commodities.
 
 - `PI_ROGUE_CONFIG_PATH` and `PI_ROGUE_ROUTER_CONFIG_PATH` can point the spike at local Pi Rogue config files.
 - `measurePiDedicatedModes()` in `src/measurement.ts` reports raw-forward, typed-lens, and lookup-compress token economics while resolving the pi-dedicated alias to the configured upstream GPT target.
+- `npm run measure:portkey --workspace @fiale-plus/pi-rogue-gateway` runs the env-driven manual measurement wrapper in `src/measure.ts`.
+- Self-host/manual experiment steps are documented in `PORTKEY_SELF_HOST_EXPERIMENT.md`.
 
 Full written answers for the ticket’s required Commodity Gateway Substrate Check (including the 1..6 questions) are in:
 `packages/rogue-gateway/COMMODITY_GATEWAY_SUBSTRATE_CHECK.md`.

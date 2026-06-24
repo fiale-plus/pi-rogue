@@ -7,7 +7,8 @@
   "license": "MIT",
   "scripts": {
     "check": "tsc -p ../../tsconfig.json --noEmit",
-    "test": "cd ../.. && vitest run packages/rogue-gateway/src/*.test.ts"
+    "test": "cd ../.. && vitest run packages/rogue-gateway/src/*.test.ts",
+    "measure:portkey": "tsx src/measure.ts"
   },
   "main": "./src/index.ts",
   "exports": {
