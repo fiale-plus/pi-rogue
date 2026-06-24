@@ -471,9 +471,10 @@ describe("advisor two-agent convergence", () => {
       .mockResolvedValueOnce({ content: [{ type: "text", text: "Advice A: inspect the latest brief before continuing." }] })
       .mockResolvedValueOnce({ content: [{ type: "text", text: "Advice B: run one focused validation before continuing." }] })
       .mockResolvedValueOnce({ content: [{ type: "text", text: "Advice A - inspect the latest brief before continuing." }] })
-      .mockResolvedValueOnce({ content: [{ type: "text", text: "Advice B - run one focused validation before continuing." }] });
+      .mockResolvedValueOnce({ content: [{ type: "text", text: "Advice B - run one focused validation before continuing." }] })
+      .mockResolvedValueOnce({ content: [{ type: "text", text: "Advice A: inspect the latest brief before continuing." }] });
 
-    for (const label of ["one", "two", "three", "four"]) {
+    for (const label of ["one", "two", "three", "four", "five"]) {
       const next = readAdvisorState();
       next.turns = (next.turns ?? 0) + 1;
       next.lastTask = "same underlying task";

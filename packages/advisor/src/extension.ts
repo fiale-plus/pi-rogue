@@ -272,6 +272,7 @@ function loadStateFromPath(path: string): SessionState {
           contextHash: String(entry.contextHash),
           familyHash: String(entry.familyHash),
           source: String(entry.source),
+          repeatCount: Number(entry.repeatCount) || 1,
           at: String(entry.at ?? ""),
         })).slice(-8)
         : [],
@@ -857,6 +858,7 @@ type AdvisorLoopEntry = {
   contextHash: string;
   familyHash: string;
   source: string;
+  repeatCount: number;
   at: string;
 };
 
@@ -1032,14 +1034,14 @@ function observeAdvisorLoop(state: SessionState, source: string, familyHash: str
     && entry.familyHash === familyHash
     && entry.contextHash !== contextHash
     && (entry.outputHash === outputHash || isRepeatedAdvisorOutput(entry.outputText, outputText)));
-  const repeatCount = matches.length ? (previous.repeatCount ?? 1) + 1 : 1;
+  const repeatCount = matches.length ? Math.max(...matches.map((entry) => entry.repeatCount || 1)) + 1 : 1;
   const loopDetected = repeatCount >= ADVISOR_LOOP_REPEAT_LIMIT;
   const now = new Date().toISOString();
   const outputSnapshot = sanitizeAdvisorText(outputText).trim().slice(0, 1200);
 
   state.advisorLoop = {
     repeatCount,
-    recent: [...recent, { outputHash, outputText: outputSnapshot, contextHash, familyHash, source, at: now }].slice(-8),
+    recent: [...recent, { outputHash, outputText: outputSnapshot, contextHash, familyHash, source, repeatCount, at: now }].slice(-8),
     lastOutputHash: outputHash,
     lastOutputText: outputSnapshot,
     lastContextHash: contextHash,
