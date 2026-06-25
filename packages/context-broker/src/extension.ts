@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import type { AgentToolResult } from "@earendil-works/pi-coding-agent";
 import type { AutocompleteItem } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
@@ -46,6 +46,47 @@ const DEFAULT_WARM_TO_COLD_MS = 12 * 60 * 60 * 1000;
 const DEFAULT_DURABLE_GLOBAL_MAX_RECORDS = 2_048;
 const DEFAULT_DURABLE_GLOBAL_MAX_BYTES = 256 * 1024 * 1024;
 const ENABLED_VALUES = new Set(["1", "true", "yes", "on"]);
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function defaultDurableStoreDir(): string {
+  return join(homedir(), ".pi", "agent", "fiale-plus", "context-broker");
+}
+
+function sqliteStorePath(storeDir?: string): string {
+  return join(storeDir ?? process.env.PI_CONTEXT_BROKER_STORE_DIR ?? defaultDurableStoreDir(), "artifacts.sqlite");
+}
+
+function sqliteRecoveryStamp(): string {
+  return `${new Date().toISOString().replace(/[:.]/g, "-")}-${process.pid}`;
+}
+
+function quarantineSqliteArtifacts(dbPath: string): string[] {
+  const stamp = sqliteRecoveryStamp();
+  const backups: string[] = [];
+  for (const candidate of [dbPath, `${dbPath}-wal`, `${dbPath}-shm`]) {
+    if (!existsSync(candidate)) continue;
+    const backupPath = `${candidate}.recovered-${stamp}`;
+    try {
+      renameSync(candidate, backupPath);
+      backups.push(backupPath);
+    } catch (error) {
+      console.warn("Context broker SQLite recovery could not move aside file", candidate, error);
+    }
+  }
+  return backups;
+}
+
+function sqliteRecoveryNotice(mode: "repaired" | "degraded", dbPath: string, backups: string[], initialError: unknown, retryError?: unknown): string {
+  const backupText = backups.length ? ` Backups: ${backups.map((path) => basename(path)).join(", ")}.` : "";
+  if (mode === "repaired") {
+    return `Context broker durability repaired after SQLite store failure at ${dbPath}: ${errorMessage(initialError)}. Starting with a fresh SQLite store.${backupText}`;
+  }
+  const retryText = retryError ? ` Retry failed: ${errorMessage(retryError)}.` : "";
+  return `Context broker durability degraded after SQLite store failure at ${dbPath}: ${errorMessage(initialError)}.${retryText} Continuing with in-memory broker.${backupText}`;
+}
 
 function envFlag(name: string): boolean {
   return ENABLED_VALUES.has(String(process.env[name] ?? "").trim().toLowerCase());
@@ -463,6 +504,66 @@ function isNeverBrokeredToolMessage(message: unknown): boolean {
   return isNeverBrokeredToolName(maybe.toolName);
 }
 
+async function createDurableContextBroker(
+  durable: boolean,
+  durableBackend: string,
+  brokerOptions: Parameters<typeof createInMemoryContextBroker>[0],
+  storeDir: string | undefined,
+): Promise<{ broker: BoundedContextBroker; startupNotice?: string }> {
+  if (!durable) {
+    return { broker: createInMemoryContextBroker(brokerOptions) };
+  }
+
+  const durableStoreDir = storeDir ?? process.env.PI_CONTEXT_BROKER_STORE_DIR;
+  if (durableBackend === "jsonl") {
+    try {
+      return { broker: createFileContextBroker({ ...brokerOptions, dir: durableStoreDir }) };
+    } catch (error) {
+      console.warn("Context broker durable file store failed to initialize; continuing with in-memory broker.", error);
+      return {
+        broker: createInMemoryContextBroker(brokerOptions),
+        startupNotice: `Context broker durability degraded after durable file store failure: ${errorMessage(error)}. Continuing with in-memory broker.`,
+      };
+    }
+  }
+
+  const sqliteStore = sqliteStorePath(durableStoreDir);
+  let sqliteModule: typeof import("./sqlite.js") | undefined;
+  try {
+    sqliteModule = await import("./sqlite.js");
+  } catch (error) {
+    console.warn("Context broker SQLite module failed to load; continuing with in-memory broker.", error);
+    return {
+      broker: createInMemoryContextBroker(brokerOptions),
+      startupNotice: `Context broker durability degraded because SQLite support could not load: ${errorMessage(error)}. Continuing with in-memory broker.`,
+    };
+  }
+
+  try {
+    return {
+      broker: sqliteModule.createSqliteContextBroker({ ...brokerOptions, dir: durableStoreDir }),
+    };
+  } catch (initialError) {
+    const backups = quarantineSqliteArtifacts(sqliteStore);
+    console.warn("Context broker SQLite initialization failed; attempting recovery.", initialError, { sqliteStore, backups });
+    try {
+      const broker = sqliteModule.createSqliteContextBroker({ ...brokerOptions, dir: durableStoreDir });
+      return {
+        broker,
+        startupNotice: sqliteRecoveryNotice("repaired", sqliteStore, backups, initialError),
+      };
+    } catch (retryError) {
+      const retryBackups = quarantineSqliteArtifacts(sqliteStore);
+      const allBackups = [...backups, ...retryBackups];
+      console.warn("Context broker SQLite recovery failed; switching to in-memory broker.", retryError, { sqliteStore, backups: allBackups });
+      return {
+        broker: createInMemoryContextBroker(brokerOptions),
+        startupNotice: sqliteRecoveryNotice("degraded", sqliteStore, allBackups, initialError, retryError),
+      };
+    }
+  }
+}
+
 export async function registerContextBrokerBeta(pi: ExtensionAPI, options: ContextBrokerBetaOptions = {}): Promise<void> {
   const p = pi as any;
   if (p.__piRogueContextBrokerBetaRegistered) return;
@@ -510,15 +611,18 @@ export async function registerContextBrokerBeta(pi: ExtensionAPI, options: Conte
   };
   const durableBackend = String(process.env.PI_CONTEXT_BROKER_BACKEND ?? "sqlite").trim().toLowerCase();
   let broker: BoundedContextBroker;
-  try {
-    broker = durable
-      ? durableBackend === "jsonl"
-        ? createFileContextBroker({ ...brokerOptions, dir: options.storeDir ?? process.env.PI_CONTEXT_BROKER_STORE_DIR })
-        : (await import("./sqlite.js")).createSqliteContextBroker({ ...brokerOptions, dir: options.storeDir ?? process.env.PI_CONTEXT_BROKER_STORE_DIR })
-      : createInMemoryContextBroker(brokerOptions);
-  } catch (error) {
-    p.__piRogueContextBrokerBetaRegistered = false;
-    throw error;
+  let startupNotice: string | undefined;
+  if (durable) {
+    const durableResult = await createDurableContextBroker(
+      durable,
+      durableBackend,
+      brokerOptions,
+      options.storeDir,
+    );
+    broker = durableResult.broker;
+    startupNotice = durableResult.startupNotice;
+  } else {
+    broker = createInMemoryContextBroker(brokerOptions);
   }
 
   const seenSourceIds = new Set<string>();
@@ -851,6 +955,10 @@ export async function registerContextBrokerBeta(pi: ExtensionAPI, options: Conte
     refreshRewriteThresholdFromConfig(ctx);
     const { added, scanned, errors } = backfillSessionArtifacts(ctx);
     ctx.ui.setStatus?.("context-broker", "ctx:on");
+    if (startupNotice) {
+      ctx.ui.notify(startupNotice, "warning");
+      startupNotice = undefined;
+    }
     ctx.ui.notify(
       `Context broker enabled. Backfilled ${added}/${scanned} current-branch tool artifacts${errors ? ` (${errors} malformed skipped)` : ""}. Use /pi-rogue-context status or /pi-rogue-context brief.`,
       errors ? "warning" : "info",

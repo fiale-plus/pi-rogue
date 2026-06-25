@@ -1,8 +1,18 @@
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+
+vi.mock("./sqlite.js", async () => {
+  const actual = await vi.importActual<typeof import("./sqlite.js")>("./sqlite.js");
+  return {
+    ...actual,
+    createSqliteContextBroker: vi.fn((options: Parameters<typeof actual.createSqliteContextBroker>[0]) => actual.createSqliteContextBroker(options)),
+  };
+});
+
 import { registerContextBrokerBeta, shouldEnableContextBrokerBeta } from "./extension.js";
+import { createSqliteContextBroker } from "./sqlite.js";
 
 function createPiMock() {
   const handlers = new Map<string, any[]>();
@@ -1049,6 +1059,52 @@ maxRecords: 1,
       expect(thirdRun.notifications.at(-1)?.message).toContain("tier=hot");
       expect(thirdRun.notifications.at(-1)?.message).toContain("pinned");
     } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("warns and repairs durable sqlite when the store can be quarantined", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "ctx-broker-test-"));
+    try {
+      writeFileSync(join(dir, "artifacts.sqlite"), "not sqlite");
+      const { pi, handlers } = createPiMock();
+      await registerContextBrokerBeta(pi, { durable: true, storeDir: dir });
+      const { ctx, notifications } = createCtx();
+
+      await runHandlers(handlers, "session_start", { type: "session_start" }, ctx);
+
+      expect(notifications[0]?.type).toBe("warning");
+      expect(notifications[0]?.message).toContain("durability repaired");
+      expect(notifications[0]?.message).toContain("fresh SQLite store");
+      expect(readdirSync(dir).some((entry) => entry.includes("artifacts.sqlite.recovered-") || entry.includes("artifacts.sqlite-wal.recovered-") || entry.includes("artifacts.sqlite-shm.recovered-"))).toBe(true);
+      expect(existsSync(join(dir, "artifacts.sqlite"))).toBe(true);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("falls back to in-memory when sqlite recovery keeps failing", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "ctx-broker-test-"));
+    const sqliteMock = vi.mocked(createSqliteContextBroker);
+    const original = sqliteMock.getMockImplementation();
+    try {
+      writeFileSync(join(dir, "artifacts.sqlite"), "not sqlite");
+      sqliteMock
+        .mockImplementationOnce(() => { throw new Error("file is not a database"); })
+        .mockImplementationOnce(() => { throw new Error("still broken after quarantine"); });
+
+      const { pi, handlers } = createPiMock();
+      await registerContextBrokerBeta(pi, { durable: true, storeDir: dir });
+      const { ctx, notifications } = createCtx();
+
+      await runHandlers(handlers, "session_start", { type: "session_start" }, ctx);
+
+      expect(notifications[0]?.type).toBe("warning");
+      expect(notifications[0]?.message).toContain("in-memory broker");
+      expect(readdirSync(dir).some((entry) => entry.includes("artifacts.sqlite.recovered-") || entry.includes("artifacts.sqlite-wal.recovered-") || entry.includes("artifacts.sqlite-shm.recovered-"))).toBe(true);
+      expect(existsSync(join(dir, "artifacts.sqlite"))).toBe(false);
+    } finally {
+      if (original) sqliteMock.mockImplementation(original);
       rmSync(dir, { recursive: true, force: true });
     }
   });

@@ -1,6 +1,7 @@
 import { existsSync, mkdtempSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { describe, expect, it, vi } from "vitest";
 import { createSqliteContextBroker } from "./sqlite.js";
 
@@ -204,6 +205,35 @@ describe("createSqliteContextBroker", () => {
 
       const after = existsSync(walPath) ? statSync(walPath).size : 0;
       expect(after).toBeLessThan(before);
+    } finally {
+      nowSpy.mockRestore();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("survives database locks during prune cleanup", () => {
+    const dir = mkdtempSync(join(tmpdir(), "ctx-sqlite-test-"));
+    const now = 1_700_000_000_000;
+    const nowSpy = vi.spyOn(Date, "now").mockImplementation(() => now);
+    try {
+      const path = join(dir, "artifacts.sqlite");
+      const broker = createSqliteContextBroker({ path, defaultTtlMs: 1, busyTimeoutMs: 100 });
+      const artifact = broker.publish({ sessionId: "s", kind: "tool_output", payload: "locked payload", summary: "locked", createdAt: now, ttlMs: 1 });
+      nowSpy.mockImplementation(() => now + 10_000);
+
+      const lockDb = new DatabaseSync(path);
+      try {
+        lockDb.exec("BEGIN EXCLUSIVE");
+        expect(() => broker.prune()).not.toThrow();
+        expect(broker.lookup({ handle: artifact.handle })[0]?.payload).toBe("locked payload");
+      } finally {
+        try {
+          lockDb.exec("ROLLBACK");
+        } catch {
+          // ignore rollback noise after releasing the lock
+        }
+        lockDb.close();
+      }
     } finally {
       nowSpy.mockRestore();
       rmSync(dir, { recursive: true, force: true });
