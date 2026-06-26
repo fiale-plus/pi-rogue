@@ -2,6 +2,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import type { BoardEvent, BoardFixture } from "../packages/advisor/src/board.js";
 import { evaluateBoardFixtures } from "../packages/advisor/src/board.js";
 
@@ -49,12 +50,12 @@ function walkJsonl(input: string): string[] {
   return out.sort();
 }
 
-function compactText(value: unknown): string {
+export function compactText(value: unknown): string {
   if (typeof value === "string") return value.replace(/\s+/g, " ").trim();
   if (Array.isArray(value)) return value.map(compactText).filter(Boolean).join(" ").replace(/\s+/g, " ").trim();
   if (!value || typeof value !== "object") return String(value ?? "").replace(/\s+/g, " ").trim();
   const record = value as Record<string, unknown>;
-  return [record.content, record.text, record.message, record.details, record.error]
+  return [record.raw, record.content, record.text, record.message, record.details, record.error, record.arguments, record.command]
     .map(compactText)
     .filter(Boolean)
     .join(" ")
@@ -114,4 +115,6 @@ function main() {
   console.log(`wrote ${fixtures.length} candidate fixture(s) to ${args.output}`);
 }
 
-main();
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  main();
+}
