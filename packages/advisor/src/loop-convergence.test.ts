@@ -21,6 +21,16 @@ vi.mock("@earendil-works/pi-ai", async () => {
   };
 });
 
+const execFileSyncMock = vi.hoisted(() => vi.fn());
+
+vi.mock("node:child_process", async () => {
+  const actual = await vi.importActual<typeof import("node:child_process")>("node:child_process");
+  return {
+    ...actual,
+    execFileSync: execFileSyncMock,
+  };
+});
+
 type Handler = (event: any, ctx: any) => any;
 
 type HandlerMap = Record<string, Handler[]>;
@@ -140,6 +150,14 @@ describe("advisor two-agent convergence", () => {
     ctx = mkCtx();
     completeSimpleMock = vi.mocked(completeSimple as any);
     completeSimpleMock.mockReset();
+    execFileSyncMock.mockReset();
+    execFileSyncMock.mockImplementation((command: string, args: string[]) => {
+      if (command === "git" && args.join(" ") === "rev-parse HEAD") return "test-sha\n";
+      if (command === "gh" && args.join(" ") === "pr view 215 --json state,mergeCommit") {
+        return JSON.stringify({ state: "MERGED", mergeCommit: { oid: "merged-sha" } });
+      }
+      throw new Error(`unexpected command: ${command} ${args.join(" ")}`);
+    });
 
     const verdict = {
       verdict: "not_done",
@@ -796,6 +814,7 @@ describe("advisor two-agent convergence", () => {
     expect(resolved.reviewSignalsTask).toBeUndefined();
     expect(resolved.reviewControl.lastDecision).toBe("continue");
     expect(resolved.reviewControl.status).toBe("consumed");
+    expect(resolved.workflow?.terminal).toMatchObject({ state: "green", sha: "test-sha", source: "agent-end" });
     expect(current).toContain("advisor:llm: continue");
     expect(current).not.toContain("final review still needed");
     expect(JSON.stringify(resolved.router.review ?? {})).not.toContain('"failed":true');
@@ -852,8 +871,12 @@ describe("advisor two-agent convergence", () => {
     expect(resolved.reviewSignals).toEqual([]);
     expect(resolved.reviewSignalsTask).toBeUndefined();
     expect(resolved.reviewControl.lastDecision).toBe("continue");
-    expect(resolved.reviewControl.lastReason).toBe("terminal clean closeout evidence");
-    expect(resolved.reviewControl.terminalEvidence).toEqual(expect.objectContaining({ kind: "tests_and_merge", task: staleTask }));
+    expect(resolved.reviewControl.lastReason).toContain("terminal workflow state");
+    expect(resolved.workflow?.terminal).toMatchObject({ state: "merged", pr: 215 });
+    expect(resolved.evidenceLedger).toEqual(expect.arrayContaining([
+      expect.objectContaining({ kind: "validation", result: "pass", source: "agent_end" }),
+      expect.objectContaining({ kind: "merge", result: "merged", pr: 215, source: "agent_end" }),
+    ]));
     expect(resolved.reviewControl.status).toBe("consumed");
     expect(current).toContain("advisor:llm: continue");
     expect(current).not.toContain("tests are still failing");
@@ -959,6 +982,651 @@ describe("advisor two-agent convergence", () => {
     expect(current).not.toContain("final review still needed");
   });
 
+  it("does not let a green validation hide a separate non-validation tool failure", async () => {
+    const turnEnd = handlers.turn_end;
+    expect(turnEnd?.length).toBe(1);
+
+    await handlers.session_start?.[0]?.({}, ctx);
+    await turnEnd![0]({
+      toolResults: [
+        {
+          toolName: "bash",
+          command: "vitest run --reporter=json",
+          exitCode: 0,
+          stdout: JSON.stringify({ numFailedTests: 0, numFailedTestSuites: 0, success: true }),
+        },
+        {
+          toolName: "bash",
+          command: "gh pr merge 215 --merge",
+          exitCode: 1,
+          stderr: "GraphQL: Pull request is not mergeable",
+        },
+      ],
+      message: { role: "assistant", content: "Tests are green but the merge command still failed." },
+    }, ctx);
+
+    expect(completeSimpleMock).toHaveBeenCalledTimes(1);
+    expect(readAdvisorState().reviewControl.lastDecision).toBe("review");
+    expect(readAdvisorState().followUp).toContain("Closeout is incomplete");
+  });
+
+  it("records stale failure then green validation then merged PR as terminal evidence", async () => {
+    const preflight = handlers.before_agent_start;
+    const turnEnd = handlers.turn_end;
+    expect(preflight?.length).toBe(1);
+    expect(turnEnd?.length).toBe(1);
+
+    await handlers.session_start?.[0]?.({}, ctx);
+    await preflight![0]({ systemPrompt: "SYS", prompt: "Finish issue 217 and merge PR 215" }, ctx);
+
+    await turnEnd![0]({
+      toolResults: [{
+        toolName: "bash",
+        command: "npm test",
+        exitCode: 1,
+        stderr: "1 failed test",
+      }],
+      message: { role: "assistant", content: "Vitest failed before the fix." },
+    }, ctx);
+
+    await turnEnd![0]({
+      toolResults: [{
+        toolName: "bash",
+        command: "vitest run --reporter=json",
+        exitCode: 0,
+        stdout: JSON.stringify({ numFailedTests: 0, numFailedTestSuites: 0, success: true, assertionResults: [{ failureMessages: ["expected word failed in fixture"] }] }),
+      }],
+      message: { role: "assistant", content: "Vitest JSON is green even though fixture text contains failed." },
+    }, ctx);
+
+    await turnEnd![0]({
+      toolResults: [{
+        toolName: "bash",
+        command: "gh pr view 215 --json state,mergeCommit",
+        exitCode: 0,
+        stdout: JSON.stringify({ state: "MERGED", mergeCommit: { oid: "merged-sha" } }),
+      }],
+      message: { role: "assistant", content: "Remote PR state is MERGED." },
+    }, ctx);
+
+    const resolved = readAdvisorState();
+    const evidence = resolved.evidenceLedger ?? [];
+    expect(evidence).toEqual(expect.arrayContaining([
+      expect.objectContaining({ kind: "validation", sha: "test-sha", command: "npm test", result: "fail", exitCode: 1, source: "turn_end", timestamp: expect.any(String) }),
+      expect.objectContaining({ kind: "validation", sha: "test-sha", command: "vitest run --reporter=json", result: "pass", exitCode: 0, source: "turn_end", timestamp: expect.any(String) }),
+      expect.objectContaining({ kind: "merge", sha: "test-sha", command: "gh pr view 215 --json state,mergeCommit", result: "merged", source: "turn_end", timestamp: expect.any(String), pr: 215 }),
+    ]));
+    expect(resolved.workflow?.terminal).toMatchObject({ state: "merged", sha: "test-sha", source: "turn_end" });
+    expect(resolved.followUp).toBe("");
+    expect(resolved.reviewSignals).toEqual([]);
+
+    const status = await preflight![0]({ systemPrompt: "SYS", prompt: "Continue issue 217" }, ctx);
+    expect(String(status?.systemPrompt)).not.toContain("Advisor follow-up");
+    expect(String(status?.systemPrompt)).not.toContain("failed before the fix");
+  });
+
+  it("makes a newer green validation authoritative before any merge evidence", async () => {
+    const preflight = handlers.before_agent_start;
+    const turnEnd = handlers.turn_end;
+    expect(preflight?.length).toBe(1);
+    expect(turnEnd?.length).toBe(1);
+
+    await handlers.session_start?.[0]?.({}, ctx);
+    await preflight![0]({ systemPrompt: "SYS", prompt: "Fix issue 217" }, ctx);
+    await turnEnd![0]({
+      toolResults: [{
+        toolName: "bash",
+        command: "npm test",
+        exitCode: 1,
+        stderr: "1 failed test",
+      }],
+      message: { role: "assistant", content: "Validation failed before the final fix." },
+    }, ctx);
+    expect(readAdvisorState().followUp).toContain("Closeout is incomplete");
+
+    await turnEnd![0]({
+      toolResults: [{
+        toolName: "bash",
+        command: "npm test",
+        exitCode: 0,
+        stdout: "all tests passed",
+      }],
+      message: { role: "assistant", content: "Validation is now green." },
+    }, ctx);
+
+    const status = await preflight![0]({ systemPrompt: "SYS", prompt: "Continue issue 217" }, ctx);
+    expect(String(status?.systemPrompt)).not.toContain("Advisor follow-up");
+    expect(String(status?.systemPrompt)).not.toContain("failed before");
+    expect(String(status?.systemPrompt)).toContain("Latest validation: pass");
+    expect(readAdvisorState().workflow?.terminal).toBeUndefined();
+  });
+
+  it("treats Vitest JSON with zero failed tests as green despite failed words", async () => {
+    const turnEnd = handlers.turn_end;
+    expect(turnEnd?.length).toBe(1);
+
+    await handlers.session_start?.[0]?.({}, ctx);
+    await turnEnd![0]({
+      toolResults: [{
+        toolName: "bash",
+        command: "vitest run --reporter=json",
+        status: "error",
+        exitCode: 0,
+        stdout: JSON.stringify({
+          numFailedTests: 0,
+          numFailedTestSuites: 0,
+          success: true,
+          testResults: [{ assertionResults: [{ failureMessages: ["expected output includes the word failed"] }] }],
+        }),
+      }],
+      message: { role: "assistant", content: "Structured Vitest result is green." },
+    }, ctx);
+
+    const resolved = readAdvisorState();
+    expect(resolved.evidenceLedger).toEqual(expect.arrayContaining([
+      expect.objectContaining({ kind: "validation", command: "vitest run --reporter=json", result: "pass", exitCode: 0 }),
+    ]));
+    expect(resolved.workflow?.terminal).toBeUndefined();
+    expect(completeSimpleMock).not.toHaveBeenCalled();
+  });
+
+  it("does not treat generic success JSON as validation evidence", async () => {
+    const turnEnd = handlers.turn_end;
+    expect(turnEnd?.length).toBe(1);
+
+    await handlers.session_start?.[0]?.({}, ctx);
+    await turnEnd![0]({
+      toolResults: [{
+        toolName: "bash",
+        command: "gh api repos/fiale-plus/pi-rogue/actions/runs/123",
+        exitCode: 0,
+        stdout: JSON.stringify({ success: true }),
+      }],
+      message: { role: "assistant", content: "GitHub API call succeeded." },
+    }, ctx);
+
+    expect(readAdvisorState().evidenceLedger).not.toEqual(expect.arrayContaining([
+      expect.objectContaining({ kind: "validation" }),
+    ]));
+  });
+
+  it("does not treat non-validation output mentioning lint as validation evidence", async () => {
+    const turnEnd = handlers.turn_end;
+    expect(turnEnd?.length).toBe(1);
+
+    await handlers.session_start?.[0]?.({}, ctx);
+    await turnEnd![0]({
+      toolResults: [{
+        toolName: "bash",
+        command: "gh api repos/fiale-plus/pi-rogue/actions/runs/123",
+        exitCode: 0,
+        stdout: JSON.stringify({ workflowName: "lint", status: "queued" }),
+      }],
+      message: { role: "assistant", content: "GitHub API call returned lint workflow metadata." },
+    }, ctx);
+
+    expect(readAdvisorState().evidenceLedger).not.toEqual(expect.arrayContaining([
+      expect.objectContaining({ kind: "validation" }),
+    ]));
+  });
+
+  it("does not treat generic zero-failure JSON as validation evidence", async () => {
+    const turnEnd = handlers.turn_end;
+    expect(turnEnd?.length).toBe(1);
+
+    await handlers.session_start?.[0]?.({}, ctx);
+    await turnEnd![0]({
+      toolResults: [{
+        toolName: "bash",
+        command: "gh api repos/fiale-plus/pi-rogue/actions/runs/123",
+        exitCode: 0,
+        stdout: JSON.stringify({ failures: 0 }),
+      }],
+      message: { role: "assistant", content: "GitHub API call returned a zero-failure field." },
+    }, ctx);
+
+    expect(readAdvisorState().evidenceLedger).not.toEqual(expect.arrayContaining([
+      expect.objectContaining({ kind: "validation" }),
+    ]));
+  });
+
+
+  it("does not let generic success JSON hide a failed non-validation tool", async () => {
+    const turnEnd = handlers.turn_end;
+    expect(turnEnd?.length).toBe(1);
+
+    await handlers.session_start?.[0]?.({}, ctx);
+    await turnEnd![0]({
+      toolResults: [{
+        toolName: "bash",
+        command: "gh api repos/fiale-plus/pi-rogue/actions/runs/123",
+        exitCode: 1,
+        stdout: JSON.stringify({ success: true }),
+      }],
+      message: { role: "assistant", content: "GitHub API call failed despite a generic success field in the payload." },
+    }, ctx);
+
+    expect(completeSimpleMock).toHaveBeenCalledTimes(1);
+    expect(readAdvisorState().reviewControl.lastDecision).toBe("review");
+  });
+
+  it("rechecks remote PR state after local gh merge worktree errors", async () => {
+    const turnEnd = handlers.turn_end;
+    expect(turnEnd?.length).toBe(1);
+
+    await handlers.session_start?.[0]?.({}, ctx);
+    await turnEnd![0]({
+      toolResults: [{
+        toolName: "bash",
+        command: "gh pr merge 215 --merge",
+        exitCode: 128,
+        stderr: "fatal: 'main' is already used by worktree at '/tmp/other'",
+      }],
+      message: { role: "assistant", content: "Local merge command failed because main is checked out elsewhere." },
+    }, ctx);
+
+    const resolved = readAdvisorState();
+    expect(execFileSyncMock).toHaveBeenCalledWith("gh", ["pr", "view", "215", "--json", "state,mergeCommit"], expect.any(Object));
+    expect(resolved.evidenceLedger).toEqual(expect.arrayContaining([
+      expect.objectContaining({ kind: "merge", command: "gh pr merge 215 --merge", result: "error", pr: 215 }),
+      expect.objectContaining({ kind: "merge", command: "gh pr view 215 --json state,mergeCommit", result: "merged", pr: 215 }),
+    ]));
+    expect(resolved.workflow?.terminal).toMatchObject({ state: "merged", source: "remote_pr_recheck" });
+    expect(resolved.followUp).toBe("");
+    expect(completeSimpleMock).not.toHaveBeenCalled();
+  });
+
+  it("rechecks current PR when local gh merge worktree error omits PR number", async () => {
+    const turnEnd = handlers.turn_end;
+    expect(turnEnd?.length).toBe(1);
+    execFileSyncMock.mockImplementation((command: string, args: string[]) => {
+      if (command === "git" && args.join(" ") === "rev-parse HEAD") return "test-sha\n";
+      if (command === "gh" && args.join(" ") === "pr view --json state,mergeCommit") {
+        return JSON.stringify({ state: "MERGED", mergeCommit: { oid: "merged-sha" } });
+      }
+      throw new Error(`unexpected command: ${command} ${args.join(" ")}`);
+    });
+
+    await handlers.session_start?.[0]?.({}, ctx);
+    await turnEnd![0]({
+      toolResults: [{
+        toolName: "bash",
+        command: "gh pr merge --merge",
+        exitCode: 128,
+        stderr: "fatal: 'main' is already used by worktree at '/tmp/other'",
+      }],
+      message: { role: "assistant", content: "Local merge command failed because main is checked out elsewhere." },
+    }, ctx);
+
+    expect(execFileSyncMock).toHaveBeenCalledWith("gh", ["pr", "view", "--json", "state,mergeCommit"], expect.any(Object));
+    expect(readAdvisorState().workflow?.terminal).toMatchObject({ state: "merged", source: "remote_pr_recheck" });
+  });
+
+  it("does not mark gh merge exit zero terminal without confirmed merged state", async () => {
+    const turnEnd = handlers.turn_end;
+    expect(turnEnd?.length).toBe(1);
+    execFileSyncMock.mockImplementation((command: string, args: string[]) => {
+      if (command === "git" && args.join(" ") === "rev-parse HEAD") return "test-sha\n";
+      if (command === "gh" && args.join(" ") === "pr view 215 --json state,mergeCommit") {
+        return JSON.stringify({ state: "OPEN" });
+      }
+      throw new Error(`unexpected command: ${command} ${args.join(" ")}`);
+    });
+
+    await handlers.session_start?.[0]?.({}, ctx);
+    await turnEnd![0]({
+      toolResults: [{
+        toolName: "bash",
+        command: "gh pr merge 215 --merge",
+        exitCode: 0,
+        stdout: "Auto-merge enabled for pull request #215",
+      }],
+      message: { role: "assistant", content: "Local merge command succeeded but remote PR remains open." },
+    }, ctx);
+
+    const resolved = readAdvisorState();
+    expect(execFileSyncMock).toHaveBeenCalledWith("gh", ["pr", "view", "215", "--json", "state,mergeCommit"], expect.any(Object));
+    expect(resolved.workflow?.terminal).toBeUndefined();
+    expect(resolved.evidenceLedger).toEqual(expect.arrayContaining([
+      expect.objectContaining({ kind: "merge", command: "gh pr view 215 --json state,mergeCommit", result: "not_merged", pr: 215 }),
+    ]));
+  });
+
+  it("rechecks gh merge success text before terminal merge", async () => {
+    const turnEnd = handlers.turn_end;
+    expect(turnEnd?.length).toBe(1);
+    execFileSyncMock.mockImplementation((command: string, args: string[]) => {
+      if (command === "git" && args.join(" ") === "rev-parse HEAD") return "test-sha\n";
+      if (command === "gh" && args.join(" ") === "pr view 215 --json state,mergeCommit") {
+        return JSON.stringify({ state: "OPEN" });
+      }
+      throw new Error(`unexpected command: ${command} ${args.join(" ")}`);
+    });
+
+    await handlers.session_start?.[0]?.({}, ctx);
+    await turnEnd![0]({
+      toolResults: [{
+        toolName: "bash",
+        command: "gh pr merge 215 --merge",
+        exitCode: 0,
+        stdout: "✓ Pull Request successfully merged",
+      }],
+      message: { role: "assistant", content: "Local merge command printed success text but remote PR remains open." },
+    }, ctx);
+
+    const resolved = readAdvisorState();
+    expect(execFileSyncMock).toHaveBeenCalledWith("gh", ["pr", "view", "215", "--json", "state,mergeCommit"], expect.any(Object));
+    expect(resolved.workflow?.terminal).toBeUndefined();
+    expect(resolved.evidenceLedger).toEqual(expect.arrayContaining([
+      expect.objectContaining({ kind: "merge", command: "gh pr view 215 --json state,mergeCommit", result: "not_merged", pr: 215 }),
+    ]));
+  });
+
+  it("keeps merge warning when validation pass and gh merge exit zero leave PR open in one review-off batch", async () => {
+    const turnEnd = handlers.turn_end;
+    expect(turnEnd?.length).toBe(1);
+    execFileSyncMock.mockImplementation((command: string, args: string[]) => {
+      if (command === "git" && args.join(" ") === "rev-parse HEAD") return "test-sha\n";
+      if (command === "gh" && args.join(" ") === "pr view 215 --json state,mergeCommit") {
+        return JSON.stringify({ state: "OPEN" });
+      }
+      throw new Error(`unexpected command: ${command} ${args.join(" ")}`);
+    });
+
+    await handlers.session_start?.[0]?.({}, ctx);
+    const stale = readAdvisorState();
+    stale.lastTask = "finish issue 217";
+    stale.followUp = "Old verdict: merge is incomplete.";
+    stale.followUpTask = stale.lastTask;
+    stale.reviewSignals = ["Old merge warning"];
+    stale.reviewSignalsTask = stale.lastTask;
+    writeFileSync(ADVISOR_STATE_PATH, JSON.stringify(stale, null, 2), "utf8");
+    writeFileSync(ADVISOR_CONFIG_PATH, JSON.stringify({ mode: "auto", review: "off", checkins: "off", checkinIntervalMinutes: 30 }, null, 2), "utf8");
+    writeFileSync(ADVISOR_CURRENT_PATH, "[advisor:llm: review, reason: Old verdict: merge is incomplete]\n", "utf8");
+
+    await turnEnd![0]({
+      toolResults: [
+        {
+          toolName: "bash",
+          command: "npm test",
+          exitCode: 0,
+          stdout: "Test Files 10 passed (10)\nTests 100 passed (100)",
+        },
+        {
+          toolName: "bash",
+          command: "gh pr merge 215 --merge",
+          exitCode: 0,
+          stdout: "Auto-merge enabled for pull request #215",
+        },
+      ],
+      message: { role: "assistant", content: "Validation passed, then merge command left the PR open." },
+    }, ctx);
+
+    const resolved = readAdvisorState();
+    expect(resolved.workflow?.terminal).toBeUndefined();
+    expect(resolved.followUp).toBe("Old verdict: merge is incomplete.");
+    expect(resolved.reviewSignals).toEqual(["Old merge warning"]);
+    expect(readFileSync(ADVISOR_CURRENT_PATH, "utf8")).toContain("Old verdict");
+  });
+
+
+  it("opens a rate-limit circuit breaker instead of replaying stale review verdicts", async () => {
+    const turnEnd = handlers.turn_end;
+    expect(turnEnd?.length).toBe(1);
+
+    await handlers.session_start?.[0]?.({}, ctx);
+    const stale = readAdvisorState();
+    stale.lastTask = "finish issue 217";
+    stale.followUp = "Old verdict: merge is incomplete.";
+    stale.followUpTask = stale.lastTask;
+    stale.reviewSignals = ["Old failed-test warning"];
+    stale.reviewSignalsTask = stale.lastTask;
+    writeFileSync(ADVISOR_STATE_PATH, JSON.stringify(stale, null, 2), "utf8");
+
+    completeSimpleMock.mockRejectedValue(new Error(JSON.stringify({
+      type: "error",
+      code: "rate_limit_exceeded",
+      status_code: 429,
+      message: "weekly limit reached",
+      headers: { "Retry-After": "120" },
+    })));
+
+    await turnEnd![0]({
+      toolResults: [{ toolName: "edit" }],
+      message: { role: "assistant", content: "Changed advisor rate-limit handling." },
+    }, ctx);
+
+    const resolved = readAdvisorState();
+    expect(completeSimpleMock).toHaveBeenCalledTimes(2);
+    expect(resolved.rateLimit).toMatchObject({ active: true, reason: expect.stringContaining("429") });
+    expect(resolved.followUp).toBe("");
+    expect(resolved.reviewSignals).toEqual([]);
+    expect(resolved.reviewControl.lastReason).toContain("rate limit");
+    expect(sendMessageMock).not.toHaveBeenCalledWith(
+      expect.objectContaining({ content: expect.stringContaining("Old verdict") }),
+      expect.anything(),
+    );
+  });
+
+
+  it("reopens review when a real failure follows green closeout before merge", async () => {
+    const agentEnd = handlers.agent_end;
+    const turnEnd = handlers.turn_end;
+    expect(agentEnd?.length).toBe(1);
+    expect(turnEnd?.length).toBe(1);
+
+    await handlers.session_start?.[0]?.({}, ctx);
+    await agentEnd![0]({
+      messages: [
+        { role: "assistant", content: "Revalidated clean: tests passed, typecheck passed, and final Codex review had no findings." },
+      ],
+    }, ctx);
+    expect(readAdvisorState().workflow?.terminal).toMatchObject({ state: "green" });
+
+    await turnEnd![0]({
+      toolResults: [{
+        toolName: "bash",
+        command: "gh pr merge 215 --merge",
+        exitCode: 1,
+        stderr: "GraphQL: Pull request is not mergeable",
+      }],
+      message: { role: "assistant", content: "Merge still failed after green closeout." },
+    }, ctx);
+
+    expect(completeSimpleMock).toHaveBeenCalledTimes(1);
+    expect(readAdvisorState().reviewControl.lastDecision).toBe("review");
+    expect(readAdvisorState().reviewControl.terminalEvidence).toBeUndefined();
+  });
+
+  it("clears stale follow-up immediately when merged evidence is observed with review off", async () => {
+    const turnEnd = handlers.turn_end;
+    expect(turnEnd?.length).toBe(1);
+
+    await handlers.session_start?.[0]?.({}, ctx);
+    const stale = readAdvisorState();
+    stale.lastTask = "finish issue 217";
+    stale.followUp = "Old verdict: merge is incomplete.";
+    stale.followUpTask = stale.lastTask;
+    stale.reviewSignals = ["Old failed-test warning"];
+    stale.reviewSignalsTask = stale.lastTask;
+    writeFileSync(ADVISOR_STATE_PATH, JSON.stringify(stale, null, 2), "utf8");
+    writeFileSync(ADVISOR_CONFIG_PATH, JSON.stringify({ mode: "auto", review: "off", checkins: "off", checkinIntervalMinutes: 30 }, null, 2), "utf8");
+    writeFileSync(ADVISOR_CURRENT_PATH, "[advisor:llm: review, reason: Old verdict: merge is incomplete]\n", "utf8");
+
+    await turnEnd![0]({
+      toolResults: [{
+        toolName: "bash",
+        command: "gh pr view 215 --json state,mergeCommit",
+        exitCode: 0,
+        stdout: JSON.stringify({ state: "MERGED", mergeCommit: { oid: "merged-sha" } }),
+      }],
+      message: { role: "assistant", content: "Remote PR state is MERGED." },
+    }, ctx);
+
+    const resolved = readAdvisorState();
+    expect(resolved.workflow?.terminal).toMatchObject({ state: "merged" });
+    expect(resolved.followUp).toBe("");
+    expect(resolved.reviewSignals).toEqual([]);
+    const current = readFileSync(ADVISOR_CURRENT_PATH, "utf8");
+    expect(current).toContain("advisor:llm: continue");
+    expect(current).not.toContain("Old verdict");
+  });
+
+  it("keeps stale warning visible when review-off batch has validation pass plus merge failure", async () => {
+    const turnEnd = handlers.turn_end;
+    expect(turnEnd?.length).toBe(1);
+
+    await handlers.session_start?.[0]?.({}, ctx);
+    const stale = readAdvisorState();
+    stale.lastTask = "finish issue 217";
+    stale.followUp = "Old verdict: merge is incomplete.";
+    stale.followUpTask = stale.lastTask;
+    stale.reviewSignals = ["Old failed-test warning"];
+    stale.reviewSignalsTask = stale.lastTask;
+    writeFileSync(ADVISOR_STATE_PATH, JSON.stringify(stale, null, 2), "utf8");
+    writeFileSync(ADVISOR_CONFIG_PATH, JSON.stringify({ mode: "auto", review: "off", checkins: "off", checkinIntervalMinutes: 30 }, null, 2), "utf8");
+    writeFileSync(ADVISOR_CURRENT_PATH, "[advisor:llm: review, reason: Old verdict: merge is incomplete]\n", "utf8");
+
+    await turnEnd![0]({
+      toolResults: [
+        {
+          toolName: "bash",
+          command: "vitest run --reporter=json",
+          exitCode: 0,
+          stdout: JSON.stringify({ numFailedTests: 0, numFailedTestSuites: 0, success: true }),
+        },
+        {
+          toolName: "bash",
+          command: "gh pr merge 215 --merge",
+          exitCode: 1,
+          stderr: "GraphQL: Pull request is not mergeable",
+        },
+      ],
+      message: { role: "assistant", content: "Validation passed, but merge failed." },
+    }, ctx);
+
+    const resolved = readAdvisorState();
+    expect(resolved.followUp).toBe("Old verdict: merge is incomplete.");
+    expect(resolved.reviewSignals).toEqual(["Old failed-test warning"]);
+    expect(readFileSync(ADVISOR_CURRENT_PATH, "utf8")).toContain("Old verdict");
+  });
+
+  it("lets a later validation pass in the same review-off batch clear an earlier validation failure", async () => {
+    const turnEnd = handlers.turn_end;
+    expect(turnEnd?.length).toBe(1);
+
+    await handlers.session_start?.[0]?.({}, ctx);
+    const stale = readAdvisorState();
+    stale.lastTask = "finish issue 217";
+    stale.followUp = "Old verdict: tests are still failing.";
+    stale.followUpTask = stale.lastTask;
+    stale.reviewSignals = ["Old failed-test warning"];
+    stale.reviewSignalsTask = stale.lastTask;
+    writeFileSync(ADVISOR_STATE_PATH, JSON.stringify(stale, null, 2), "utf8");
+    writeFileSync(ADVISOR_CONFIG_PATH, JSON.stringify({ mode: "auto", review: "off", checkins: "off", checkinIntervalMinutes: 30 }, null, 2), "utf8");
+    writeFileSync(ADVISOR_CURRENT_PATH, "[advisor:llm: review, reason: Old verdict: tests are still failing]\n", "utf8");
+
+    await turnEnd![0]({
+      toolResults: [
+        {
+          toolName: "bash",
+          command: "vitest run packages/advisor/src/loop-convergence.test.ts",
+          exitCode: 1,
+          stderr: "Test Files 1 failed (1)",
+        },
+        {
+          toolName: "bash",
+          command: "vitest run packages/advisor/src/loop-convergence.test.ts --reporter=json",
+          exitCode: 0,
+          stdout: JSON.stringify({ numFailedTests: 0, numFailedTestSuites: 0, success: true }),
+        },
+      ],
+      message: { role: "assistant", content: "Failed first, then reran green." },
+    }, ctx);
+
+    const resolved = readAdvisorState();
+    expect(resolved.followUp).toBe("");
+    expect(resolved.reviewSignals).toEqual([]);
+    expect(readFileSync(ADVISOR_CURRENT_PATH, "utf8")).toContain("advisor:llm: continue");
+  });
+
+  it("records agent-end merge evidence even while advisor review is paused", async () => {
+    const agentEnd = handlers.agent_end;
+    expect(agentEnd?.length).toBe(1);
+
+    await handlers.session_start?.[0]?.({}, ctx);
+    const paused = readAdvisorState();
+    paused.advisorPauseUntilTurn = 10;
+    writeFileSync(ADVISOR_STATE_PATH, JSON.stringify(paused, null, 2), "utf8");
+
+    await agentEnd![0]({
+      messages: [
+        { role: "assistant", content: `gh pr view 215 --json state,mergeCommit\n${JSON.stringify({ state: "MERGED", mergeCommit: { oid: "merged-sha" } })}` },
+      ],
+    }, ctx);
+
+    expect(readAdvisorState().evidenceLedger).toEqual(expect.arrayContaining([
+      expect.objectContaining({ kind: "merge", result: "merged", pr: 215, source: "agent_end" }),
+    ]));
+  });
+
+  it("persists agent-end merge evidence before normal review reloads state", async () => {
+    const agentEnd = handlers.agent_end;
+    expect(agentEnd?.length).toBe(1);
+
+    await handlers.session_start?.[0]?.({}, ctx);
+    await agentEnd![0]({
+      messages: [
+        { role: "assistant", content: `gh pr view 215 --json state,mergeCommit\n${JSON.stringify({ state: "MERGED", mergeCommit: { oid: "merged-sha" } })}` },
+      ],
+    }, ctx);
+
+    const resolved = readAdvisorState();
+    expect(resolved.evidenceLedger).toEqual(expect.arrayContaining([
+      expect.objectContaining({ kind: "merge", result: "merged", pr: 215, source: "agent_end" }),
+    ]));
+    expect(resolved.workflow?.terminal).toMatchObject({ state: "merged" });
+    expect(completeSimpleMock).not.toHaveBeenCalled();
+  });
+
+  it("opens rate-limit circuit breaker from structured error properties", async () => {
+    const turnEnd = handlers.turn_end;
+    expect(turnEnd?.length).toBe(1);
+
+    await handlers.session_start?.[0]?.({}, ctx);
+    const error = Object.assign(new Error("provider rejected"), {
+      status: 429,
+      headers: { "Retry-After": "60" },
+    });
+    completeSimpleMock.mockRejectedValue(error);
+
+    await turnEnd![0]({
+      toolResults: [{ toolName: "edit" }],
+      message: { role: "assistant", content: "Changed advisor rate-limit handling." },
+    }, ctx);
+
+    expect(readAdvisorState().rateLimit).toMatchObject({ active: true, retryAfterSeconds: 60 });
+  });
+
+  it("does not hide a mixed-command failure behind green Vitest JSON", async () => {
+    const turnEnd = handlers.turn_end;
+    expect(turnEnd?.length).toBe(1);
+
+    await handlers.session_start?.[0]?.({}, ctx);
+    await turnEnd![0]({
+      toolResults: [{
+        toolName: "bash",
+        command: "vitest run --reporter=json && gh pr merge 215 --merge",
+        exitCode: 1,
+        stdout: JSON.stringify({ numFailedTests: 0, numFailedTestSuites: 0, success: true }),
+        stderr: "GraphQL: Pull request is not mergeable",
+      }],
+      message: { role: "assistant", content: "Vitest passed, but merge failed in the same shell command." },
+    }, ctx);
+
+    expect(completeSimpleMock).toHaveBeenCalledTimes(1);
+    expect(readAdvisorState().reviewControl.lastDecision).toBe("review");
+  });
 
   it("recovers running review control state on session start", async () => {
     const preflight = handlers.before_agent_start;

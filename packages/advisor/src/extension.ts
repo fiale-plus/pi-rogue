@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { execFileSync } from "node:child_process";
 import { existsSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, join, resolve } from "node:path";
@@ -61,6 +62,8 @@ const MAX_CACHE = 64;
 const MAX_NOTES = 12;
 const MAX_FILES = 8;
 const MAX_ERRORS = 5;
+const MAX_EVIDENCE = 32;
+const DEFAULT_RATE_LIMIT_BACKOFF_SECONDS = 15 * 60;
 const MIN_CHECKIN_INTERVAL_MINUTES = 10;
 const MAX_CHECKIN_INTERVAL_MINUTES = 240;
 const STATE_VERSION = 1;
@@ -105,9 +108,46 @@ interface SessionState {
     queuedReason?: string;
   };
   reviewControl: ReviewControlState;
+  evidenceLedger: EvidenceLedgerEntry[];
+  workflow?: WorkflowState;
+  rateLimit?: AdvisorRateLimitState;
   advisorLoop?: AdvisorLoopState;
   advisorPauseUntilTurn?: number;
 }
+
+type EvidenceKind = "validation" | "merge";
+type EvidenceResult = "pass" | "fail" | "merged" | "not_merged" | "error";
+
+type EvidenceLedgerEntry = {
+  kind: EvidenceKind;
+  sha?: string;
+  command?: string;
+  source: string;
+  result: EvidenceResult;
+  timestamp: string;
+  exitCode?: number;
+  pr?: number;
+  details?: string;
+};
+
+type WorkflowState = {
+  terminal?: {
+    state: "green" | "merged";
+    sha?: string;
+    source: string;
+    timestamp: string;
+    reason: string;
+    pr?: number;
+  };
+};
+
+type AdvisorRateLimitState = {
+  active: boolean;
+  since: string;
+  until: string;
+  reason: string;
+  retryAfterSeconds?: number;
+};
 function defaultReviewControl(): ReviewControlState {
   return {
     status: "idle",
@@ -133,6 +173,8 @@ function defaultState(): SessionState {
     router: {},
     checkin: { queued: false },
     reviewControl: defaultReviewControl(),
+    evidenceLedger: [],
+    workflow: {},
     advisorLoop: defaultAdvisorLoopState(),
   };
 }
@@ -209,6 +251,68 @@ function attachStatePath<T extends SessionState>(state: T, path: string): T {
   return state;
 }
 
+function normalizeEvidenceLedger(raw: unknown): EvidenceLedgerEntry[] {
+  if (!Array.isArray(raw)) return [];
+  return raw.flatMap((entry): EvidenceLedgerEntry[] => {
+    if (!entry || typeof entry !== "object") return [];
+    const obj = entry as Partial<EvidenceLedgerEntry>;
+    const kind = obj.kind === "validation" || obj.kind === "merge" ? obj.kind : undefined;
+    const result = obj.result === "pass" || obj.result === "fail" || obj.result === "merged" || obj.result === "not_merged" || obj.result === "error" ? obj.result : undefined;
+    const timestamp = typeof obj.timestamp === "string" && obj.timestamp ? obj.timestamp : undefined;
+    const source = typeof obj.source === "string" && obj.source ? obj.source : undefined;
+    if (!kind || !result || !timestamp || !source) return [];
+    const exitCode = Number(obj.exitCode);
+    const pr = Number(obj.pr);
+    return [{
+      kind,
+      result,
+      timestamp,
+      source,
+      sha: typeof obj.sha === "string" && obj.sha ? obj.sha : undefined,
+      command: typeof obj.command === "string" && obj.command ? obj.command : undefined,
+      exitCode: Number.isFinite(exitCode) ? exitCode : undefined,
+      pr: Number.isFinite(pr) ? pr : undefined,
+      details: typeof obj.details === "string" && obj.details ? obj.details : undefined,
+    }];
+  }).slice(-MAX_EVIDENCE);
+}
+
+function normalizeWorkflowState(raw: unknown): WorkflowState {
+  if (!raw || typeof raw !== "object") return {};
+  const terminal = (raw as WorkflowState).terminal;
+  if (!terminal || typeof terminal !== "object") return {};
+  if (terminal.state !== "green" && terminal.state !== "merged") return {};
+  const timestamp = typeof terminal.timestamp === "string" && terminal.timestamp ? terminal.timestamp : new Date().toISOString();
+  const source = typeof terminal.source === "string" && terminal.source ? terminal.source : "unknown";
+  const reason = typeof terminal.reason === "string" && terminal.reason ? terminal.reason : terminal.state;
+  const pr = Number(terminal.pr);
+  return {
+    terminal: {
+      state: terminal.state,
+      timestamp,
+      source,
+      reason,
+      sha: typeof terminal.sha === "string" && terminal.sha ? terminal.sha : undefined,
+      pr: Number.isFinite(pr) ? pr : undefined,
+    },
+  };
+}
+
+function normalizeRateLimitState(raw: unknown): AdvisorRateLimitState | undefined {
+  if (!raw || typeof raw !== "object") return undefined;
+  const state = raw as Partial<AdvisorRateLimitState>;
+  if (state.active !== true) return undefined;
+  if (typeof state.since !== "string" || typeof state.until !== "string" || typeof state.reason !== "string") return undefined;
+  const retryAfterSeconds = Number(state.retryAfterSeconds);
+  return {
+    active: true,
+    since: state.since,
+    until: state.until,
+    reason: state.reason,
+    retryAfterSeconds: Number.isFinite(retryAfterSeconds) ? retryAfterSeconds : undefined,
+  };
+}
+
 function loadState(ctxOrKey?: any): SessionState {
   // Do not fall back to LEGACY_STATE_PATH here: that file was unscoped and is
   // the source of issue #103 context bleed. New/resumed sessions must only load
@@ -264,6 +368,9 @@ function loadStateFromPath(path: string): SessionState {
       lastAppliedAt: control?.lastAppliedAt,
       terminalEvidence: normalizeTerminalEvidence((control as { terminalEvidence?: unknown } | undefined)?.terminalEvidence),
     },
+    evidenceLedger: normalizeEvidenceLedger(raw.evidenceLedger),
+    workflow: normalizeWorkflowState(raw.workflow),
+    rateLimit: normalizeRateLimitState(raw.rateLimit),
     advisorLoop: raw.advisorLoop && typeof raw.advisorLoop === "object" ? {
       repeatCount: Number((raw.advisorLoop as { repeatCount?: unknown }).repeatCount) || 0,
       recent: Array.isArray((raw.advisorLoop as { recent?: unknown }).recent)
@@ -348,11 +455,22 @@ function hash(...parts: string[]): string {
 
 function brief(s: SessionState): string {
   const lines: string[] = [];
+  const terminal = terminalWorkflowReason(s);
+  const latestValidation = latestEvidence(s, "validation");
+  const validationPassed = latestValidation?.result === "pass";
   if (s.lastTask) lines.push(`Task: ${truncate(sanitizeAdvisorText(s.lastTask), 200)}`);
   if (s.turns) lines.push(`Turns: ${s.turns}`);
-  if (s.notes.length) { lines.push("Notes:"); s.notes.slice(-4).forEach(n => lines.push(`- ${truncate(n, 200)}`)); }
+  if (latestValidation) {
+    lines.push(`Latest validation: ${latestValidation.result}${latestValidation.command ? ` (${latestValidation.command})` : ""}${latestValidation.sha ? ` @ ${latestValidation.sha}` : ""}`);
+  }
+  if (terminal) {
+    lines.push(`Workflow: ${terminal}`);
+  } else {
+    const notes = validationPassed ? s.notes.filter((note) => !/\b(?:fail(?:ed|ing)?|error|broken)\b/i.test(note)) : s.notes;
+    if (notes.length) { lines.push("Notes:"); notes.slice(-4).forEach(n => lines.push(`- ${truncate(n, 200)}`)); }
+    if (!validationPassed && s.errors.length) lines.push(`Errors: ${sanitizeAdvisorText(s.errors.slice(-2).join(" | "))}`);
+  }
   if (s.files.length) lines.push(`Files: ${sanitizeAdvisorText(s.files.slice(-4).join(", "))}`);
-  if (s.errors.length) lines.push(`Errors: ${sanitizeAdvisorText(s.errors.slice(-2).join(" | "))}`);
   return lines.join("\n").slice(0, 1200);
 }
 
@@ -454,6 +572,495 @@ function squish(t: unknown, max = 200): string {
   const s = sanitizeAdvisorText(t).replace(/\s+/g, " ").trim();
   return s.length <= max ? s : s.slice(0, max - 1).trimEnd() + "…";
 }
+
+function safeCurrentGitSha(ctx: any): string | undefined {
+  const hinted = ctx?.git?.headSha ?? ctx?.git?.sha ?? ctx?.repository?.headSha;
+  if (typeof hinted === "string" && hinted.trim()) return hinted.trim();
+  const cwd = String(ctx?.cwd ?? process.cwd());
+  try {
+    const raw = execFileSync("git", ["rev-parse", "HEAD"], {
+      cwd,
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+      timeout: 1000,
+    });
+    return String(raw).trim() || undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function toolCommand(tool: any): string | undefined {
+  const command = tool?.command ?? tool?.input?.command ?? tool?.args?.command ?? tool?.details?.command ?? tool?.toolName ?? tool?.name;
+  const text = squish(command, 240);
+  return text || undefined;
+}
+
+function toolExitCode(tool: any): number | undefined {
+  for (const candidate of [tool?.exitCode, tool?.exit_code, tool?.code, tool?.details?.exitCode, tool?.details?.exit_code, tool?.result?.exitCode]) {
+    const value = Number(candidate);
+    if (Number.isFinite(value)) return value;
+  }
+  return undefined;
+}
+
+function toolEvidenceText(tool: any): string {
+  return [
+    contentText(tool?.content),
+    contentText(tool?.message),
+    tool?.stdout,
+    tool?.stderr,
+    tool?.output,
+    tool?.text,
+    tool?.error,
+    tool?.details?.stdout,
+    tool?.details?.stderr,
+    tool?.details?.output,
+  ].map((part) => String(part ?? "").trim()).filter(Boolean).join("\n").slice(0, 8000);
+}
+
+function parseJsonCandidates(text: string): unknown[] {
+  const candidates: string[] = [];
+  const trimmed = text.trim();
+  if (trimmed) candidates.push(trimmed);
+  const first = trimmed.indexOf("{");
+  const last = trimmed.lastIndexOf("}");
+  if (first >= 0 && last > first) candidates.push(trimmed.slice(first, last + 1));
+  return [...new Set(candidates)].flatMap((candidate) => {
+    try {
+      return [JSON.parse(candidate)];
+    } catch {
+      return [];
+    }
+  });
+}
+
+function vitestResultFromValue(value: unknown): "pass" | "fail" | undefined {
+  if (!value || typeof value !== "object") return undefined;
+  const obj = value as Record<string, unknown>;
+  const failedNumbers = ["numFailedTests", "numFailedTestSuites", "numTotalFailedTests"]
+    .map((key) => Number(obj[key]))
+    .filter((num) => Number.isFinite(num));
+  if (failedNumbers.some((num) => num > 0)) return "fail";
+  const hasExplicitZeroFailures = failedNumbers.length > 0 && failedNumbers.every((num) => num === 0);
+  if (obj.success === false || obj.ok === false) return "fail";
+  if (hasExplicitZeroFailures && obj.success !== false) return "pass";
+  if ((obj.success === true || obj.ok === true) && (obj.numTotalTests !== undefined || obj.numTotalTestSuites !== undefined || obj.testResults !== undefined)) return "pass";
+  let nestedPass = false;
+  for (const nested of Object.values(obj)) {
+    if (Array.isArray(nested)) {
+      for (const item of nested) {
+        const result = vitestResultFromValue(item);
+        if (result === "fail") return "fail";
+        if (result === "pass") nestedPass = true;
+      }
+    } else if (nested && typeof nested === "object") {
+      const result = vitestResultFromValue(nested);
+      if (result === "fail") return "fail";
+      if (result === "pass") nestedPass = true;
+    }
+  }
+  return nestedPass ? "pass" : undefined;
+}
+
+function parseVitestResult(text: string): "pass" | "fail" | undefined {
+  for (const candidate of parseJsonCandidates(text)) {
+    const result = vitestResultFromValue(candidate);
+    if (result) return result;
+  }
+  return undefined;
+}
+
+function looksLikeValidationCommand(command: string | undefined, text: string): boolean {
+  const commandText = command ?? "";
+  return /\b(vitest|jest|pytest|npm\s+(?:test|run\s+(?:test|check|typecheck|lint))|pnpm\s+(?:test|run\s+(?:test|check|typecheck|lint))|yarn\s+(?:test|run\s+(?:test|check|typecheck|lint))|cargo\s+test|go\s+test|tsc\b|typecheck|lint)\b/i.test(commandText)
+    || parseVitestResult(text) !== undefined
+    || HUMAN_TEST_SUMMARY_RE.test(text);
+}
+
+function structuredValidationResult(tool: any): "pass" | "fail" | undefined {
+  const text = toolEvidenceText(tool);
+  const vitest = parseVitestResult(text);
+  if (vitest) return vitest;
+  if (STRUCTURED_FAILING_TEST_RE.test(text)) return "fail";
+  if (STRUCTURED_GREEN_TEST_RE.test(text)) return "pass";
+  const exitCode = toolExitCode(tool);
+  if (exitCode !== undefined) return exitCode === 0 ? "pass" : "fail";
+  const status = String(tool?.status ?? tool?.details?.status ?? "").toLowerCase();
+  if (["success", "ok", "completed", "passed"].includes(status)) return "pass";
+  if (["error", "failure", "failed"].includes(status) || tool?.isError === true || (tool?.error && String(tool.error).length > 0)) return "fail";
+  return undefined;
+}
+
+function toolOverallFailed(tool: any): boolean {
+  const exitCode = toolExitCode(tool);
+  if (exitCode !== undefined) return exitCode !== 0;
+  const status = String(tool?.status ?? tool?.details?.status ?? "").toLowerCase();
+  if (["error", "failure", "failed"].includes(status)) return true;
+  if (tool?.isError === true) return true;
+  if (tool?.error && String(tool.error).length > 0) return true;
+  return false;
+}
+
+function validationPassHasSeparateFailure(tool: any, command: string | undefined, output: string): boolean {
+  if (!toolOverallFailed(tool)) return false;
+  const combined = `${command ?? ""}\n${output}`;
+  return /\bgh\s+pr\s+merge\b/i.test(combined)
+    || /\b(?:fatal:|GraphQL:|Command exited with code\s+[1-9]\d*|error:)/i.test(output);
+}
+
+function clearGreenTerminalWorkflow(state: SessionState, reason: string): void {
+  if (state.workflow?.terminal?.state !== "green") return;
+  state.workflow = { ...(state.workflow ?? {}) };
+  delete state.workflow.terminal;
+  state.reviewControl.terminalEvidence = undefined;
+  appendAdvisorDiagnostic("green_terminal_cleared", { reason, task: state.lastTask });
+}
+
+
+function validationResultForTools(toolResults: any[]): "pass" | "fail" | undefined {
+  let sawPass = false;
+  for (const tool of toolResults) {
+    const command = toolCommand(tool);
+    const output = toolEvidenceText(tool);
+    if (!looksLikeValidationCommand(command, output)) continue;
+    const result = structuredValidationResult(tool);
+    if (result === "fail") return "fail";
+    if (result === "pass") sawPass = true;
+  }
+  return sawPass ? "pass" : undefined;
+}
+
+type ToolBatchEvaluation = {
+  latestValidation?: "pass" | "fail";
+  separateFailure: boolean;
+  failed: boolean;
+};
+
+function evaluateToolBatch(toolResults: any[]): ToolBatchEvaluation {
+  let latestValidation: "pass" | "fail" | undefined;
+  let separateFailure = false;
+  for (const tool of toolResults) {
+    const command = toolCommand(tool);
+    const output = toolEvidenceText(tool);
+    const isValidation = looksLikeValidationCommand(command, output);
+    if (isValidation) {
+      const result = structuredValidationResult(tool);
+      if (result) latestValidation = result;
+      if (result === "pass" && validationPassHasSeparateFailure(tool, command, output)) separateFailure = true;
+      continue;
+    }
+    if (isActualFailure(tool)) separateFailure = true;
+  }
+  return { latestValidation, separateFailure, failed: separateFailure || latestValidation === "fail" };
+}
+
+function effectiveFailureFromTools(state: SessionState, toolResults: any[]): boolean {
+  if (mergedTerminalWorkflowReason(state)) return false;
+  const evaluation = evaluateToolBatch(toolResults);
+  if (evaluation.failed) {
+    clearGreenTerminalWorkflow(state, "tool failed");
+    return true;
+  }
+  return false;
+}
+
+function hasUnresolvedMergeSignal(state: SessionState, toolResults: any[], text: string): boolean {
+  for (const tool of toolResults) {
+    const command = toolCommand(tool);
+    const output = toolEvidenceText(tool);
+    const mergeText = [command, output, text, state.lastTask].filter(Boolean).join("\n");
+    if (!/\bgh\s+pr\s+(?:view|merge)\b/i.test(mergeText) && !/\bstate\b["'\s:=]+(?:MERGED|OPEN|CLOSED)\b/i.test(mergeText)) continue;
+    const prState = parsePrState(output || text);
+    if (prState) return prState.state !== "MERGED";
+    if (/\bgh\s+pr\s+merge\b/i.test(mergeText)) return true;
+  }
+  return false;
+}
+
+function latestEvidence(state: SessionState, kind: EvidenceKind): EvidenceLedgerEntry | undefined {
+  return [...(state.evidenceLedger ?? [])].reverse().find((entry) => entry.kind === kind);
+}
+
+function clearValidationResolvedReview(state: SessionState, entry: EvidenceLedgerEntry, ctx?: any): void {
+  const reason = "latest validation passed";
+  state.followUp = "";
+  state.followUpTask = undefined;
+  state.reviewSignals = [];
+  state.reviewSignalsTask = undefined;
+  state.advisorLoop = defaultAdvisorLoopState();
+  if (state.router.review?.trajectory) {
+    state.router.review = {
+      ...state.router.review,
+      reason,
+      trajectory: { ...state.router.review.trajectory, failed: false },
+    };
+  }
+  state.reviewControl = {
+    ...state.reviewControl,
+    status: "consumed",
+    pending: false,
+    consumed: true,
+    running: false,
+    lastDecision: "continue",
+    lastReason: reason,
+    lastAppliedAt: entry.timestamp,
+  };
+  if (ctx) writeText(advisorCurrentPath(ctx), `${formatAdvisorDisplay("advisor:llm", "continue", reason)}\n`);
+}
+
+function clearMergedResolvedReview(state: SessionState, entry: EvidenceLedgerEntry, ctx?: any): void {
+  const reason = "PR merged";
+  state.followUp = "";
+  state.followUpTask = undefined;
+  state.reviewSignals = [];
+  state.reviewSignalsTask = undefined;
+  state.advisorLoop = defaultAdvisorLoopState();
+  if (state.router.review?.trajectory) {
+    state.router.review = {
+      ...state.router.review,
+      reason,
+      trajectory: { ...state.router.review.trajectory, failed: false },
+    };
+  }
+  state.reviewControl = {
+    ...state.reviewControl,
+    status: "consumed",
+    pending: false,
+    consumed: true,
+    running: false,
+    lastDecision: "continue",
+    lastReason: reason,
+    lastAppliedAt: entry.timestamp,
+  };
+  if (ctx) writeText(advisorCurrentPath(ctx), `${formatAdvisorDisplay("advisor:llm", "continue", reason)}\n`);
+}
+
+
+function appendEvidence(state: SessionState, entry: EvidenceLedgerEntry, ctx?: any, options: { clearResolved?: boolean } = {}): void {
+  state.evidenceLedger = [...(state.evidenceLedger ?? []), entry].slice(-MAX_EVIDENCE);
+  if (entry.kind === "merge" && entry.result === "merged") {
+    state.workflow = {
+      ...(state.workflow ?? {}),
+      terminal: {
+        state: "merged",
+        sha: entry.sha,
+        source: entry.source,
+        timestamp: entry.timestamp,
+        reason: "PR merged",
+        pr: entry.pr,
+      },
+    };
+    clearMergedResolvedReview(state, entry, ctx);
+    return;
+  }
+  if (entry.kind === "validation" && entry.result === "pass" && options.clearResolved !== false) {
+    clearValidationResolvedReview(state, entry, ctx);
+  }
+}
+
+function parsePrState(text: string): { state: string; mergeCommit?: string } | undefined {
+  for (const candidate of parseJsonCandidates(text)) {
+    if (!candidate || typeof candidate !== "object") continue;
+    const obj = candidate as Record<string, any>;
+    if (typeof obj.state === "string") {
+      return {
+        state: obj.state.toUpperCase(),
+        mergeCommit: typeof obj.mergeCommit?.oid === "string" ? obj.mergeCommit.oid : undefined,
+      };
+    }
+  }
+  const match = /\bstate\b["'\s:=]+(MERGED|OPEN|CLOSED)\b/i.exec(text);
+  return match ? { state: match[1]!.toUpperCase() } : undefined;
+}
+
+function extractPrNumber(text: string): number | undefined {
+  const match = /\bgh\s+pr\s+(?:view|merge)\s+(\d+)\b/i.exec(text)
+    ?? /\bpull\/(\d+)\b/i.exec(text)
+    ?? /\bPR\s*#?(\d+)\b/i.exec(text);
+  const pr = Number(match?.[1]);
+  return Number.isFinite(pr) ? pr : undefined;
+}
+
+function localMergeWorktreeError(text: string): boolean {
+  return /already used by worktree|already checked out|worktree/i.test(text);
+}
+
+function recheckRemotePrState(ctx: any, pr?: number): { state: string; mergeCommit?: string } | undefined {
+  try {
+    const args = pr !== undefined
+      ? ["pr", "view", String(pr), "--json", "state,mergeCommit"]
+      : ["pr", "view", "--json", "state,mergeCommit"];
+    const raw = execFileSync("gh", args, {
+      cwd: String(ctx?.cwd ?? process.cwd()),
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+      timeout: 3000,
+    });
+    return parsePrState(String(raw));
+  } catch {
+    return undefined;
+  }
+}
+
+function observeWorkflowEvidence(state: SessionState, ctx: any, source: string, toolResults: any[], text = ""): void {
+  const sha = safeCurrentGitSha(ctx);
+  const timestamp = new Date().toISOString();
+  const batchEvaluation = evaluateToolBatch(toolResults);
+  const clearValidationResolved = (Boolean(mergedTerminalWorkflowReason(state)) || !batchEvaluation.failed) && !hasUnresolvedMergeSignal(state, toolResults, text);
+  for (const tool of toolResults) {
+    const command = toolCommand(tool);
+    const output = toolEvidenceText(tool);
+    const exitCode = toolExitCode(tool);
+    if (looksLikeValidationCommand(command, output)) {
+      const result = structuredValidationResult(tool);
+      if (result) {
+        appendEvidence(state, { kind: "validation", sha, command, source, result, timestamp, exitCode, details: squish(output, 300) }, ctx, { clearResolved: clearValidationResolved });
+      }
+    }
+
+    const mergeText = [command, output, text, state.lastTask].filter(Boolean).join("\n");
+    if (/\bgh\s+pr\s+(?:view|merge)\b/i.test(mergeText) || /\bstate\b["'\s:=]+(?:MERGED|OPEN|CLOSED)\b/i.test(mergeText)) {
+      const pr = extractPrNumber(mergeText);
+      const prState = parsePrState(output || text);
+      if (prState) {
+        appendEvidence(state, {
+          kind: "merge",
+          sha,
+          command,
+          source,
+          result: prState.state === "MERGED" ? "merged" : "not_merged",
+          timestamp,
+          exitCode,
+          pr,
+          details: prState.mergeCommit ? `mergeCommit=${prState.mergeCommit}` : prState.state,
+        }, ctx);
+      } else if (/\bgh\s+pr\s+merge\b/i.test(mergeText)) {
+        const localResult: EvidenceResult = exitCode === 0 ? "not_merged" : "error";
+        appendEvidence(state, { kind: "merge", sha, command, source, result: localResult, timestamp, exitCode, pr, details: squish(output, 300) }, ctx);
+        const shouldRecheck = localResult === "not_merged" || localMergeWorktreeError(output);
+        if (shouldRecheck) {
+          const remote = recheckRemotePrState(ctx, pr);
+          if (remote) {
+            appendEvidence(state, {
+              kind: "merge",
+              sha,
+              command: pr !== undefined ? `gh pr view ${pr} --json state,mergeCommit` : "gh pr view --json state,mergeCommit",
+              source: "remote_pr_recheck",
+              result: remote.state === "MERGED" ? "merged" : "not_merged",
+              timestamp: new Date().toISOString(),
+              pr,
+              details: remote.mergeCommit ? `mergeCommit=${remote.mergeCommit}` : remote.state,
+            }, ctx);
+          }
+        }
+      }
+    }
+  }
+}
+
+function recordTerminalGreenCloseout(state: SessionState, ctx: any, source: string, reason: string): void {
+  if (state.workflow?.terminal?.state === "merged") return;
+  state.workflow = {
+    ...(state.workflow ?? {}),
+    terminal: {
+      state: "green",
+      sha: safeCurrentGitSha(ctx),
+      source,
+      timestamp: new Date().toISOString(),
+      reason,
+    },
+  };
+}
+
+function mergedTerminalWorkflowReason(state: SessionState): string | null {
+  const terminal = state.workflow?.terminal;
+  if (terminal?.state !== "merged") return null;
+  return `terminal workflow state: PR${terminal.pr ? ` #${terminal.pr}` : ""} merged`;
+}
+
+function terminalWorkflowReason(state: SessionState): string | null {
+  const terminal = state.workflow?.terminal;
+  if (!terminal) return null;
+  return terminal.state === "merged"
+    ? mergedTerminalWorkflowReason(state)
+    : "terminal workflow state: green closeout recorded";
+}
+
+type AdvisorRateLimitInfo = { reason: string; retryAfterSeconds?: number };
+
+function activeRateLimitReason(state: SessionState, now = Date.now()): string | null {
+  const limit = state.rateLimit;
+  if (!limit?.active) return null;
+  const until = Date.parse(limit.until);
+  if (!Number.isFinite(until) || until <= now) return null;
+  return `advisor rate limit active until ${limit.until}`;
+}
+
+function clearRateLimitedReviewReplay(state: SessionState, ctx: any, reason: string): void {
+  state.followUp = "";
+  state.followUpTask = undefined;
+  state.reviewSignals = [];
+  state.reviewSignalsTask = undefined;
+  state.advisorLoop = defaultAdvisorLoopState();
+  writeText(advisorCurrentPath(ctx), `${formatAdvisorDisplay("advisor:llm", "defer", reason)}\n`);
+}
+
+function recordRateLimit(state: SessionState, ctx: any, info: AdvisorRateLimitInfo): void {
+  const now = Date.now();
+  const retryAfterSeconds = Math.max(1, info.retryAfterSeconds ?? DEFAULT_RATE_LIMIT_BACKOFF_SECONDS);
+  const since = new Date(now).toISOString();
+  const until = new Date(now + retryAfterSeconds * 1000).toISOString();
+  state.rateLimit = {
+    active: true,
+    since,
+    until,
+    reason: info.reason,
+    retryAfterSeconds,
+  };
+  clearRateLimitedReviewReplay(state, ctx, info.reason);
+}
+
+function numericHeader(headers: Record<string, unknown> | undefined, key: string): number | undefined {
+  if (!headers) return undefined;
+  const found = Object.entries(headers).find(([name]) => name.toLowerCase() === key.toLowerCase())?.[1];
+  const value = Number(found);
+  return Number.isFinite(value) ? value : undefined;
+}
+
+function rateLimitFromValue(value: unknown): AdvisorRateLimitInfo | undefined {
+  if (!value || typeof value !== "object") return undefined;
+  const obj = value as Record<string, any>;
+  const status = Number(obj.status ?? obj.status_code ?? obj.error?.status ?? obj.error?.status_code);
+  const code = String(obj.code ?? obj.type ?? obj.error?.code ?? obj.error?.type ?? "").toLowerCase();
+  const message = String(obj.message ?? obj.error?.message ?? "").trim();
+  const headers = (obj.headers ?? obj.error?.headers) as Record<string, unknown> | undefined;
+  const retryAfterSeconds = numericHeader(headers, "Retry-After")
+    ?? numericHeader(headers, "X-Codex-Primary-Reset-After-Seconds")
+    ?? numericHeader(headers, "x-ratelimit-reset-after");
+  const looksRateLimited = status === 429 || /rate[_ -]?limit|usage[_ -]?limit|weekly limit|quota.*(?:exceeded|reached)/i.test(`${code} ${message}`);
+  if (!looksRateLimited) return undefined;
+  const reasonParts = ["advisor rate limit", status ? `status ${status}` : "", message].filter(Boolean);
+  return { reason: reasonParts.join(": "), retryAfterSeconds };
+}
+
+function parseAdvisorRateLimit(error: unknown): AdvisorRateLimitInfo | undefined {
+  const structured = rateLimitFromValue(error);
+  if (structured) return structured;
+  const text = error instanceof Error ? error.message : String(error ?? "");
+  for (const candidate of parseJsonCandidates(text)) {
+    const parsed = rateLimitFromValue(candidate);
+    if (parsed) return parsed;
+  }
+  const textMatch = /(?:status[_\s-]?code["':\s]*|status[=:\s])?429|rate[_ -]?limit|usage[_ -]?limit|weekly limit|quota.*(?:exceeded|reached)/i.test(text);
+  if (!textMatch) return undefined;
+  const retryMatch = /(?:retry-after|reset[_ -]?after[_ -]?seconds)["':=\s]+(\d+)/i.exec(text);
+  return {
+    reason: `advisor rate limit: ${squish(text, 160)}${/\b429\b/.test(text) ? "" : " (429)"}`,
+    retryAfterSeconds: retryMatch ? Number(retryMatch[1]) : undefined,
+  };
+}
+
 
 function sanitizeDiagnosticValue(value: unknown): unknown {
   if (typeof value === "string") {
@@ -712,6 +1319,8 @@ function resetTaskScopedStateForSwitch(state: SessionState): void {
   state.followUpTask = undefined;
   state.reviewSignals = [];
   state.reviewSignalsTask = undefined;
+  state.evidenceLedger = [];
+  state.workflow = {};
   state.reviewControl = {
     ...state.reviewControl,
     status: "consumed",
@@ -805,6 +1414,9 @@ function persistReviewState(state: SessionState, includeReviewRoute: boolean): v
   persisted.reviewSignals = state.reviewSignals;
   persisted.reviewSignalsTask = state.reviewSignalsTask;
   persisted.advisorPauseUntilTurn = state.advisorPauseUntilTurn;
+  persisted.evidenceLedger = state.evidenceLedger;
+  persisted.workflow = state.workflow;
+  persisted.rateLimit = state.rateLimit;
   if (includeReviewRoute && state.router.review) {
     persisted.router.review = state.router.review;
   }
@@ -815,6 +1427,7 @@ const CLEAN_CLOSEOUT_RE = /\b(?:revalidated clean|validated clean|final (?:codex
 const UNRESOLVED_CLOSEOUT_RE = /\b(?:pending|still needs?|still needed|still required|incomplete|not done|todo|needs (?:changes|work|fix(?:es)?|review|attention)|(?:still|currently) failing|(?:still|currently) failed)\b/i;
 const STRUCTURED_GREEN_TEST_RE = /(?:\bTests\s+\d+\s+passed\s+\(\d+\)|\bTest Files\s+\d+\s+passed\s+\(\d+\)|\bnumFailedTests\s*[:=]\s*0\b|"numFailedTests"\s*:\s*0|\bsuccess\s*[:=]\s*true\b|"success"\s*:\s*true|\b(?:PIPE_)?EXIT\s*:\s*0\b)/i;
 const STRUCTURED_FAILING_TEST_RE = /(?:\bTests?\s+.*?\bfailed\s+\([1-9]\d*\)|\bTest Files\s+.*?\bfailed\s+\([1-9]\d*\)|\bnumFailedTests\s*[:=]\s*[1-9]\d*\b|"numFailedTests"\s*:\s*[1-9]\d*|\b(?:PIPE_)?EXIT\s*:\s*[1-9]\d*\b)/i;
+const HUMAN_TEST_SUMMARY_RE = /(?:\bTests?\s+\d+\s+(?:passed|failed)\s+\(\d+\)|\bTest Files\s+\d+\s+(?:passed|failed)\s+\(\d+\))/i;
 const TERMINAL_MERGED_RE = /(?:\bPR\s+#?\d+\s+state=MERGED\b|\bstate=MERGED\b|\bmerged\s*[:=]\s*true\b|"merged"\s*:\s*true|\bPull Request successfully merged\b)/i;
 
 type TerminalReviewEvidence = {
@@ -1266,10 +1879,7 @@ export function contentText(content: unknown): string {
 
 /** Check if a tool result or message indicates an actual execution failure */
 function isActualFailure(tool: any): boolean {
-  if (tool?.isError === true) return true;
-  if (tool?.status === "error" || tool?.status === "failure") return true;
-  if (tool?.error && String(tool.error).length > 0) return true;
-  return false;
+  return toolOverallFailed(tool);
 }
 
 function responseText(resp: { content?: Array<{ type?: string; text?: string }> } | null | undefined): string {
@@ -1351,7 +1961,7 @@ function isAdvisorPaused(state: SessionState, nowTurns = state.turns): boolean {
 }
 
 function isAdvisorAutoRunSuppressed(state: SessionState, nowTurns = state.turns): boolean {
-  return isAdvisorPaused(state, nowTurns);
+  return isAdvisorPaused(state, nowTurns) || Boolean(activeRateLimitReason(state));
 }
 
 function isAdvisorAutoRunSuppressedForTurnContext(state: SessionState, nowTurns = state.turns): boolean {
@@ -1415,6 +2025,10 @@ async function maybeAdvisorCheckin(pi: ExtensionAPI, ctx: any, source: string): 
 
   const config = loadConfig();
   const state = loadState(ctx);
+  if (activeRateLimitReason(state)) {
+    setPiRogueStatus(ctx, config, state);
+    return false;
+  }
   const reason = shouldRunCheckin(config, state, Date.now(), Date.now());
   if (!reason) {
     if (state.checkin.queued) {
@@ -1452,6 +2066,13 @@ async function maybeAdvisorCheckin(pi: ExtensionAPI, ctx: any, source: string): 
       { maxTokens: 260, reasoning: "low" as ThinkingLevel, maxAttempts: 2 },
     );
     if (!completed) return false;
+    if (completed.rateLimited) {
+      const next = loadState(ctx);
+      recordRateLimit(next, ctx, { reason: completed.text || "advisor rate limit (429)", retryAfterSeconds: completed.retryAfterSeconds });
+      saveState(next);
+      setPiRogueStatus(ctx, config, next);
+      return false;
+    }
 
     const next = loadState(ctx);
     next.checkin = {
@@ -1904,6 +2525,7 @@ function piRogueDoctorText(ctx: any): string {
 // ── Model resolution (higher/advanced first, then optional regular fallback) ──
 type ResolvedAdvisorModel = { model: any; auth: any; label: string; fallback?: boolean };
 type ModelResolutionOptions = { allowRegularFallback?: boolean; maxAttempts?: number };
+type AdvisorCompletionResult = { text: string; model: string; fallback?: boolean; rateLimited?: boolean; retryAfterSeconds?: number };
 
 export async function resolveModelCandidates(ctx: any, config: AdvisorConfig, options: ModelResolutionOptions = {}): Promise<ResolvedAdvisorModel[]> {
   const { allowRegularFallback = true } = options;
@@ -1945,8 +2567,9 @@ async function resolveModel(ctx: any, config: AdvisorConfig): Promise<ResolvedAd
   return (await resolveModelCandidates(ctx, config))[0] ?? null;
 }
 
-export async function completeWithModelFallback(ctx: any, config: AdvisorConfig, systemPrompt: string, messages: any[], options: { maxTokens: number; reasoning: ThinkingLevel; maxAttempts?: number }): Promise<{ text: string; model: string; fallback?: boolean } | null> {
+export async function completeWithModelFallback(ctx: any, config: AdvisorConfig, systemPrompt: string, messages: any[], options: { maxTokens: number; reasoning: ThinkingLevel; maxAttempts?: number }): Promise<AdvisorCompletionResult | null> {
   let lastError = "";
+  let lastRateLimit: AdvisorRateLimitInfo | undefined;
   let attempts = 0;
   for (const resolved of await resolveModelCandidates(ctx, config)) {
     if (options.maxAttempts !== undefined && attempts >= options.maxAttempts) break;
@@ -1961,7 +2584,11 @@ export async function completeWithModelFallback(ctx: any, config: AdvisorConfig,
       return { text: responseText(resp) || "(empty)", model: resolved.label, fallback: resolved.fallback };
     } catch (error) {
       lastError = error instanceof Error ? error.message : String(error);
+      lastRateLimit = parseAdvisorRateLimit(error) ?? lastRateLimit;
     }
+  }
+  if (lastRateLimit) {
+    return { text: lastRateLimit.reason, model: "none", rateLimited: true, retryAfterSeconds: lastRateLimit.retryAfterSeconds };
   }
   return lastError ? { text: `No advisor/check-in model completed successfully (${lastError}).`, model: "none" } : null;
 }
@@ -1972,9 +2599,10 @@ export async function completeWithHigherAdvisorModel(
   systemPrompt: string,
   messages: any[],
   options: { maxTokens: number; reasoning: ThinkingLevel; allowRegularFallback?: boolean; maxAttempts?: number },
-): Promise<{ text: string; model: string } | null> {
+): Promise<AdvisorCompletionResult | null> {
   const { allowRegularFallback = true, maxAttempts } = options;
   let attempts = 0;
+  let lastRateLimit: AdvisorRateLimitInfo | undefined;
   for (const resolved of await resolveModelCandidates(ctx, config, { allowRegularFallback })) {
     if (maxAttempts !== undefined && attempts >= maxAttempts) break;
     attempts += 1;
@@ -1986,11 +2614,11 @@ export async function completeWithHigherAdvisorModel(
         reasoning: options.reasoning,
       });
       return { text: responseText(resp) || "(empty)", model: resolved.label };
-    } catch {
-      // keep trying remaining candidates
+    } catch (error) {
+      lastRateLimit = parseAdvisorRateLimit(error) ?? lastRateLimit;
     }
   }
-  return null;
+  return lastRateLimit ? { text: lastRateLimit.reason, model: "none", rateLimited: true, retryAfterSeconds: lastRateLimit.retryAfterSeconds } : null;
 }
 
 async function askAdvisor(pi: ExtensionAPI, ctx: any, question: string, scope: string, includeWork: boolean) {
@@ -2014,6 +2642,11 @@ async function askAdvisor(pi: ExtensionAPI, ctx: any, question: string, scope: s
 
   const completed = await completeWithModelFallback(ctx, config, ADVISOR_SYSTEM, msgs, { maxTokens: 600, reasoning: "medium" as ThinkingLevel });
   if (!completed) return { text: "No model available. Install one via pi config.", error: "no_model" };
+  if (completed.rateLimited) {
+    recordRateLimit(state, ctx, { reason: completed.text || "advisor rate limit (429)", retryAfterSeconds: completed.retryAfterSeconds });
+    saveState(state);
+    return { text: state.rateLimit?.reason || "Advisor rate limit active.", model: completed.model, error: "rate_limit" };
+  }
   const text = completed.text;
   const loopFamilyHash = advisorLoopFamilyHash(["question", question, scope, state.lastTask || ""]);
   const loopContextHash = advisorLoopContextHash(["question", config.model ?? "auto", question, scope, includeWork ? brief(state) : "", brokerBrief]);
@@ -2052,6 +2685,22 @@ async function doReview(pi: ExtensionAPI, ctx: any, trigger: string, delta: stri
     reviewLocks.delete(reviewLockKey);
     return;
   }
+  const terminalReason = mergedTerminalWorkflowReason(state);
+  if (terminalReason) {
+    clearResolvedReviewWarning(state, ctx, terminalReason);
+    markReviewApplied(state, signature, trigger, "continue", terminalReason, true);
+    persistReviewState(state, true);
+    reviewLocks.delete(reviewLockKey);
+    return;
+  }
+  const rateLimitReason = activeRateLimitReason(state);
+  if (rateLimitReason) {
+    clearRateLimitedReviewReplay(state, ctx, rateLimitReason);
+    markReviewApplied(state, signature, trigger, "defer", rateLimitReason, true);
+    persistReviewState(state, true);
+    reviewLocks.delete(reviewLockKey);
+    return;
+  }
   if (shouldSkipReview(state, signature) && !reviewHeuristic.safety && !meta.failed) {
     markReviewSkipped(state, signature, trigger);
     persistReviewState(state, false);
@@ -2071,6 +2720,9 @@ async function doReview(pi: ExtensionAPI, ctx: any, trigger: string, delta: stri
       finalDecision = "continue";
       finalReason = hasActiveTerminalEvidence(state) ? "terminal workflow state" : "terminal clean closeout evidence";
       recordTerminalEvidence(state, delta, meta, finalReason);
+      if (hasCleanCloseoutEvidence(delta, meta)) {
+        recordTerminalGreenCloseout(state, ctx, trigger, finalReason);
+      }
       clearResolvedReviewWarning(state, ctx, finalReason);
       markReviewApplied(state, signature, trigger, finalDecision, finalReason, true);
       persistReviewState(state, true);
@@ -2102,6 +2754,7 @@ async function doReview(pi: ExtensionAPI, ctx: any, trigger: string, delta: stri
       finalDecision = "continue";
       finalReason = "local gate continue";
       if (hasCleanCloseoutEvidence(delta, meta)) {
+        recordTerminalGreenCloseout(state, ctx, trigger, finalReason);
         clearResolvedReviewWarning(state, ctx, finalReason);
       }
       markReviewApplied(state, signature, trigger, finalDecision, finalReason, true);
@@ -2116,6 +2769,7 @@ async function doReview(pi: ExtensionAPI, ctx: any, trigger: string, delta: stri
       finalDecision = "continue";
       finalReason = "review disabled";
       if (hasCleanCloseoutEvidence(delta, meta)) {
+        recordTerminalGreenCloseout(state, ctx, trigger, finalReason);
         clearResolvedReviewWarning(state, ctx, finalReason);
       }
       markReviewApplied(state, signature, trigger, finalDecision, finalReason, true);
@@ -2132,6 +2786,7 @@ async function doReview(pi: ExtensionAPI, ctx: any, trigger: string, delta: stri
       if (hasCleanCloseoutEvidence(delta, meta)) {
         finalDecision = "continue";
         finalReason = "clean closeout evidence";
+        recordTerminalGreenCloseout(state, ctx, trigger, finalReason);
         clearResolvedReviewWarning(state, ctx, finalReason);
       } else {
         finalDecision = "defer";
@@ -2178,6 +2833,9 @@ async function doReview(pi: ExtensionAPI, ctx: any, trigger: string, delta: stri
       if (cachedParsed?.verdict === "on_track") {
         finalDecision = "continue";
         finalReason = (cachedParsed.reason || cachedParsed.summary || "cached on-track verdict").slice(0, 120);
+        if (hasCleanCloseoutEvidence(delta, meta)) {
+          recordTerminalGreenCloseout(state, ctx, trigger, finalReason);
+        }
         clearResolvedReviewWarning(state, ctx, finalReason);
       } else {
         finalDecision = "defer";
@@ -2201,6 +2859,15 @@ async function doReview(pi: ExtensionAPI, ctx: any, trigger: string, delta: stri
       ].join("\n"), timestamp: new Date().toISOString() },
     ] as any[];
     const completed = await completeWithModelFallback(ctx, config, REVIEW_SYSTEM, msgs, { maxTokens: 400, reasoning: "low" as ThinkingLevel, maxAttempts: 2 });
+    if (completed?.rateLimited) {
+      recordRateLimit(state, ctx, { reason: completed.text || "advisor rate limit (429)", retryAfterSeconds: completed.retryAfterSeconds });
+      finalDecision = "defer";
+      finalReason = state.rateLimit?.reason || "advisor rate limit";
+      markReviewApplied(state, signature, trigger, finalDecision, finalReason, true);
+      persistReviewState(state, true);
+      finalized = true;
+      return;
+    }
     const raw = completed?.text;
     if (!raw) {
       finalDecision = "defer";
@@ -2239,6 +2906,9 @@ async function doReview(pi: ExtensionAPI, ctx: any, trigger: string, delta: stri
       finalDecision = "continue";
       finalReason = parsed.reason || parsed.summary || "review result";
       finalReason = finalReason.slice(0, 120);
+      if (hasCleanCloseoutEvidence(delta, meta)) {
+        recordTerminalGreenCloseout(state, ctx, trigger, finalReason);
+      }
       clearResolvedReviewWarning(state, ctx, finalReason);
       markReviewApplied(state, signature, trigger, finalDecision, finalReason, true);
       persistReviewState(state, true);
@@ -2339,6 +3009,13 @@ export function registerAdvisor(pi: ExtensionAPI): void {
   pi.on("before_agent_start", async (event: any, ctx: any) => {
     const cfg = loadConfig();
     const state = loadState(ctx);
+    const rateLimitReason = activeRateLimitReason(state);
+    if (rateLimitReason) {
+      clearRateLimitedReviewReplay(state, ctx, rateLimitReason);
+      saveState(state);
+      setPiRogueStatus(ctx, cfg, state);
+      return { systemPrompt: event.systemPrompt };
+    }
     const hasFollowUp = Boolean(state.followUp);
     if ((isAdvisorAutoRunSuppressed(state, state.turns) && !hasFollowUp) || cfg.mode === "off" || cfg.mode === "manual") {
       return { systemPrompt: event.systemPrompt };
@@ -2421,10 +3098,12 @@ export function registerAdvisor(pi: ExtensionAPI): void {
     if (cfg.mode === "off") return;
     const state = loadState(ctx);
     const suppressedThisTurn = isAdvisorAutoRunSuppressedForTurnContext(state, state.turns);
-    const tools = (event.toolResults || []).map((t: any) => String(t?.toolName || t?.name || "tool"));
+    const toolResults = event.toolResults || [];
+    const tools = toolResults.map((t: any) => String(t?.toolName || t?.name || "tool"));
     const fileChanged = tools.some((t: string) => /^(edit|write)$/i.test(t));
-    const failed = (event.toolResults || []).some((t: any) => isActualFailure(t));
     const text = squish(contentText(event.message?.content));
+    observeWorkflowEvidence(state, ctx, "turn_end", toolResults, text);
+    const failed = effectiveFailureFromTools(state, toolResults);
     if (text && text !== state.notes[state.notes.length - 1]) state.notes.push(text);
     state.turns++;
     if (state.advisorPauseUntilTurn && isAdvisorPaused(state, state.turns) === false) {
@@ -2452,23 +3131,25 @@ export function registerAdvisor(pi: ExtensionAPI): void {
     const cfg = loadConfig();
     if (cfg.mode === "off") return;
     const state = loadState(ctx);
+    const msgs = (event.messages || []).filter((m: any) => m.role === "assistant" || m.role === "toolResult");
+    const last = msgs[msgs.length - 1];
+    const delta = contentText(last?.content) || "(none)";
+    const fileChanged = msgs.some((m: any) => /(?:write|edit)/i.test(JSON.stringify(m)));
+    observeWorkflowEvidence(state, ctx, "agent_end", msgs, delta);
+    const failed = effectiveFailureFromTools(state, msgs);
+    const signals = msgs.map((m: any) => {
+      const sig = contentText(m?.content);
+      return `${m?.role || "msg"}: ${sig ? squish(sig, 120) : "(empty)"}`;
+    });
     const suppressed = isAdvisorAutoRunSuppressedForTurnContext(state, state.turns);
     if (cfg.review === "off" || suppressed) {
+      saveState(state);
       if (!suppressed) {
         void maybeAdvisorCheckin(pi, ctx, "agent_end");
       }
       return;
     }
-
-    const msgs = (event.messages || []).filter((m: any) => m.role === "assistant" || m.role === "toolResult");
-    const last = msgs[msgs.length - 1];
-    const delta = contentText(last?.content) || "(none)";
-    const fileChanged = msgs.some((m: any) => /(?:write|edit)/i.test(JSON.stringify(m)));
-    const failed = msgs.some((m: any) => isActualFailure(m));
-    const signals = msgs.map((m: any) => {
-      const sig = contentText(m?.content);
-      return `${m?.role || "msg"}: ${sig ? squish(sig, 120) : "(empty)"}`;
-    });
+    saveState(state);
     await doReview(pi, ctx, "agent-end", delta, {
       fileChanged,
       failed,
