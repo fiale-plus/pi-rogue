@@ -88,6 +88,7 @@ Workspace-only lab helpers live under `packages/lab/`; they are not part of the 
 - [Context broker README](packages/context-broker/README.md) and [context footprint proposal](docs/context-footprint-broker.md) — prompt-safe artifact storage and lookup.
 - [Fusion README](packages/fusion/README.md) and [skills-to-flow map](docs/skills-flow.md) — comparable-panel model composition and bounded usage rules.
 - [Advisor Board agent/skill taxonomy](docs/advisor-board-agent-skill-taxonomy.md) — boundary between advisory agents, executable skills, and role Markdown.
+- [Advisor Board replay PoC](docs/advisor-board-poc.md) — deterministic ledger/replay gate before live board behavior.
 - [Orchestration README](packages/orchestration/README.md) — goal, loop, autoresearch, and lab behavior.
 - [Release guide](docs/release.md) — canonical `pi-rogue-<semver>` release process.
 
