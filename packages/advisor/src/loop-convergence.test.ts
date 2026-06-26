@@ -789,7 +789,7 @@ describe("advisor two-agent convergence", () => {
 
     const resolved = readAdvisorState();
     const current = readFileSync(ADVISOR_CURRENT_PATH, "utf8");
-    expect(completeSimpleMock).toHaveBeenCalledTimes(1);
+    expect(completeSimpleMock).not.toHaveBeenCalled();
     expect(resolved.followUp).toBe("");
     expect(resolved.followUpTask).toBeUndefined();
     expect(resolved.reviewSignals).toEqual([]);
@@ -799,6 +799,123 @@ describe("advisor two-agent convergence", () => {
     expect(current).toContain("advisor:llm: continue");
     expect(current).not.toContain("final review still needed");
     expect(JSON.stringify(resolved.router.review ?? {})).not.toContain('"failed":true');
+  });
+
+  it("clears stale failing-test advisor warnings when terminal machine evidence is green", async () => {
+    const agentEnd = handlers.agent_end;
+    expect(agentEnd?.length).toBe(1);
+
+    await handlers.session_start?.[0]?.({}, ctx);
+
+    const staleTask = "merge PR #215 after context-broker validation";
+    const stale = readAdvisorState();
+    stale.lastTask = staleTask;
+    stale.followUp = "targeted context-broker vitest runs are still failing and need resolution";
+    stale.followUpTask = staleTask;
+    stale.reviewSignals = ["Implementation appears aligned, but current targeted tests are not green due to a timeout"];
+    stale.reviewSignalsTask = staleTask;
+    stale.reviewControl = {
+      status: "needed",
+      pending: true,
+      consumed: false,
+      running: false,
+      lastDecision: "review",
+      lastReason: "tests are still failing",
+    };
+    stale.router.review = {
+      phase: "closeout",
+      label: "not_done",
+      confidence: 0.93,
+      reason: "tests are still failing",
+      source: "llm",
+      review: "strict",
+      escalate: true,
+      trajectory: { failed: true },
+    };
+    writeFileSync(ADVISOR_STATE_PATH, JSON.stringify(stale, null, 2), "utf8");
+    writeFileSync(ADVISOR_CURRENT_PATH, "[advisor:llm: review, reason: tests are still failing]\n", "utf8");
+
+    await agentEnd![0]({
+      messages: [
+        { role: "toolResult", content: "Context broker SQLite initialization failed; attempting recovery. Error: file is not a database" },
+        { role: "toolResult", content: "Test Files  3 passed (3)\n      Tests  77 passed (77)\nEXIT:0" },
+        { role: "toolResult", content: "PR #215 state=MERGED mergedAt=2026-06-25T19:33:41Z mergeCommit=5fd00aea" },
+        { role: "assistant", content: "Merged PR #215. Advisor still reports stale failing-test guidance, but latest structured validation is green." },
+      ],
+    }, ctx);
+
+    const resolved = readAdvisorState();
+    const current = readFileSync(ADVISOR_CURRENT_PATH, "utf8");
+    expect(completeSimpleMock).not.toHaveBeenCalled();
+    expect(resolved.followUp).toBe("");
+    expect(resolved.followUpTask).toBeUndefined();
+    expect(resolved.reviewSignals).toEqual([]);
+    expect(resolved.reviewSignalsTask).toBeUndefined();
+    expect(resolved.reviewControl.lastDecision).toBe("continue");
+    expect(resolved.reviewControl.lastReason).toBe("terminal clean closeout evidence");
+    expect(resolved.reviewControl.terminalEvidence).toEqual(expect.objectContaining({ kind: "tests_and_merge", task: staleTask }));
+    expect(resolved.reviewControl.status).toBe("consumed");
+    expect(current).toContain("advisor:llm: continue");
+    expect(current).not.toContain("tests are still failing");
+    expect(JSON.stringify(resolved.router.review ?? {})).not.toContain('"failed":true');
+  });
+
+  it("keeps terminal workflow state monotonic across later stale review text", async () => {
+    const agentEnd = handlers.agent_end;
+    expect(agentEnd?.length).toBe(1);
+
+    await handlers.session_start?.[0]?.({}, ctx);
+
+    const task = "merge PR #215 after context-broker validation";
+    const terminal = readAdvisorState();
+    terminal.lastTask = task;
+    terminal.reviewControl = {
+      status: "consumed",
+      pending: false,
+      consumed: true,
+      running: false,
+      lastDecision: "continue",
+      lastReason: "terminal clean closeout evidence",
+      terminalEvidence: {
+        kind: "tests_and_merge",
+        task,
+        reason: "terminal clean closeout evidence",
+        at: "2026-06-25T19:33:41Z",
+      },
+    };
+    terminal.followUp = "targeted context-broker tests are still failing";
+    terminal.followUpTask = task;
+    terminal.reviewSignals = ["advisor verdict says review because tests are still failing"];
+    terminal.reviewSignalsTask = task;
+    terminal.router.review = {
+      phase: "closeout",
+      label: "not_done",
+      confidence: 0.88,
+      reason: "tests are still failing",
+      source: "llm",
+      review: "strict",
+      escalate: true,
+      trajectory: { failed: true },
+    };
+    writeFileSync(ADVISOR_STATE_PATH, JSON.stringify(terminal, null, 2), "utf8");
+    writeFileSync(ADVISOR_CURRENT_PATH, "[advisor:llm: review, reason: tests are still failing]\n", "utf8");
+
+    await agentEnd![0]({
+      messages: [
+        { role: "assistant", content: "Advisor verdict: review. Reason: targeted context-broker vitest runs are still failing." },
+      ],
+    }, ctx);
+
+    const resolved = readAdvisorState();
+    const current = readFileSync(ADVISOR_CURRENT_PATH, "utf8");
+    expect(completeSimpleMock).not.toHaveBeenCalled();
+    expect(resolved.reviewControl.lastDecision).toBe("continue");
+    expect(resolved.reviewControl.lastReason).toBe("terminal workflow state");
+    expect(resolved.reviewControl.terminalEvidence).toEqual(expect.objectContaining({ kind: "tests_and_merge", task }));
+    expect(resolved.followUp).toBe("");
+    expect(resolved.reviewSignals).toEqual([]);
+    expect(current).toContain("advisor:llm: continue");
+    expect(current).not.toContain("tests are still failing");
   });
 
   it("clears stale advisor warnings for clean closeout without material changes", async () => {

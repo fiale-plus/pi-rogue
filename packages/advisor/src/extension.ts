@@ -262,6 +262,7 @@ function loadStateFromPath(path: string): SessionState {
       lastReason: control?.lastReason,
       lastTrigger: control?.lastTrigger,
       lastAppliedAt: control?.lastAppliedAt,
+      terminalEvidence: normalizeTerminalEvidence((control as { terminalEvidence?: unknown } | undefined)?.terminalEvidence),
     },
     advisorLoop: raw.advisorLoop && typeof raw.advisorLoop === "object" ? {
       repeatCount: Number((raw.advisorLoop as { repeatCount?: unknown }).repeatCount) || 0,
@@ -812,9 +813,70 @@ function persistReviewState(state: SessionState, includeReviewRoute: boolean): v
 
 const CLEAN_CLOSEOUT_RE = /\b(?:revalidated clean|validated clean|final (?:codex )?review (?:had no findings|clean|passed)|codex review (?:had no findings|clean)|no findings)\b/i;
 const UNRESOLVED_CLOSEOUT_RE = /\b(?:pending|still needs?|still needed|still required|incomplete|not done|todo|needs (?:changes|work|fix(?:es)?|review|attention)|(?:still|currently) failing|(?:still|currently) failed)\b/i;
+const STRUCTURED_GREEN_TEST_RE = /(?:\bTests\s+\d+\s+passed\s+\(\d+\)|\bTest Files\s+\d+\s+passed\s+\(\d+\)|\bnumFailedTests\s*[:=]\s*0\b|"numFailedTests"\s*:\s*0|\bsuccess\s*[:=]\s*true\b|"success"\s*:\s*true|\b(?:PIPE_)?EXIT\s*:\s*0\b)/i;
+const STRUCTURED_FAILING_TEST_RE = /(?:\bTests?\s+.*?\bfailed\s+\([1-9]\d*\)|\bTest Files\s+.*?\bfailed\s+\([1-9]\d*\)|\bnumFailedTests\s*[:=]\s*[1-9]\d*\b|"numFailedTests"\s*:\s*[1-9]\d*|\b(?:PIPE_)?EXIT\s*:\s*[1-9]\d*\b)/i;
+const TERMINAL_MERGED_RE = /(?:\bPR\s+#?\d+\s+state=MERGED\b|\bstate=MERGED\b|\bmerged\s*[:=]\s*true\b|"merged"\s*:\s*true|\bPull Request successfully merged\b)/i;
+
+type TerminalReviewEvidence = {
+  kind: "tests" | "merge" | "tests_and_merge";
+  task: string;
+  reason: string;
+  at: string;
+};
+
+function normalizeTerminalEvidence(value: unknown): TerminalReviewEvidence | undefined {
+  if (!value || typeof value !== "object") return undefined;
+  const candidate = value as Partial<TerminalReviewEvidence>;
+  if (candidate.kind !== "tests" && candidate.kind !== "merge" && candidate.kind !== "tests_and_merge") return undefined;
+  return {
+    kind: candidate.kind,
+    task: sanitizeAdvisorText(candidate.task ?? "").slice(0, 240),
+    reason: sanitizeAdvisorText(candidate.reason ?? "terminal clean closeout evidence").slice(0, 160),
+    at: sanitizeAdvisorText(candidate.at ?? new Date().toISOString()).slice(0, 64),
+  };
+}
+
+function closeoutEvidenceText(delta: string, meta: ReviewMaterialMeta): string {
+  return [delta, ...(meta.materialSignals ?? [])].filter(Boolean).join("\n");
+}
+
+function terminalEvidenceKind(delta: string, meta: ReviewMaterialMeta): TerminalReviewEvidence["kind"] | undefined {
+  const evidence = closeoutEvidenceText(delta, meta);
+  if (STRUCTURED_FAILING_TEST_RE.test(evidence)) return undefined;
+  const tests = STRUCTURED_GREEN_TEST_RE.test(evidence);
+  const merge = TERMINAL_MERGED_RE.test(evidence);
+  if (tests && merge) return "tests_and_merge";
+  if (merge) return "merge";
+  if (tests) return "tests";
+  return undefined;
+}
+
+function hasStructuredCleanCloseoutEvidence(delta: string, meta: ReviewMaterialMeta): boolean {
+  return Boolean(terminalEvidenceKind(delta, meta));
+}
+
+function recordTerminalEvidence(state: SessionState, delta: string, meta: ReviewMaterialMeta, reason: string): void {
+  const kind = terminalEvidenceKind(delta, meta);
+  if (!kind) return;
+  state.reviewControl.terminalEvidence = {
+    kind,
+    task: sanitizeAdvisorText(state.lastTask).slice(0, 240),
+    reason,
+    at: new Date().toISOString(),
+  };
+}
+
+function hasActiveTerminalEvidence(state: SessionState): boolean {
+  const evidence = normalizeTerminalEvidence(state.reviewControl.terminalEvidence);
+  if (!evidence) return false;
+  if (!evidence.task || !state.lastTask) return true;
+  return isTaskContinuation(evidence.task, state.lastTask);
+}
 
 function hasCleanCloseoutEvidence(delta: string, meta: ReviewMaterialMeta): boolean {
-  return Boolean(meta.isAgentEnd && CLEAN_CLOSEOUT_RE.test(delta) && !UNRESOLVED_CLOSEOUT_RE.test(delta));
+  if (!meta.isAgentEnd || meta.failed) return false;
+  if (hasStructuredCleanCloseoutEvidence(delta, meta)) return true;
+  return Boolean(CLEAN_CLOSEOUT_RE.test(delta) && !UNRESOLVED_CLOSEOUT_RE.test(delta));
 }
 
 function clearResolvedReviewWarning(state: SessionState, ctx: any, reason: string): void {
@@ -872,6 +934,7 @@ type ReviewControlState = {
   lastReason?: string;
   lastTrigger?: string;
   lastAppliedAt?: string;
+  terminalEvidence?: TerminalReviewEvidence;
 };
 
 type AdvisorLoopEntry = {
@@ -2004,6 +2067,17 @@ async function doReview(pi: ExtensionAPI, ctx: any, trigger: string, delta: stri
   let finalReason = "pending review";
 
   try {
+    if (hasCleanCloseoutEvidence(delta, meta) || (meta.isAgentEnd && !meta.failed && hasActiveTerminalEvidence(state))) {
+      finalDecision = "continue";
+      finalReason = hasActiveTerminalEvidence(state) ? "terminal workflow state" : "terminal clean closeout evidence";
+      recordTerminalEvidence(state, delta, meta, finalReason);
+      clearResolvedReviewWarning(state, ctx, finalReason);
+      markReviewApplied(state, signature, trigger, finalDecision, finalReason, true);
+      persistReviewState(state, true);
+      finalized = true;
+      return;
+    }
+
     const gatePrediction = binaryGatePredict(reviewInput.text, phase, trajectory);
     let reviewRoute = reviewHeuristic;
     if (gatePrediction && gatePrediction.trusted && !reviewHeuristic.safety && !meta.failed) {
