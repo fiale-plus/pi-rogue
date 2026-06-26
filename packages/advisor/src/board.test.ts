@@ -121,6 +121,18 @@ describe("Advisor Board PoC ledger", () => {
     expect(ledger.risks.map((risk) => risk.type)).toContain("missing_validation");
   });
 
+  it("only points missing-validation evidence at files changed after latest validation", () => {
+    const ledger = buildBoardLedger([
+      { type: "file_changed", path: "A.ts", turn: 1 },
+      { type: "validation", command: "npm test", exitCode: 0, status: "green", turn: 2 },
+      { type: "file_changed", path: "B.ts", turn: 3 },
+    ]);
+
+    const risk = ledger.risks.find((item) => item.type === "missing_validation");
+    expect(risk?.evidence).toContain("1 changed file");
+    expect(risk?.evidencePointers).toEqual(["file:B.ts"]);
+  });
+
   it("detects subagent contradictions when available", () => {
     const ledger = buildBoardLedger(subagentContradictionFixture.events);
 

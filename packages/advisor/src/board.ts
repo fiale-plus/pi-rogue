@@ -96,6 +96,7 @@ export interface BoardLedger {
     worktree?: string;
   };
   changedFiles: string[];
+  changedFileTurns: Record<string, number>;
   evidence: EvidenceEpoch[];
   failures: FailureCluster[];
   subagents: SubagentReturnSummary[];
@@ -147,6 +148,7 @@ function validationStatus(exitCode: number, status: "green" | "red" | "unknown")
 export function buildBoardLedger(events: BoardEvent[]): BoardLedger {
   const session: BoardLedger["session"] = {};
   const changedFiles = new Set<string>();
+  const changedFileTurns = new Map<string, number>();
   const evidence: EvidenceEpoch[] = [];
   const failureMap = new Map<string, FailureCluster>();
   const subagents: SubagentReturnSummary[] = [];
@@ -177,7 +179,10 @@ export function buildBoardLedger(events: BoardEvent[]): BoardLedger {
 
     if (event.type === "file_changed") {
       changedFiles.add(event.path);
-      if (typeof event.turn === "number") lastChangeTurn = Math.max(lastChangeTurn ?? 0, event.turn);
+      if (typeof event.turn === "number") {
+        lastChangeTurn = Math.max(lastChangeTurn ?? 0, event.turn);
+        changedFileTurns.set(event.path, Math.max(changedFileTurns.get(event.path) ?? 0, event.turn));
+      }
       continue;
     }
 
@@ -251,6 +256,7 @@ export function buildBoardLedger(events: BoardEvent[]): BoardLedger {
   const ledger: BoardLedger = {
     session,
     changedFiles: [...changedFiles].sort(),
+    changedFileTurns: Object.fromEntries([...changedFileTurns.entries()].sort(([a], [b]) => a.localeCompare(b))),
     evidence,
     failures: [...failureMap.values()].sort((a, b) => a.key.localeCompare(b.key)),
     subagents,
@@ -301,13 +307,14 @@ export function detectBoardRisks(ledger: BoardLedger): BoardRisk[] {
   if (ledger.changedFiles.length > 0) {
     const lastChange = ledger.progress.lastChangeTurn ?? 0;
     const lastValidation = ledger.progress.lastValidationTurn ?? -1;
-    if (lastValidation < lastChange) {
+    const unvalidatedFiles = ledger.changedFiles.filter((file) => (ledger.changedFileTurns[file] ?? lastChange) > lastValidation);
+    if (unvalidatedFiles.length > 0) {
       risks.push({
         id: stableRiskId("missing_validation", String(lastChange)),
         type: "missing_validation",
         severity: "important",
-        evidence: `${ledger.changedFiles.length} changed file(s) after the last validation evidence.`,
-        evidencePointers: ledger.changedFiles.map((file) => `file:${file}`),
+        evidence: `${unvalidatedFiles.length} changed file(s) after the last validation evidence.`,
+        evidencePointers: unvalidatedFiles.map((file) => `file:${file}`),
       });
     }
   }

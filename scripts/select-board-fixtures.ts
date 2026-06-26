@@ -65,7 +65,7 @@ function compactText(value: unknown): string {
 function redacted(text: string): string {
   return text
     .replace(/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g, "[email]")
-    .replace(/(?:sk|ghp|gho|github_pat|xoxb|hf)_[A-Za-z0-9_\-]{12,}/g, "[secret]")
+    .replace(/\b(?:sk|ghp|gho|github_pat|xoxb|hf)[-_][A-Za-z0-9_\-]{8,}/g, "[secret]")
     .slice(0, 240);
 }
 
