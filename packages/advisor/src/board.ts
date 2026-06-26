@@ -160,7 +160,8 @@ export function buildBoardLedger(events: BoardEvent[]): BoardLedger {
 
   for (const [index, event] of events.entries()) {
     const turn = eventTurn(event);
-    if (typeof turn === "number") turns = Math.max(turns, turn);
+    const ordinalTurn = turn ?? turns + 1;
+    turns = Math.max(turns, ordinalTurn);
 
     if (event.type === "session") {
       session.id = event.id;
@@ -171,30 +172,27 @@ export function buildBoardLedger(events: BoardEvent[]): BoardLedger {
     }
 
     if (event.type === "turn") {
-      turns = Math.max(turns, event.turn);
       costUsd += event.costUsd ?? 0;
-      if (event.progress) lastProgressTurn = event.turn;
+      if (event.progress) lastProgressTurn = ordinalTurn;
       continue;
     }
 
     if (event.type === "file_changed") {
       changedFiles.add(event.path);
-      if (typeof event.turn === "number") {
-        lastChangeTurn = Math.max(lastChangeTurn ?? 0, event.turn);
-        changedFileTurns.set(event.path, Math.max(changedFileTurns.get(event.path) ?? 0, event.turn));
-      }
+      lastChangeTurn = Math.max(lastChangeTurn ?? 0, ordinalTurn);
+      changedFileTurns.set(event.path, Math.max(changedFileTurns.get(event.path) ?? 0, ordinalTurn));
       continue;
     }
 
     if (event.type === "validation") {
       const status = validationStatus(event.exitCode, event.status);
-      if (typeof event.turn === "number") lastValidationTurn = Math.max(lastValidationTurn ?? 0, event.turn);
-      if (status === "green" && typeof event.turn === "number") lastProgressTurn = Math.max(lastProgressTurn ?? 0, event.turn);
+      lastValidationTurn = Math.max(lastValidationTurn ?? 0, ordinalTurn);
+      if (status === "green") lastProgressTurn = Math.max(lastProgressTurn ?? 0, ordinalTurn);
       evidence.push({
         id: `validation:${index}`,
         kind: "validation",
         status,
-        turn: event.turn,
+        turn: ordinalTurn,
         timestamp: event.timestamp,
         summary: `${event.command} exited ${event.exitCode}`,
         terminal: event.terminal,
@@ -207,21 +205,21 @@ export function buildBoardLedger(events: BoardEvent[]): BoardLedger {
       const cluster = failureMap.get(clusterKey) ?? {
         key: event.key,
         count: 0,
-        firstTurn: event.turn,
-        lastTurn: event.turn,
+        firstTurn: ordinalTurn,
+        lastTurn: ordinalTurn,
         tool: event.tool,
         messages: [],
       };
       cluster.count += 1;
-      cluster.firstTurn = Math.min(cluster.firstTurn ?? event.turn ?? 0, event.turn ?? cluster.firstTurn ?? 0);
-      cluster.lastTurn = Math.max(cluster.lastTurn ?? event.turn ?? 0, event.turn ?? cluster.lastTurn ?? 0);
+      cluster.firstTurn = Math.min(cluster.firstTurn ?? ordinalTurn, ordinalTurn);
+      cluster.lastTurn = Math.max(cluster.lastTurn ?? ordinalTurn, ordinalTurn);
       if (event.message) cluster.messages.push(event.message);
       failureMap.set(clusterKey, cluster);
       evidence.push({
         id: `failure:${clusterKey}:${cluster.count}`,
         kind: "tool_failure",
         status: "red",
-        turn: event.turn,
+        turn: ordinalTurn,
         timestamp: event.timestamp,
         summary: `${event.tool} failed: ${event.message ?? event.key}`,
       });
@@ -229,8 +227,8 @@ export function buildBoardLedger(events: BoardEvent[]): BoardLedger {
     }
 
     if (event.type === "subagent_return") {
-      if (event.verdict === "green" && typeof event.turn === "number") {
-        lastProgressTurn = Math.max(lastProgressTurn ?? 0, event.turn);
+      if (event.verdict === "green") {
+        lastProgressTurn = Math.max(lastProgressTurn ?? 0, ordinalTurn);
       }
       const summary: SubagentReturnSummary = {
         id: event.id,
@@ -239,14 +237,14 @@ export function buildBoardLedger(events: BoardEvent[]): BoardLedger {
         verdict: event.verdict,
         summary: event.summary,
         confidence: event.confidence,
-        turn: event.turn,
+        turn: ordinalTurn,
       };
       subagents.push(summary);
       evidence.push({
         id: `subagent:${event.id}`,
         kind: "subagent",
         status: event.verdict,
-        turn: event.turn,
+        turn: ordinalTurn,
         timestamp: event.timestamp,
         summary: `${event.role}: ${event.summary}`,
       });
@@ -295,7 +293,7 @@ export function detectBoardRisks(ledger: BoardLedger): BoardRisk[] {
   for (const failure of ledger.failures) {
     if (failure.count >= 3) {
       risks.push({
-        id: stableRiskId("repeated_failure", failure.key),
+        id: stableRiskId("repeated_failure", `${failure.tool ?? "tool"}:${failure.key}`),
         type: "repeated_failure",
         severity: "important",
         evidence: `${failure.tool ?? "tool"} failure '${failure.key}' repeated ${failure.count} times.`,

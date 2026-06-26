@@ -114,6 +114,22 @@ describe("Advisor Board PoC ledger", () => {
     expect(ledger.risks.map((risk) => risk.type)).not.toContain("repeated_failure");
   });
 
+  it("includes the tool in repeated-failure risk ids", () => {
+    const ledger = buildBoardLedger([
+      { type: "tool_failure", tool: "edit", key: "timeout", turn: 1 },
+      { type: "tool_failure", tool: "edit", key: "timeout", turn: 2 },
+      { type: "tool_failure", tool: "edit", key: "timeout", turn: 3 },
+      { type: "tool_failure", tool: "bash", key: "timeout", turn: 4 },
+      { type: "tool_failure", tool: "bash", key: "timeout", turn: 5 },
+      { type: "tool_failure", tool: "bash", key: "timeout", turn: 6 },
+    ]);
+
+    expect(ledger.risks.filter((risk) => risk.type === "repeated_failure").map((risk) => risk.id)).toEqual([
+      "repeated_failure:edit-timeout",
+      "repeated_failure:bash-timeout",
+    ]);
+  });
+
   it("detects missing validation after changed files", () => {
     const ledger = buildBoardLedger(missingValidationFixture.events);
 
@@ -130,6 +146,16 @@ describe("Advisor Board PoC ledger", () => {
 
     const risk = ledger.risks.find((item) => item.type === "missing_validation");
     expect(risk?.evidence).toContain("1 changed file");
+    expect(risk?.evidencePointers).toEqual(["file:B.ts"]);
+  });
+
+  it("preserves ordering for unnumbered file changes after numbered validation", () => {
+    const ledger = buildBoardLedger([
+      { type: "validation", command: "npm test", exitCode: 0, status: "green", turn: 2 },
+      { type: "file_changed", path: "B.ts" },
+    ]);
+
+    const risk = ledger.risks.find((item) => item.type === "missing_validation");
     expect(risk?.evidencePointers).toEqual(["file:B.ts"]);
   });
 
