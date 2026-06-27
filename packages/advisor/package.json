@@ -14,7 +14,8 @@
   ],
   "scripts": {
     "check": "tsc -p ../../tsconfig.json --noEmit",
-    "test": "cd ../.. && vitest run packages/advisor/src/*.test.ts"
+    "test": "cd ../.. && vitest run packages/advisor/src/*.test.ts",
+    "board:eval": "cd ../.. && tsx scripts/select-board-fixtures.ts"
   },
   "main": "./src/index.ts",
   "exports": {
