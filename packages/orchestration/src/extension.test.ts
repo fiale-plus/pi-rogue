@@ -54,7 +54,10 @@ describe("orchestration command aliases", () => {
     await goalCommand!.handler("set keep aliases handy", ctx);
     expect(activeGoal(ctx)).toBe("keep aliases handy");
     await goalCommand!.handler("show", ctx);
-    expect(ctx.notifications.at(-1)).toContain("🎯 keep aliases handy");
+    expect(ctx.notifications.at(-1)).toContain("A goal is already active: keep aliases handy");
+    expect(ctx.notifications.at(-1)).toContain("/goal show");
+    expect(ctx.notifications.at(-1)).toContain("/goal clear");
+    expect(ctx.notifications.at(-1)).toContain("/goal set ...");
     await goalCommand!.handler("clear", ctx);
     expect(activeGoal(ctx)).toBe("");
   });
