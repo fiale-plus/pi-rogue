@@ -127,6 +127,13 @@ function goalBlock(goal: string): string {
   ].join("\n");
 }
 
+function activeGoalFeedback(goal: string): string {
+  return [
+    `A goal is already active: ${truncate(goal, 160)}`,
+    "Use `/goal show` to see it, `/goal clear` to stop it, or `/goal set ...` to replace it.",
+  ].join("\n");
+}
+
 export function setGoalStatus(ctx: any, goal: string | null): void {
   ctx.ui.setStatus("orchestration-goal", goal ? `🎯 ${truncate(goal, 60)}` : undefined);
 }
@@ -260,7 +267,7 @@ export async function handleGoalCommand(pi: ExtensionAPI, args: unknown, ctx: an
   if (resolved === "show") {
     const goal = activeGoal(ctx);
     setGoalStatus(ctx, goal || null);
-    ctx.ui.notify(goal ? `🎯 ${truncate(goal, 160)}` : "No active goal.", "info");
+    ctx.ui.notify(goal ? activeGoalFeedback(goal) : "No active goal.", "info");
     return;
   }
 
@@ -298,7 +305,7 @@ export async function handleGoalCommand(pi: ExtensionAPI, args: unknown, ctx: an
 
   const result = setGoal(ctx, text);
   if (result === "duplicate") {
-    ctx.ui.notify(`🎯 Goal already active: ${truncate(text, 160)}.`, "info");
+    ctx.ui.notify(activeGoalFeedback(text), "info");
     return;
   }
 

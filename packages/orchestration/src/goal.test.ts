@@ -78,6 +78,41 @@ describe("goal processing", () => {
     clearGoal(ctx);
   });
 
+  it("shows the active goal and next commands when /goal is invoked while active", async () => {
+    const pi = { sendUserMessage: () => undefined } as any;
+    const ctx = fakeCtx();
+    const notify = vi.fn();
+    ctx.ui.notify = notify;
+
+    setGoal(ctx, "write normal-language feedback");
+    await handleGoalCommand(pi, "", ctx);
+
+    expect(notify).toHaveBeenCalledWith(
+      "A goal is already active: write normal-language feedback\nUse `/goal show` to see it, `/goal clear` to stop it, or `/goal set ...` to replace it.",
+      "info",
+    );
+    expect(activeGoal(ctx)).toBe("write normal-language feedback");
+    clearGoal(ctx);
+  });
+
+  it("shows next commands instead of restarting an exact duplicate goal", async () => {
+    const pi = { sendUserMessage: vi.fn() } as any;
+    const ctx = fakeCtx();
+    const notify = vi.fn();
+    ctx.ui.notify = notify;
+
+    setGoal(ctx, "keep the active goal");
+    await handleGoalCommand(pi, "set keep the active goal", ctx);
+
+    expect(notify).toHaveBeenCalledWith(
+      "A goal is already active: keep the active goal\nUse `/goal show` to see it, `/goal clear` to stop it, or `/goal set ...` to replace it.",
+      "info",
+    );
+    expect(pi.sendUserMessage).not.toHaveBeenCalled();
+    expect(activeGoal(ctx)).toBe("keep the active goal");
+    clearGoal(ctx);
+  });
+
   it("allows explicit goal changes without cycle heuristics", () => {
     const ctx = fakeCtx();
     const first = `cycle-a ${randomUUID()}`;
