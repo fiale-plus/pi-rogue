@@ -13,6 +13,11 @@ describe("advisor completions", () => {
     expect(values).toEqual(["light", "strict", "off"]);
   });
 
+  it("offers board shadow controls", () => {
+    expect(advisorArgumentCompletions("")?.map((i) => i.value)).toContain("board");
+    expect(advisorArgumentCompletions("board ")?.map((i) => i.value)).toEqual(["status", "shadow", "off", "reset"]);
+  });
+
 });
 
 describe("pi-rogue cockpit completions", () => {

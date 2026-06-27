@@ -25,6 +25,16 @@ import { type TrajectoryFeatures } from "./binary-gate-eval.js";
 import { classifyIntent, classifyMode } from "./preflight-signals.js";
 import { findMissingArtifactReferences } from "./artifact-preflight.js";
 import { findMissingReviewArtifacts } from "./review-preflight.js";
+import {
+  defaultBoardShadowConfig,
+  defaultBoardShadowState,
+  formatBoardShadowStatus,
+  normalizeBoardShadowConfig,
+  normalizeBoardShadowState,
+  runBoardShadowDecision,
+  type BoardShadowConfig,
+  type BoardShadowState,
+} from "./board-shadow.js";
 
 // ── Config: 3 optional fields ────────────────────────────────────────────
 
@@ -41,6 +51,8 @@ export interface AdvisorConfig {
   checkinStartedAt?: number;
   /** Optional model override. Auto-detects SOTA (gpt-5.5, claude-opus-4-6…) if unset */
   model?: string;
+  /** Advisor Board phase-1 shadow/probation mode. */
+  board: BoardShadowConfig;
 }
 
 const DEFAULT_CONFIG: AdvisorConfig = {
@@ -48,6 +60,7 @@ const DEFAULT_CONFIG: AdvisorConfig = {
   review: "light",
   checkins: "off",
   checkinIntervalMinutes: 30,
+  board: defaultBoardShadowConfig(),
 };
 
 const CONFIG_PATH = featureFile("advisor", "config.json");
@@ -112,6 +125,7 @@ interface SessionState {
   workflow?: WorkflowState;
   rateLimit?: AdvisorRateLimitState;
   advisorLoop?: AdvisorLoopState;
+  board?: BoardShadowState;
   advisorPauseUntilTurn?: number;
 }
 
@@ -176,6 +190,7 @@ function defaultState(): SessionState {
     evidenceLedger: [],
     workflow: {},
     advisorLoop: defaultAdvisorLoopState(),
+    board: defaultBoardShadowState(),
   };
 }
 
@@ -208,6 +223,7 @@ export function normalizeAdvisorConfig(raw: Partial<AdvisorConfig> = {}): Adviso
     ),
     checkinStartedAt: Number.isFinite(startedAt) ? startedAt : undefined,
     model: raw.model || undefined,
+    board: normalizeBoardShadowConfig(raw.board),
   };
 }
 
@@ -390,12 +406,139 @@ function loadStateFromPath(path: string): SessionState {
       lastSource: typeof (raw.advisorLoop as { lastSource?: unknown }).lastSource === "string" ? (raw.advisorLoop as { lastSource?: string }).lastSource : undefined,
       lastObservedAt: typeof (raw.advisorLoop as { lastObservedAt?: unknown }).lastObservedAt === "string" ? (raw.advisorLoop as { lastObservedAt?: string }).lastObservedAt : undefined,
     } : defaultAdvisorLoopState(),
+    board: normalizeBoardShadowState(raw.board),
     advisorPauseUntilTurn: Number.isFinite(pauseUntil) ? pauseUntil : undefined,
   }, path);
 }
 
 function saveState(s: SessionState) {
   atomicWriteText(statePathFor(s), JSON.stringify(s, null, 2) + "\n");
+}
+
+const BOARD_SHADOW_COMMON_SECRET_RE = /\b(?:sk|ghp|gho|github_pat|xox[abprs]|hf|AKIA)[-_][A-Za-z0-9_\-]{8,}\b/g;
+const BOARD_SHADOW_AUTH_BEARER_RE = /\bauthorization\b\s*[:=]\s*["']?bearer\s+[A-Za-z0-9._~+/=-]{4,}/gi;
+const BOARD_SHADOW_BARE_BEARER_RE = /\bbearer\s+[A-Za-z0-9._~+/=-]{8,}/gi;
+const BOARD_SHADOW_KEYED_SECRET_RE = /\b(?:api[_-]?key|token|secret|password|authorization)\b\s*[:=]\s*["']?[^\s"',;}]{4,}/gi;
+const BOARD_SHADOW_NAMED_SECRET_RE = /\b[A-Z0-9_]*(?:SECRET|TOKEN|PASSWORD|API_KEY)[A-Z0-9_]*_[A-Za-z0-9_=-]{4,}\b/gi;
+
+function redactBoardShadowText(text: unknown): string {
+  return sanitizeAdvisorText(text)
+    .replace(BOARD_SHADOW_AUTH_BEARER_RE, (match) => `${match.split(/[:=]/, 1)[0]}=[secret]`)
+    .replace(BOARD_SHADOW_BARE_BEARER_RE, "Bearer [secret]")
+    .replace(BOARD_SHADOW_COMMON_SECRET_RE, "[secret]")
+    .replace(BOARD_SHADOW_KEYED_SECRET_RE, (match) => `${match.split(/[:=]/, 1)[0]}=[secret]`)
+    .replace(BOARD_SHADOW_NAMED_SECRET_RE, "[secret]");
+}
+
+function compactEvidenceEntry(entry: EvidenceLedgerEntry | undefined): Record<string, unknown> | undefined {
+  if (!entry) return undefined;
+  return {
+    kind: entry.kind,
+    result: entry.result,
+    source: entry.source,
+    command: entry.command ? truncate(redactBoardShadowText(entry.command), 240) : undefined,
+    timestamp: entry.timestamp,
+    exitCode: entry.exitCode,
+    sha: entry.sha,
+    pr: entry.pr,
+  };
+}
+
+function boardRouteSnapshot(route: AdvisorRouteDecision | undefined): Record<string, unknown> | undefined {
+  if (!route) return undefined;
+  const raw = route as unknown as Record<string, unknown>;
+  return {
+    summary: summarizeRoute(route),
+    label: raw.label,
+    source: raw.source,
+    confidence: raw.confidence,
+    safety: Boolean(raw.safety),
+    reason: typeof raw.reason === "string" ? truncate(sanitizeAdvisorText(raw.reason), 240) : undefined,
+    trajectory: raw.trajectory,
+  };
+}
+
+function boardShadowArtifactContext(state: SessionState, result: ReturnType<typeof runBoardShadowDecision>): Record<string, unknown> {
+  const latestValidation = latestEvidence(state, "validation");
+  const latestMerge = latestEvidence(state, "merge");
+  const repeatCount = state.advisorLoop?.repeatCount ?? 0;
+  return {
+    sessionOutcome: {
+      terminal: state.workflow?.terminal,
+      latestValidation: compactEvidenceEntry(latestValidation),
+      latestMerge: compactEvidenceEntry(latestMerge),
+      evidenceTail: (state.evidenceLedger ?? []).slice(-8).map(compactEvidenceEntry).filter(Boolean),
+      outcomeKnown: Boolean(state.workflow?.terminal || latestMerge || latestValidation),
+    },
+    advisor: {
+      calls: state.advisorCalls,
+      cacheHits: state.cacheHits,
+      followUpQueued: Boolean(state.followUp),
+      reviewSignalCount: state.reviewSignals.length,
+      reviewControl: {
+        status: state.reviewControl.status,
+        pending: state.reviewControl.pending,
+        consumed: state.reviewControl.consumed,
+        running: state.reviewControl.running,
+        lastDecision: state.reviewControl.lastDecision,
+        lastReason: state.reviewControl.lastReason ? truncate(sanitizeAdvisorText(state.reviewControl.lastReason), 240) : undefined,
+        lastTrigger: state.reviewControl.lastTrigger,
+        terminalEvidence: state.reviewControl.terminalEvidence,
+      },
+      loop: {
+        repeatCount,
+        lastSource: state.advisorLoop?.lastSource,
+        lastObservedAt: state.advisorLoop?.lastObservedAt,
+        recent: (state.advisorLoop?.recent ?? []).slice(-4).map((entry) => ({
+          outputHash: entry.outputHash,
+          contextHash: entry.contextHash,
+          familyHash: entry.familyHash,
+          source: entry.source,
+          repeatCount: entry.repeatCount,
+          at: entry.at,
+        })),
+      },
+    },
+    router: {
+      preflight: boardRouteSnapshot(state.router.preflight),
+      review: boardRouteSnapshot(state.router.review),
+    },
+    probationMeasurements: {
+      falsePositiveRate: null,
+      usefulEdgeMomentCatchCandidates: result.decision.action === "would_whisper" ? 1 : 0,
+      tokenCostOverheadUsd: 0,
+      modelCalls: 0,
+      liveWhispers: 0,
+      specialistDispatches: 0,
+      seniorAdvisorEscalations: 0,
+      steerActions: 0,
+      mutatingToolAccess: 0,
+      duplicateAdviceSignals: Math.max(0, repeatCount - 1),
+      staleEvidenceRisks: result.risks.filter((risk) => risk.type === "stale_evidence").length,
+      outcomeKnown: Boolean(state.workflow?.terminal),
+    },
+  };
+}
+
+function recordBoardShadowIfEnabled(ctx: any, cfg: AdvisorConfig, state: SessionState, source: string, toolResults?: any[]): void {
+  if (cfg.board.mode !== "shadow") return;
+  const result = runBoardShadowDecision({
+    sessionId: sessionKey(ctx),
+    worktree: String(ctx?.cwd || ""),
+    turns: state.turns,
+    evidenceLedger: state.evidenceLedger,
+    toolResults,
+  }, state.board);
+  state.board = result.state;
+  appendText(join(advisorSessionDir(ctx), "board-shadow.jsonl"), `${JSON.stringify({
+    schema: "pi-rogue.advisor-board.shadow.v1",
+    at: result.state.lastAt,
+    source,
+    decision: result.decision,
+    riskIds: result.risks.map((risk) => risk.id),
+    risks: result.risks,
+    context: boardShadowArtifactContext(state, result),
+  })}\n`);
 }
 
 function loadCache(): Record<string, string> {
@@ -3109,6 +3252,7 @@ export function registerAdvisor(pi: ExtensionAPI): void {
     if (state.advisorPauseUntilTurn && isAdvisorPaused(state, state.turns) === false) {
       state.advisorPauseUntilTurn = undefined;
     }
+    recordBoardShadowIfEnabled(ctx, cfg, state, "turn_end", toolResults);
     saveState(state);
     setPiRogueStatus(ctx, cfg, state);
     if (cfg.review !== "off" && !suppressedThisTurn) {
@@ -3143,12 +3287,14 @@ export function registerAdvisor(pi: ExtensionAPI): void {
     });
     const suppressed = isAdvisorAutoRunSuppressedForTurnContext(state, state.turns);
     if (cfg.review === "off" || suppressed) {
+      recordBoardShadowIfEnabled(ctx, cfg, state, "agent_end", msgs);
       saveState(state);
       if (!suppressed) {
         void maybeAdvisorCheckin(pi, ctx, "agent_end");
       }
       return;
     }
+    recordBoardShadowIfEnabled(ctx, cfg, state, "agent_end", msgs);
     saveState(state);
     await doReview(pi, ctx, "agent-end", delta, {
       fileChanged,
@@ -3230,6 +3376,7 @@ export function registerAdvisor(pi: ExtensionAPI): void {
           route ? `Router: ${summarizeRoute(route)}${route.safety ? " · safety" : ""}` : "",
           "",
           `Mode: ${cfg.mode} | Review: ${cfg.review} | Check-ins: ${checkinDescription(cfg)} (orchestration-managed) | Model: ${resolved?.label || cfg.model || "auto"}`,
+          `Board shadow: ${cfg.board.mode} | Runs: ${state.board?.counters.runs ?? 0} | Last: ${state.board?.lastDecision?.action ?? "none"}`,
           pause > 0 ? `Advisor pause: ${pause} turn${pause === 1 ? "" : "s"} remaining` : "Advisor pause: off",
           loop?.repeatCount && loop.repeatCount > 1 ? `Advisor loop guard: ${loop.repeatCount} repeated outputs across changing context` : "Advisor loop guard: idle",
           `Turns: ${state.turns} | Calls: ${state.advisorCalls} | Cache hits: ${state.cacheHits}`,
@@ -3302,6 +3449,7 @@ export function registerAdvisor(pi: ExtensionAPI): void {
           `  checkinIntervalMinutes: ${cfg.checkinIntervalMinutes}`,
           pause > 0 ? `  advisorPauseUntilTurn: ${pause} turn${pause === 1 ? "" : "s"} remaining` : "  advisorPauseUntilTurn: off",
           `  model: "${cfg.model || "auto"}" — optional override for higher/advanced advisor model`,
+          `  board.mode: "${cfg.board.mode}" — off | shadow (phase-1 deterministic logging only)`,
           "",
           "Router logs: evals/advisor-router.jsonl",
           "Run /pi-rogue-advisor <question> for immediate advice.",
@@ -3312,6 +3460,35 @@ export function registerAdvisor(pi: ExtensionAPI): void {
         const v = rest[0];
         if (v === "light" || v === "strict" || v === "off") { const next: AdvisorConfig = { ...cfg, review: v }; saveConfig(next); setPiRogueStatus(ctx, next, state); ctx.ui.notify(`Review set to ${v}.`, "info"); return; }
         ctx.ui.notify("Usage: /pi-rogue-advisor review light|strict|off", "error");
+        return;
+      }
+      if (cmd === "board") {
+        const v = rest[0] || "status";
+        if (v === "status") {
+          ctx.ui.notify(formatBoardShadowStatus(cfg.board, state.board), "info");
+          return;
+        }
+        if (v === "shadow" || v === "on") {
+          const next: AdvisorConfig = { ...cfg, board: { mode: "shadow" } };
+          saveConfig(next);
+          setPiRogueStatus(ctx, next, state);
+          ctx.ui.notify("Advisor Board shadow mode enabled. Phase 1 logs deterministic BoardDecision data only; no live whispers, models, specialists, head-of-board, or steer.", "info");
+          return;
+        }
+        if (v === "off") {
+          const next: AdvisorConfig = { ...cfg, board: { mode: "off" } };
+          saveConfig(next);
+          setPiRogueStatus(ctx, next, state);
+          ctx.ui.notify("Advisor Board shadow mode disabled.", "info");
+          return;
+        }
+        if (v === "reset") {
+          state.board = defaultBoardShadowState();
+          saveState(state);
+          ctx.ui.notify("Advisor Board shadow counters reset.", "info");
+          return;
+        }
+        ctx.ui.notify("Usage: /pi-rogue-advisor board status|shadow|off|reset", "error");
         return;
       }
       if (cmd === "checkins" || cmd === "checkin") {

@@ -51,18 +51,19 @@ describe("AdvisorConfig", () => {
     expect(cfg.checkins).toBe("off");
     expect(cfg.checkinIntervalMinutes).toBe(30);
     expect(cfg.model).toBeUndefined();
+    expect(cfg.board).toEqual({ mode: "off" });
   });
 
   it("accepts all 3 modes", () => {
     for (const mode of ["auto", "manual", "off"] as const) {
-      const cfg: AdvisorConfig = { mode, review: "light", checkins: "mid-hour", checkinIntervalMinutes: 30 };
+      const cfg: AdvisorConfig = { mode, review: "light", checkins: "mid-hour", checkinIntervalMinutes: 30, board: { mode: "off" } };
       expect(normalizeAdvisorConfig(cfg).mode).toBe(mode);
     }
   });
 
   it("accepts all 3 review levels", () => {
     for (const review of ["light", "strict", "off"] as const) {
-      const cfg: AdvisorConfig = { mode: "auto", review, checkins: "mid-hour", checkinIntervalMinutes: 30 };
+      const cfg: AdvisorConfig = { mode: "auto", review, checkins: "mid-hour", checkinIntervalMinutes: 30, board: { mode: "off" } };
       expect(normalizeAdvisorConfig(cfg).review).toBe(review);
     }
   });
