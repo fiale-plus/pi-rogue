@@ -34,6 +34,7 @@ import {
   type HeadOfBoardConfig,
 } from "./board-head.js";
 import { loadBoardRoleBody, loadBoardRoleCatalog } from "./board-roles.js";
+import { formatPersonalSpecialistDiscoverySnapshot, loadPersonalSpecialistDiscoverySnapshot, queuePersonalSpecialistDiscoveryRefresh } from "./personal-specialist-discovery.js";
 import {
   callReadOnlySpecialist,
   defaultSpecialistCallState,
@@ -716,6 +717,15 @@ function specialistById(roleId: string) {
   const loaded = loadBoardRoleBody(summary);
   if (loaded.diagnostic) return { diagnostic: loaded.diagnostic.message };
   return { role: loaded.role };
+}
+
+function inferBoardDiscoveryRoot(ctx: any): string {
+  const cwd = resolve(String(ctx?.cwd || process.cwd()));
+  try {
+    return execFileSync("git", ["rev-parse", "--show-toplevel"], { cwd, encoding: "utf8" }).trim() || cwd;
+  } catch {
+    return cwd;
+  }
 }
 
 async function runSpecialistCommand(ctx: any, cfg: AdvisorConfig, state: SessionState, roleId: string, task: string): Promise<void> {
@@ -3906,6 +3916,29 @@ export function registerAdvisor(pi: ExtensionAPI): void {
           state.specialistDispatch = defaultSpecialistCallState();
           saveState(state);
           ctx.ui.notify("Advisor Board shadow and Head-of-Board counters reset.", "info");
+          return;
+        }
+        if (v === "discover-specialists" || v === "discover") {
+          const action = rest[1] || "status";
+          const cachePath = featureFile("advisor", "personal-specialist-discovery.json");
+          if (action === "status" || action === "show") {
+            ctx.ui.notify(formatPersonalSpecialistDiscoverySnapshot(loadPersonalSpecialistDiscoverySnapshot(cachePath)), "info");
+            return;
+          }
+          if (!/^(allow|yes|on|enable)$/i.test(action)) {
+            ctx.ui.notify("Usage: /pi-rogue-advisor board discover-specialists status|allow — explicit consent required; refresh runs in the background.", "error");
+            return;
+          }
+          const result = queuePersonalSpecialistDiscoveryRefresh({
+            sessionRoot: join(homedir(), ".pi", "agent", "sessions"),
+            cwdContains: inferBoardDiscoveryRoot(ctx),
+            allowPastSessionDiscovery: true,
+            cachePath,
+          });
+          ctx.ui.notify([
+            result.queued ? "Personal specialist discovery refresh queued in the background." : "Personal specialist discovery is already refreshing.",
+            formatPersonalSpecialistDiscoverySnapshot(result.snapshot),
+          ].join("\n"), "info");
           return;
         }
         if (v === "specialist" || v === "specialists") {
