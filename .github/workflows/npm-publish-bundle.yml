@@ -48,6 +48,7 @@ jobs:
           fi
           cp -a ../../packages/orchestration node_modules/@fiale-plus/pi-rogue-orchestration
           cp -a ../../packages/router node_modules/@fiale-plus/pi-rogue-router
+          node ../../scripts/prepare-bundle-publish.mjs .
           echo "Vendored local (git-at-tag) core, advisor, context-broker, fusion, orchestration, and router into bundle for bundling as single artefact"
 
       - name: Publish canonical package

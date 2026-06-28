@@ -1,3 +1,7 @@
+import { execFileSync } from "node:child_process";
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { createInMemoryContextBroker } from "./context-broker.js";
 import { afterEach, describe, expect, it } from "vitest";
 import { registerBundle } from "./extension.js";
@@ -70,6 +74,38 @@ describe("bundle extension defaults", () => {
     await registerBundle(pi);
 
     expect(commands.has("pi-rogue-context")).toBe(false);
+  });
+});
+
+describe("bundle publish metadata", () => {
+  it("rewrites bundled internal leaves to local file specs for clean npm installs", () => {
+    const dir = mkdtempSync(join(tmpdir(), "pi-rogue-bundle-prep-"));
+    const bundle = join(dir, "bundle");
+    mkdirSync(join(bundle, "node_modules", "@fiale-plus", "pi-core"), { recursive: true });
+    writeFileSync(join(bundle, "package.json"), JSON.stringify({
+      name: "@fiale-plus/pi-rogue",
+      version: "9.9.9",
+      dependencies: { "@fiale-plus/pi-core": "^0.1.0", typebox: "^1.0.0" },
+      bundledDependencies: ["@fiale-plus/pi-core"],
+    }, null, 2));
+    writeFileSync(join(bundle, "node_modules", "@fiale-plus", "pi-core", "package.json"), JSON.stringify({
+      name: "@fiale-plus/pi-core",
+      version: "0.1.0",
+      private: true,
+      exports: { ".": "./src/index.ts" },
+      dependencies: { "@fiale-plus/pi-core": "^0.1.0", typebox: "^1.0.0" },
+    }, null, 2));
+
+    execFileSync(process.execPath, [join(process.cwd(), "scripts", "prepare-bundle-publish.mjs"), bundle]);
+
+    const prepared = JSON.parse(readFileSync(join(bundle, "package.json"), "utf8"));
+    const leaf = JSON.parse(readFileSync(join(bundle, "node_modules", "@fiale-plus", "pi-core", "package.json"), "utf8"));
+    expect(prepared.dependencies).toEqual({ "@fiale-plus/pi-core": "npm:@fiale-plus/pi-rogue@9.9.9", typebox: "^1.0.0" });
+    expect(leaf.name).toBe("@fiale-plus/pi-rogue");
+    expect(leaf.version).toBe("9.9.9");
+    expect(leaf["x-pi-rogue-internal-name"]).toBe("@fiale-plus/pi-core");
+    expect(leaf.dependencies).toEqual({ "@fiale-plus/pi-core": "npm:@fiale-plus/pi-rogue@9.9.9", typebox: "^1.0.0" });
+    expect(leaf.private).toBeUndefined();
   });
 });
 
