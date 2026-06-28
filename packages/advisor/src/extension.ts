@@ -26,6 +26,7 @@ import { classifyIntent, classifyMode } from "./preflight-signals.js";
 import { findMissingArtifactReferences } from "./artifact-preflight.js";
 import { findMissingReviewArtifacts } from "./review-preflight.js";
 import { buildBoardLedger, decideBoardAction } from "./board.js";
+import { appendBoardFlightRecord, buildBoardFlightRecord } from "./board-flight-recorder.js";
 import {
   callHeadOfBoardAdapter,
   defaultHeadOfBoardConfig,
@@ -629,6 +630,7 @@ function boardShadowArtifactContext(state: SessionState, result: ReturnType<type
 
 function recordBoardShadowIfEnabled(ctx: any, cfg: AdvisorConfig, state: SessionState, source: string, toolResults?: any[]): void {
   if (cfg.board.mode !== "shadow") return;
+  const started = Date.now();
   const result = runBoardShadowDecision({
     sessionId: sessionKey(ctx),
     worktree: String(ctx?.cwd || ""),
@@ -636,7 +638,21 @@ function recordBoardShadowIfEnabled(ctx: any, cfg: AdvisorConfig, state: Session
     evidenceLedger: state.evidenceLedger,
     toolResults,
   }, state.board);
+  const latencyMs = Math.max(0, Date.now() - started);
   state.board = result.state;
+  const ledger = buildBoardLedger(result.events);
+  const flight = buildBoardFlightRecord({
+    ledger,
+    decision: result.decision,
+    source,
+    mode: "shadow",
+    at: result.state.lastAt,
+    latencyMs,
+    modelCalls: 0,
+    estimatedInputTokens: 0,
+    estimatedOutputTokens: 0,
+    estimatedCostUsd: 0,
+  });
   appendText(join(advisorSessionDir(ctx), "board-shadow.jsonl"), `${JSON.stringify({
     schema: "pi-rogue.advisor-board.shadow.v1",
     at: result.state.lastAt,
@@ -646,6 +662,7 @@ function recordBoardShadowIfEnabled(ctx: any, cfg: AdvisorConfig, state: Session
     risks: result.risks,
     context: boardShadowArtifactContext(state, result),
   })}\n`);
+  appendBoardFlightRecord(join(advisorSessionDir(ctx), "board-flight.jsonl"), flight);
 }
 
 function headOfBoardStatusText(cfg: AdvisorConfig, state: SessionState): string {
