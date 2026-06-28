@@ -32,6 +32,24 @@ describe("head-of-board adapter", () => {
     expect(calls).toBe(0);
   });
 
+  it("skips non-material decisions even when enabled", async () => {
+    const ledger = ledgerFrom([{ type: "turn", turn: 2, progress: true }]);
+    const decision = decideBoardAction(ledger);
+    const config = { ...defaultHeadOfBoardConfig(), mode: "enabled" as const };
+    let calls = 0;
+
+    expect(shouldEscalateToHeadOfBoard(config, { ledger, decision, question: "Anything to escalate?" })).toBe(false);
+
+    const result = await callHeadOfBoardAdapter(config, { ledger, decision, question: "Anything to escalate?" }, async () => {
+      calls += 1;
+      return { text: "should not happen", model: "test-head" };
+    });
+
+    expect(result.skipped).toBe("not_material");
+    expect(result.accounting.headOfBoardCalls).toBe(0);
+    expect(calls).toBe(0);
+  });
+
   it("gates calls to material board decisions and counts them separately", async () => {
     const ledger = ledgerFrom([
       { type: "file_changed", path: "packages/advisor/src/extension.ts", turn: 5 },
