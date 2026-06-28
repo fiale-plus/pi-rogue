@@ -18,7 +18,7 @@ function ledger(events: BoardEvent[] = []) {
   ]);
 }
 
-function role(id = "test-reviewer"): BoardRoleBody {
+function role(id = "reviewer"): BoardRoleBody {
   const catalog = loadBoardRoleCatalog();
   const summary = catalog.roles.find((item) => item.id === id)!;
   return loadBoardRoleBody(summary).role!;
@@ -32,7 +32,7 @@ describe("board specialist dispatch", () => {
       { type: "validation", command: "npm test", exitCode: 1, status: "red", turn: 4 },
     ]));
 
-    expect(suggestions.map((item) => item.id)).toContain("test-reviewer");
+    expect(suggestions.map((item) => item.id)).toContain("reviewer");
   });
 
   it("calls a read-only specialist with compact ledger and strict JSON response", async () => {
@@ -57,7 +57,7 @@ describe("board specialist dispatch", () => {
     expect("error" in result).toBe(false);
     if ("denied" in result || "error" in result) return;
     expect(result.response.verdict).toBe("important");
-    expect(result.note).toContain("test-reviewer: important");
+    expect(result.note).toContain("reviewer: important");
     expect(result.state.calls).toBe(1);
     expect(JSON.stringify(result.request)).not.toContain("raw specialist transcript");
   });
@@ -71,7 +71,7 @@ describe("board specialist dispatch", () => {
     expect(evaluateSpecialistPolicy({ role: testRole, caller: "user", config: cfg, state: defaultSpecialistCallState(), currentTurn: 10, task: "x" }).reason).toBe("not_callable");
     expect(evaluateSpecialistPolicy({ role: { ...testRole, allowedTools: ["read", "bash" as any] }, caller: "codriver", config: cfg, state: defaultSpecialistCallState(), currentTurn: 10, task: "x" }).reason).toBe("tool_escalation");
     expect(evaluateSpecialistPolicy({ role: testRole, caller: "codriver", config: cfg, state: { calls: 3, byRole: {} }, currentTurn: 10, task: "x" }).reason).toBe("budget");
-    expect(evaluateSpecialistPolicy({ role: testRole, caller: "codriver", config: cfg, state: { calls: 1, byRole: { "test-reviewer": { calls: 1, lastTurn: 8 } } }, currentTurn: 10, task: "x" }).reason).toBe("cooldown");
+    expect(evaluateSpecialistPolicy({ role: testRole, caller: "codriver", config: cfg, state: { calls: 1, byRole: { reviewer: { calls: 1, lastTurn: 8 } } }, currentTurn: 10, task: "x" }).reason).toBe("cooldown");
   });
 
   it("counts invalid specialist responses against budget and cooldown", async () => {
@@ -88,7 +88,7 @@ describe("board specialist dispatch", () => {
     expect("error" in result).toBe(true);
     if (!("error" in result)) return;
     expect(result.state.calls).toBe(1);
-    expect(result.state.byRole["test-reviewer"]?.lastTurn).toBe(7);
+    expect(result.state.byRole.reviewer?.lastTurn).toBe(7);
   });
 
   it("redacts and bounds compact specialist input", () => {
