@@ -41,14 +41,14 @@ const advisorTopLevel: Array<[string, string?]> = [
   ["review", "set light/strict/off"],
   ["model", "set or inspect model override"],
   ["checkins", "explain orchestration-managed check-ins"],
-  ["board", "inspect or configure Advisor Board shadow mode"],
+  ["board", "inspect or configure Advisor Board shadow/head-of-board modes"],
 ];
 
 const advisorNested: Record<string, Array<[string, string?]>> = {
   mode: [["auto"], ["manual"], ["off"]],
   review: [["light"], ["strict"], ["off"]],
   model: [["auto"], ["openai-codex/gpt-5.5"], ["anthropic/claude-opus-4-6"]],
-  board: [["status"], ["shadow"], ["off"], ["reset"]],
+  board: [["status"], ["shadow"], ["off"], ["reset"], ["head"]],
 };
 
 const piRogueTopLevel: Array<[string, string?]> = [

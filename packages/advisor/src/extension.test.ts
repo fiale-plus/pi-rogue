@@ -52,18 +52,19 @@ describe("AdvisorConfig", () => {
     expect(cfg.checkinIntervalMinutes).toBe(30);
     expect(cfg.model).toBeUndefined();
     expect(cfg.board).toEqual({ mode: "off" });
+    expect(cfg.headOfBoard).toMatchObject({ mode: "off", maxTokens: 1200, reasoning: "medium" });
   });
 
   it("accepts all 3 modes", () => {
     for (const mode of ["auto", "manual", "off"] as const) {
-      const cfg: AdvisorConfig = { mode, review: "light", checkins: "mid-hour", checkinIntervalMinutes: 30, board: { mode: "off" } };
+      const cfg: AdvisorConfig = { mode, review: "light", checkins: "mid-hour", checkinIntervalMinutes: 30, board: { mode: "off" }, headOfBoard: { mode: "off", maxEvidence: 8, maxRisks: 6, maxFailures: 4, maxSubagents: 6, maxTokens: 1200, reasoning: "medium" } };
       expect(normalizeAdvisorConfig(cfg).mode).toBe(mode);
     }
   });
 
   it("accepts all 3 review levels", () => {
     for (const review of ["light", "strict", "off"] as const) {
-      const cfg: AdvisorConfig = { mode: "auto", review, checkins: "mid-hour", checkinIntervalMinutes: 30, board: { mode: "off" } };
+      const cfg: AdvisorConfig = { mode: "auto", review, checkins: "mid-hour", checkinIntervalMinutes: 30, board: { mode: "off" }, headOfBoard: { mode: "off", maxEvidence: 8, maxRisks: 6, maxFailures: 4, maxSubagents: 6, maxTokens: 1200, reasoning: "medium" } };
       expect(normalizeAdvisorConfig(cfg).review).toBe(review);
     }
   });
