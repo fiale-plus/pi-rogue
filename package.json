@@ -40,7 +40,8 @@
     "router:sharpen": "tsx packages/router/src/cli.ts sharpen",
     "router:sharpen:auto": "tsx scripts/router-auto-sharpen.ts",
     "router:shadow": "tsx packages/router/src/cli.ts shadow",
-    "board:eval": "tsx scripts/select-board-fixtures.ts"
+    "board:eval": "tsx scripts/select-board-fixtures.ts",
+    "budget-board:smoke": "tsx scripts/smoke-budget-board-profile.ts"
   },
   "engines": {
     "node": ">=22.5.0"

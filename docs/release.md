@@ -13,7 +13,7 @@ Legacy alias package `@fiale-plus/pi-rogue-bundle` is deprecated and redirects u
 - [ ] Release notes are drafted
 - [ ] CI is green on the release commit
 - [ ] publish workflow is ready (canonical publish workflow only)
-- [ ] Post-release verification passes (`npm view`, install smoke test)
+- [ ] Post-release verification passes (`npm view`, install smoke test, `npm run budget-board:smoke` when Advisor Board profile changes)
 - [ ] Legacy artefacts are deprecated against latest `@fiale-plus/pi-rogue`
 
 ## Changelog provisioning
@@ -56,6 +56,7 @@ Prefer the changelog entry to be done before the release is cut, not after.
 - Post-release verification includes:
   - `npm view` confirms new version is visible for `@fiale-plus/pi-rogue`.
   - `npm info <legacy-pkg> deprecated` shows the migration message.
+  - For Advisor Board/profile releases, `npm run budget-board:smoke` passes locally; it uses registry metadata and temp config files only, with no live model calls.
 
 Example legacy deprecation commands (run in the release workflow):
 
