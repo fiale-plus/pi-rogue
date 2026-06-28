@@ -43,6 +43,7 @@
   "files": [
     "advisor",
     "src",
+    "board",
     "skills",
     "assets",
     "README.md",
