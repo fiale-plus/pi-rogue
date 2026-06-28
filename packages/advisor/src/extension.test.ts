@@ -4,9 +4,12 @@ import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { completeSimple } from "@earendil-works/pi-ai";
 import {
+  applyAdvisorBoardProfilePlan,
   applyPiRogueConfigurePlan,
+  buildAdvisorBoardProfilePlan,
   buildAdvisorCheckinPrompt,
   buildPiRogueConfigurePlan,
+  disableAdvisorBoardProfile,
   completeWithHigherAdvisorModel,
   completeWithModelFallback,
   contentText,
@@ -51,6 +54,7 @@ describe("AdvisorConfig", () => {
     expect(cfg.checkins).toBe("off");
     expect(cfg.checkinIntervalMinutes).toBe(30);
     expect(cfg.model).toBeUndefined();
+    expect(cfg.profile).toBeUndefined();
     expect(cfg.board).toEqual({ mode: "off" });
     expect(cfg.headOfBoard).toMatchObject({ mode: "off", maxTokens: 1200, reasoning: "medium" });
     expect(cfg.specialistDispatch).toMatchObject({ mode: "suggest", cooldownTurns: 6, maxCallsPerSession: 3, maxCostTier: "cheap", maxTokens: 900 });
@@ -81,7 +85,7 @@ describe("AdvisorConfig", () => {
   });
 
   it("serializes/deserializes without data loss (JSON round-trip)", () => {
-    const original = normalizeAdvisorConfig({ mode: "auto", review: "light", model: "claude-opus-4-6" });
+    const original = normalizeAdvisorConfig({ mode: "auto", review: "light", model: "claude-opus-4-6", profile: "budget-board" });
     const json = JSON.stringify(original);
     const parsed = normalizeAdvisorConfig(JSON.parse(json) as AdvisorConfig);
     expect(parsed.mode).toBe("auto");
@@ -89,6 +93,153 @@ describe("AdvisorConfig", () => {
     expect(parsed.checkins).toBe("off");
     expect(parsed.checkinIntervalMinutes).toBe(30);
     expect(parsed.model).toBe("claude-opus-4-6");
+    expect(parsed.profile).toBe("budget-board");
+  });
+});
+
+describe("Advisor budget-board profile", () => {
+  function ctx(models: Array<{ provider: string; id: string; input: string[] }> = [
+    { provider: "openai-codex", id: "gpt-5.5", input: ["text"] },
+    { provider: "openai-codex", id: "gpt-5.5-mini", input: ["text"] },
+    { provider: "image-only", id: "paint", input: ["image"] },
+  ], findOnly: Array<{ provider: string; id: string; input: string[] }> = []) {
+    return {
+      modelRegistry: {
+        getAvailable: () => models,
+        find: (provider: string, id: string) => [...models, ...findOnly].find((model) => model.provider === provider && model.id === id),
+      },
+    } as any;
+  }
+
+  it("resolves an explicit cheap-driver/strong-advisor plan without mutating global driver defaults", () => {
+    const plan = buildAdvisorBoardProfilePlan(ctx(), normalizeAdvisorConfig({}));
+
+    expect(plan.id).toBe("budget-board");
+    expect(plan.active).toBe(false);
+    expect(plan.driverModel).toBe("openai-codex/gpt-5.5-mini");
+    expect(plan.advisorModel).toBe("openai-codex/gpt-5.5");
+    expect(plan.headOfBoardModel).toBe("openai-codex/gpt-5.5");
+    expect(plan.specialistModel).toBe("openai-codex/gpt-5.5");
+    expect(plan.mutatesGlobalDriver).toBe(false);
+    expect(plan.advisorConfig.profileRestore).toMatchObject({ mode: "auto", review: "light", checkins: "off" });
+    expect(plan.advisorConfig).toMatchObject({
+      profile: "budget-board",
+      mode: "manual",
+      review: "off",
+      checkins: "off",
+      model: "openai-codex/gpt-5.5",
+      board: { mode: "shadow" },
+      headOfBoard: { mode: "enabled" },
+      specialistDispatch: { mode: "suggest", maxCostTier: "cheap", maxCallsPerSession: 3 },
+    });
+  });
+
+  it("fails loudly instead of silently falling back when preferred profile models are missing", () => {
+    const plan = buildAdvisorBoardProfilePlan(ctx([{ provider: "local", id: "tiny", input: ["text"] }]), normalizeAdvisorConfig({}));
+
+    expect(plan.warnings.join("\n")).toMatch(/No preferred cheap driver/);
+    expect(plan.warnings.join("\n")).toMatch(/No preferred strong advisor/);
+    expect(() => applyAdvisorBoardProfilePlan(plan)).toThrow(/strong advisor model/);
+  });
+
+  it("resolves strong advisor candidates through registry lookup even when not listed as available", () => {
+    const plan = buildAdvisorBoardProfilePlan(ctx(
+      [{ provider: "openai-codex", id: "gpt-5.5-mini", input: ["text"] }],
+      [{ provider: "openai-codex", id: "gpt-5.5", input: ["text"] }],
+    ), normalizeAdvisorConfig({}));
+
+    expect(plan.advisorModel).toBe("openai-codex/gpt-5.5");
+    expect(plan.driverModel).toBe("openai-codex/gpt-5.5-mini");
+    expect(plan.advisorConfig.model).toBe("openai-codex/gpt-5.5");
+  });
+
+  it("allows enable with a strong advisor even when the cheap driver is only a missing recommendation", () => {
+    const root = mkdtempSync(join(tmpdir(), "pi-rogue-budget-board-strong-only-"));
+    try {
+      const plan = buildAdvisorBoardProfilePlan(ctx([{ provider: "openai-codex", id: "gpt-5.5", input: ["text"] }]), normalizeAdvisorConfig({}));
+      const filePlan = { ...plan, files: { advisor: join(root, "advisor", "config.json") } };
+
+      expect(plan.driverModel).toMatch(/no preferred cheap driver/);
+      expect(plan.warnings.join("\n")).toMatch(/No preferred cheap driver/);
+      expect(() => applyAdvisorBoardProfilePlan(filePlan)).not.toThrow();
+      expect(JSON.parse(readFileSync(filePlan.files.advisor, "utf8")).model).toBe("openai-codex/gpt-5.5");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("writes only advisor profile config when explicitly applied", () => {
+    const root = mkdtempSync(join(tmpdir(), "pi-rogue-budget-board-"));
+    try {
+      const plan = buildAdvisorBoardProfilePlan(ctx(), normalizeAdvisorConfig({}));
+      const filePlan = { ...plan, files: { advisor: join(root, "advisor", "config.json") } };
+
+      const written = applyAdvisorBoardProfilePlan(filePlan);
+
+      expect(written.profile).toBe("budget-board");
+      const advisor = JSON.parse(readFileSync(filePlan.files.advisor, "utf8"));
+      expect(advisor.profile).toBe("budget-board");
+      expect(advisor.mode).toBe("manual");
+      expect(advisor.review).toBe("off");
+      expect(existsSync(join(root, "config.json"))).toBe(false);
+      expect(existsSync(join(root, "router", "config.json"))).toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("restores the pre-profile advisor settings when disabling the profile", () => {
+    const before = normalizeAdvisorConfig({ mode: "auto", review: "strict", model: "anthropic/claude-opus-4-6", board: { mode: "off" } });
+    const enabled = buildAdvisorBoardProfilePlan(ctx(), before).advisorConfig;
+
+    const disabled = disableAdvisorBoardProfile(enabled);
+
+    expect(disabled.profile).toBeUndefined();
+    expect(disabled.profileRestore).toBeUndefined();
+    expect(disabled.mode).toBe("auto");
+    expect(disabled.review).toBe("strict");
+    expect(disabled.model).toBe("anthropic/claude-opus-4-6");
+    expect(disabled.board).toEqual({ mode: "off" });
+    expect(disabled.headOfBoard.mode).toBe("off");
+  });
+
+  it("preserves user mode changes made while the profile is active", () => {
+    const enabled = buildAdvisorBoardProfilePlan(ctx(), normalizeAdvisorConfig({})).advisorConfig;
+    const disabled = disableAdvisorBoardProfile({ ...enabled, mode: "off" });
+
+    expect(disabled.mode).toBe("off");
+    expect(disabled.review).toBe("light");
+    expect(disabled.profile).toBeUndefined();
+  });
+
+  it("preserves advisor model changes made while the profile is active", () => {
+    const enabled = buildAdvisorBoardProfilePlan(ctx(), normalizeAdvisorConfig({ model: "anthropic/claude-opus-4-6" })).advisorConfig;
+    const disabled = disableAdvisorBoardProfile({ ...enabled, model: "anthropic/claude-sonnet-4-6" });
+
+    expect(disabled.profile).toBeUndefined();
+    expect(disabled.model).toBe("anthropic/claude-sonnet-4-6");
+    expect(disabled.review).toBe("light");
+  });
+
+  it("is a no-op when the profile is already off", () => {
+    const cfg = normalizeAdvisorConfig({ mode: "manual", review: "strict", model: "anthropic/claude-opus-4-6", board: { mode: "shadow" } });
+    const disabled = disableAdvisorBoardProfile(cfg);
+
+    expect(disabled).toEqual(cfg);
+  });
+
+  it("disables legacy profile config without dropping the advisor model override", () => {
+    const cfg = normalizeAdvisorConfig({ profile: "budget-board", model: "openai-codex/gpt-5.5", board: { mode: "shadow" }, headOfBoard: { mode: "enabled" } as any });
+    const disabled = disableAdvisorBoardProfile(cfg);
+
+    expect(disabled.profile).toBeUndefined();
+    expect(disabled.model).toBe("openai-codex/gpt-5.5");
+    expect(disabled.mode).toBe("auto");
+    expect(disabled.review).toBe("light");
+    expect(disabled.checkins).toBe("off");
+    expect(disabled.board).toEqual({ mode: "off" });
+    expect(disabled.headOfBoard.mode).toBe("off");
+    expect(disabled.specialistDispatch.mode).toBe("suggest");
   });
 });
 

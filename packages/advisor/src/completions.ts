@@ -40,6 +40,7 @@ const advisorTopLevel: Array<[string, string?]> = [
   ["mode", "set auto/manual/off"],
   ["review", "set light/strict/off"],
   ["model", "set or inspect model override"],
+  ["profile", "inspect or enable explicit advisor profiles"],
   ["checkins", "explain orchestration-managed check-ins"],
   ["board", "inspect or configure Advisor Board shadow/head-of-board modes"],
 ];
@@ -48,6 +49,7 @@ const advisorNested: Record<string, Array<[string, string?]>> = {
   mode: [["auto"], ["manual"], ["off"]],
   review: [["light"], ["strict"], ["off"]],
   model: [["auto"], ["openai-codex/gpt-5.5"], ["anthropic/claude-opus-4-6"]],
+  profile: [["status"], ["budget-board"], ["off"]],
   board: [["status"], ["shadow"], ["off"], ["reset"], ["head"], ["specialist"]],
 };
 

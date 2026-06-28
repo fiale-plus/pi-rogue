@@ -57,7 +57,26 @@ import {
 
 // ── Config: 3 optional fields ────────────────────────────────────────────
 
+export type AdvisorProfileId = "budget-board";
+
+export interface AdvisorProfileRestore {
+  mode: "auto" | "manual" | "off";
+  review: "light" | "strict" | "off";
+  checkins: "mid-hour" | "off";
+  checkinIntervalMinutes: number;
+  model?: string;
+  /** Advisor model written by the profile; used to distinguish profile-owned vs user-changed model overrides. */
+  profileModel?: string;
+  board: BoardShadowConfig;
+  headOfBoard: HeadOfBoardConfig;
+  specialistDispatch: SpecialistDispatchConfig;
+}
+
 export interface AdvisorConfig {
+  /** Explicit Pi-Rogue advisor profile; unset means built-in behavior only. */
+  profile?: AdvisorProfileId;
+  /** Previous advisor settings captured before applying the active profile. */
+  profileRestore?: AdvisorProfileRestore;
   /** "auto" (preflight+post+cache), "manual" (just /pi-rogue-advisor), "off" */
   mode: "auto" | "manual" | "off";
   /** "light" (file changes/errors only) | "strict" (every 3 turns) | "off" */
@@ -110,6 +129,7 @@ const reviewLocks = new Set<string>();
 
 const REVIEW_TASK_ACTIONS_LIMIT = 2;
 const ADVISORY_SIGNALS_LIMIT = 4;
+const BUDGET_BOARD_PROFILE_ID: AdvisorProfileId = "budget-board";
 
 // ── SOTA models (ordered by preference) ───────────────────────────────────
 const SOTA_CHAIN: Array<{ provider: string; model: string; label: string }> = [
@@ -117,6 +137,12 @@ const SOTA_CHAIN: Array<{ provider: string; model: string; label: string }> = [
   { provider: "anthropic", model: "claude-opus-4-6", label: "Claude Opus 4.6" },
   { provider: "anthropic", model: "claude-sonnet-4-6", label: "Claude Sonnet 4.6" },
   { provider: "openai-codex", model: "gpt-5.4-mini", label: "GPT-5.4 Mini" },
+];
+
+const CHEAP_DRIVER_CHAIN = [
+  "openai-codex/gpt-5.5-mini",
+  "openai-codex/gpt-5.4-mini",
+  "openai-codex/gpt-5.3-codex-spark",
 ];
 
 // ── Internal state ────────────────────────────────────────────────────────
@@ -246,10 +272,35 @@ function writeJson(path: string, v: unknown) {
   writeText(path, JSON.stringify(v, null, 2) + "\n");
 }
 
+function normalizeProfileRestore(raw: unknown): AdvisorProfileRestore | undefined {
+  if (!raw || typeof raw !== "object") return undefined;
+  const record = raw as Partial<AdvisorProfileRestore>;
+  const interval = Number(record.checkinIntervalMinutes ?? DEFAULT_CONFIG.checkinIntervalMinutes);
+  return {
+    mode: record.mode === "manual" || record.mode === "off" ? record.mode : "auto",
+    review: record.review === "strict" || record.review === "off" ? record.review : "light",
+    checkins: record.checkins === "mid-hour" ? "mid-hour" : DEFAULT_CONFIG.checkins,
+    checkinIntervalMinutes: Math.min(
+      MAX_CHECKIN_INTERVAL_MINUTES,
+      Math.max(
+        MIN_CHECKIN_INTERVAL_MINUTES,
+        Number.isFinite(interval) ? Math.round(interval) : DEFAULT_CONFIG.checkinIntervalMinutes,
+      ),
+    ),
+    model: record.model || undefined,
+    profileModel: record.profileModel || undefined,
+    board: normalizeBoardShadowConfig(record.board),
+    headOfBoard: normalizeHeadOfBoardConfig(record.headOfBoard),
+    specialistDispatch: normalizeSpecialistDispatchConfig(record.specialistDispatch),
+  };
+}
+
 export function normalizeAdvisorConfig(raw: Partial<AdvisorConfig> = {}): AdvisorConfig {
   const interval = Number(raw.checkinIntervalMinutes ?? DEFAULT_CONFIG.checkinIntervalMinutes);
   const startedAt = Number(raw.checkinStartedAt);
   return {
+    profile: raw.profile === BUDGET_BOARD_PROFILE_ID ? raw.profile : undefined,
+    profileRestore: raw.profile === BUDGET_BOARD_PROFILE_ID ? normalizeProfileRestore(raw.profileRestore) : undefined,
     mode: (raw.mode === "manual" || raw.mode === "off") ? raw.mode : "auto",
     review: (raw.review === "strict" || raw.review === "off") ? raw.review : "light",
     checkins: raw.checkins === "mid-hour" ? "mid-hour" : DEFAULT_CONFIG.checkins,
@@ -2459,6 +2510,7 @@ function piRogueSubsystemRows(config: AdvisorConfig, state: SessionState, ctx: a
     subsystem: "advisor",
     status: normalized.mode === "off" ? "off" : "on",
     details: [
+      `profile=${normalized.profile ?? "off"}`,
       `review=${normalized.review}`,
       `checkins=${checkinsText}`,
       `turns=${state.turns}`,
@@ -2610,6 +2662,20 @@ function firstAvailable(available: string[], preferred: string[]): string | unde
   return preferred.find((id) => available.includes(id)) ?? available[0];
 }
 
+function firstPreferred(available: string[], preferred: string[]): string | undefined {
+  return preferred.find((id) => available.includes(id));
+}
+
+function modelRegistryHas(ctx: any, id: string): boolean {
+  const [provider, ...rest] = id.split("/");
+  if (!provider || rest.length === 0) return false;
+  return Boolean(ctx?.modelRegistry?.find?.(provider, rest.join("/")));
+}
+
+function firstPreferredDetected(ctx: any, available: string[], preferred: string[]): string | undefined {
+  return preferred.find((id) => available.includes(id) || modelRegistryHas(ctx, id));
+}
+
 function readJsonLoose(path: string): any | undefined {
   try {
     return JSON.parse(readText(path));
@@ -2668,6 +2734,140 @@ export function buildPiRogueConfigurePlan(ctx: any, mode: PiRogueConfigureMode =
       fusionRecipeId ? "" : "No fusion recipe was detected; router will use the strongest single model for smart/review roles.",
     ].filter(Boolean),
   };
+}
+
+export interface AdvisorBoardProfilePlan {
+  id: AdvisorProfileId;
+  active: boolean;
+  driverModel: string;
+  advisorModel: string;
+  headOfBoardModel: string;
+  specialistModel: string;
+  mutatesGlobalDriver: false;
+  advisorConfig: AdvisorConfig;
+  files: { advisor: string };
+  warnings: string[];
+}
+
+export function buildAdvisorBoardProfilePlan(ctx: any, current: AdvisorConfig = normalizeAdvisorConfig({})): AdvisorBoardProfilePlan {
+  const normalized = normalizeAdvisorConfig(current);
+  const available = availableTextModels(ctx);
+  const preferredAdvisor = SOTA_CHAIN.map((item) => `${item.provider}/${item.model}`);
+  const configuredPreferredAdvisor = normalized.model && preferredAdvisor.includes(normalized.model) && (available.includes(normalized.model) || modelRegistryHas(ctx, normalized.model)) ? normalized.model : undefined;
+  const advisorModel = configuredPreferredAdvisor ?? firstPreferredDetected(ctx, available, preferredAdvisor) ?? "<no preferred strong advisor model detected>";
+  const driverModel = firstPreferredDetected(ctx, available, CHEAP_DRIVER_CHAIN) ?? "<no preferred cheap driver model detected>";
+  const restore: AdvisorProfileRestore = normalized.profileRestore ?? {
+    mode: normalized.mode,
+    review: normalized.review,
+    checkins: normalized.checkins,
+    checkinIntervalMinutes: normalized.checkinIntervalMinutes,
+    model: normalized.model,
+    profileModel: advisorModel.startsWith("<") ? normalized.model : advisorModel,
+    board: normalized.board,
+    headOfBoard: normalized.headOfBoard,
+    specialistDispatch: normalized.specialistDispatch,
+  };
+  const advisorConfig = normalizeAdvisorConfig({
+    ...normalized,
+    profile: BUDGET_BOARD_PROFILE_ID,
+    profileRestore: restore,
+    mode: "manual",
+    review: "off",
+    checkins: "off",
+    model: advisorModel.startsWith("<") ? normalized.model : advisorModel,
+    board: { mode: "shadow" },
+    headOfBoard: profileHeadOfBoardConfig(),
+    specialistDispatch: profileSpecialistDispatchConfig(),
+  });
+  return {
+    id: BUDGET_BOARD_PROFILE_ID,
+    active: normalized.profile === BUDGET_BOARD_PROFILE_ID,
+    driverModel,
+    advisorModel,
+    headOfBoardModel: advisorModel,
+    specialistModel: advisorModel,
+    mutatesGlobalDriver: false,
+    advisorConfig,
+    files: { advisor: CONFIG_PATH },
+    warnings: [
+      available.length === 0 ? "No text models were detected; configure Pi model providers before enabling this profile." : "",
+      driverModel.startsWith("<") ? "No preferred cheap driver candidate was detected; status is advisory and will not mutate the global main model." : "",
+      advisorModel.startsWith("<") ? "No preferred strong advisor/head model was detected; profile enable will fail instead of falling back silently." : "",
+    ].filter(Boolean),
+  };
+}
+
+export function applyAdvisorBoardProfilePlan(plan: AdvisorBoardProfilePlan): AdvisorConfig {
+  if (plan.advisorModel.startsWith("<")) throw new Error("cannot enable budget-board profile without a detected strong advisor model");
+  writeJson(plan.files.advisor, plan.advisorConfig);
+  return plan.advisorConfig;
+}
+
+function profileHeadOfBoardConfig(): HeadOfBoardConfig {
+  return { ...defaultHeadOfBoardConfig(), mode: "enabled" };
+}
+
+function profileSpecialistDispatchConfig(): SpecialistDispatchConfig {
+  return { ...defaultSpecialistDispatchConfig(), mode: "suggest", maxCostTier: "cheap", maxCallsPerSession: 3 };
+}
+
+export function disableAdvisorBoardProfile(current: AdvisorConfig): AdvisorConfig {
+  const normalized = normalizeAdvisorConfig(current);
+  if (normalized.profile !== BUDGET_BOARD_PROFILE_ID) return normalized;
+  const restore = normalized.profileRestore ?? {
+    mode: DEFAULT_CONFIG.mode,
+    review: DEFAULT_CONFIG.review,
+    checkins: DEFAULT_CONFIG.checkins,
+    checkinIntervalMinutes: DEFAULT_CONFIG.checkinIntervalMinutes,
+    model: normalized.model,
+    profileModel: normalized.model,
+    board: defaultBoardShadowConfig(),
+    headOfBoard: defaultHeadOfBoardConfig(),
+    specialistDispatch: defaultSpecialistDispatchConfig(),
+  };
+  const profileBoard: BoardShadowConfig = { mode: "shadow" };
+  const profileHead = profileHeadOfBoardConfig();
+  const profileSpecialists = profileSpecialistDispatchConfig();
+  const currentModelIsProfileOwned = restore.profileModel !== undefined && normalized.model === restore.profileModel;
+  return normalizeAdvisorConfig({
+    ...normalized,
+    profile: undefined,
+    profileRestore: undefined,
+    mode: normalized.mode !== "manual" ? normalized.mode : restore.mode,
+    review: normalized.review !== "off" ? normalized.review : restore.review,
+    checkins: normalized.checkins !== "off" ? normalized.checkins : restore.checkins,
+    checkinIntervalMinutes: normalized.checkinIntervalMinutes,
+    model: currentModelIsProfileOwned ? restore.model : normalized.model,
+    board: JSON.stringify(normalized.board) !== JSON.stringify(profileBoard) ? normalized.board : restore.board,
+    headOfBoard: JSON.stringify(normalized.headOfBoard) !== JSON.stringify(profileHead) ? normalized.headOfBoard : restore.headOfBoard,
+    specialistDispatch: JSON.stringify(normalized.specialistDispatch) !== JSON.stringify(profileSpecialists) ? normalized.specialistDispatch : restore.specialistDispatch,
+  });
+}
+
+function advisorBoardProfileText(plan: AdvisorBoardProfilePlan): string {
+  return [
+    "Pi-Rogue advisor profile: budget-board",
+    `Status: ${plan.active ? "active" : "available (explicit opt-in required)"}`,
+    "",
+    "Role → model mapping:",
+    `  driver/main: ${plan.driverModel} (recommended only; global main model is not mutated)`,
+    `  advisor/head-of-board: ${plan.headOfBoardModel}`,
+    `  read-only specialists: ${plan.specialistModel}`,
+    "",
+    "Board modes if enabled:",
+    `  advisor.mode: ${plan.advisorConfig.mode} (manual slash/tool calls only)`,
+    `  advisor.review: ${plan.advisorConfig.review} (no always-on expensive review loop)`,
+    `  board.shadow: ${plan.advisorConfig.board.mode}`,
+    `  headOfBoard: ${plan.advisorConfig.headOfBoard.mode}`,
+    `  specialists: ${plan.advisorConfig.specialistDispatch.mode} (read-only, maxCost=${plan.advisorConfig.specialistDispatch.maxCostTier}, maxCalls=${plan.advisorConfig.specialistDispatch.maxCallsPerSession})`,
+    "",
+    `Writes on enable: ${plan.files.advisor}`,
+    "Safety: explicit, reversible, no global driver/default model mutation, specialists remain read-only and suggest/explicit-call gated.",
+    plan.warnings.length ? "" : undefined,
+    ...plan.warnings.map((warning) => `Warning: ${warning}`),
+    "",
+    "Commands: /pi-rogue-advisor profile budget-board · /pi-rogue-advisor profile off",
+  ].filter(Boolean).join("\n");
 }
 
 function modelCardFor(modelId: string, roleHints: string[], generatedAt: string): any {
@@ -3502,7 +3702,7 @@ export function registerAdvisor(pi: ExtensionAPI): void {
           "  /pi-rogue doctor              read-only setup checks",
           "",
           "Subsystems:",
-          "  /pi-rogue-advisor status||mode|model|review|pause|unpause|checkins",
+          "  /pi-rogue-advisor status|profile|mode|model|review|pause|unpause|checkins",
           "  /pi-rogue-router status||mode|profile|print|models|profiles|cycle|configure",
           "  /pi-rogue-fusion status|reload|configure",
           "  /pi-rogue-orchestration status|goal|loop|autoresearch|lab",
@@ -3528,7 +3728,7 @@ export function registerAdvisor(pi: ExtensionAPI): void {
 
   // ── /pi-rogue-advisor command ──────────────────────────────────────────
   pi.registerCommand("pi-rogue-advisor", {
-    description: "Senior engineering advisor. Usage: /pi-rogue-advisor [|status|mode|model|review|pause|unpause|checkins|question]",
+    description: "Senior engineering advisor. Usage: /pi-rogue-advisor [|status|profile|mode|model|review|pause|unpause|checkins|question]",
     getArgumentCompletions: (prefix: string) => advisorArgumentCompletions(prefix),
     handler: async (args, ctx) => {
       const rawArg = String(args ?? "").trim();
@@ -3548,7 +3748,7 @@ export function registerAdvisor(pi: ExtensionAPI): void {
           note ? `🧭 ${truncate(note, 200)}` : "",
           route ? `Router: ${summarizeRoute(route)}${route.safety ? " · safety" : ""}` : "",
           "",
-          `Mode: ${cfg.mode} | Review: ${cfg.review} | Check-ins: ${checkinDescription(cfg)} (orchestration-managed) | Model: ${resolved?.label || cfg.model || "auto"}`,
+          `Mode: ${cfg.mode} | Profile: ${cfg.profile ?? "off"} | Review: ${cfg.review} | Check-ins: ${checkinDescription(cfg)} (orchestration-managed) | Model: ${resolved?.label || cfg.model || "auto"}`,
           `Board shadow: ${cfg.board.mode} | Runs: ${state.board?.counters.runs ?? 0} | Last: ${state.board?.lastDecision?.action ?? "none"}`,
           pause > 0 ? `Advisor pause: ${pause} turn${pause === 1 ? "" : "s"} remaining` : "Advisor pause: off",
           loop?.repeatCount && loop.repeatCount > 1 ? `Advisor loop guard: ${loop.repeatCount} repeated outputs across changing context` : "Advisor loop guard: idle",
@@ -3595,6 +3795,33 @@ export function registerAdvisor(pi: ExtensionAPI): void {
         ctx.ui.notify("Usage: /pi-rogue-advisor mode auto|manual|off", "error");
         return;
       }
+      if (cmd === "profile") {
+        const action = rest[0] || "status";
+        if (action === "status" || action === "show") {
+          ctx.ui.notify(advisorBoardProfileText(buildAdvisorBoardProfilePlan(ctx, cfg)), "info");
+          return;
+        }
+        if (action === BUDGET_BOARD_PROFILE_ID || action === "on" || action === "enable") {
+          const plan = buildAdvisorBoardProfilePlan(ctx, cfg);
+          try {
+            const next = applyAdvisorBoardProfilePlan(plan);
+            setPiRogueStatus(ctx, next, state);
+            ctx.ui.notify(`${advisorBoardProfileText({ ...plan, active: true })}\n\nEnabled budget-board profile.`, "info");
+          } catch (error) {
+            ctx.ui.notify(error instanceof Error ? error.message : String(error), "error");
+          }
+          return;
+        }
+        if (action === "off" || action === "disable") {
+          const next = disableAdvisorBoardProfile(cfg);
+          saveConfig(next);
+          setPiRogueStatus(ctx, next, state);
+          ctx.ui.notify("Budget-board profile disabled; pre-profile advisor settings restored where available, with user changes made while active preserved.", "info");
+          return;
+        }
+        ctx.ui.notify("Usage: /pi-rogue-advisor profile status|budget-board|off", "error");
+        return;
+      }
       if (cmd === "model") {
         const v = rest.join("/").trim();
         if (!v || !v.includes("/")) {
@@ -3616,6 +3843,7 @@ export function registerAdvisor(pi: ExtensionAPI): void {
         const pause = advisorPauseRemaining(state, state.turns);
         ctx.ui.notify([
           "Advisor config (check-ins are orchestration-managed):",
+          `  profile: "${cfg.profile ?? "off"}" — budget-board is explicit opt-in; off is built-in behavior`,
           `  mode: "${cfg.mode}" — auto (preflight+post+cache) | manual | off`,
           `  review: "${cfg.review}" — light (changes/errors) | strict (every 3) | off`,
           `  checkins: "${cfg.checkins}" — set by active /pi-rogue-orchestration goal or loop lifecycle`,
