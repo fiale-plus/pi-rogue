@@ -2811,6 +2811,19 @@ function profileSpecialistDispatchConfig(): SpecialistDispatchConfig {
   return { ...defaultSpecialistDispatchConfig(), mode: "suggest", maxCostTier: "cheap", maxCallsPerSession: 3 };
 }
 
+export function budgetBoardEscalationPolicyText(config: AdvisorConfig): string {
+  const cfg = normalizeAdvisorConfig(config);
+  const active = cfg.profile === BUDGET_BOARD_PROFILE_ID;
+  return [
+    "Budget-board escalation policy:",
+    `  profile: ${active ? "active" : "inactive"}`,
+    `  strong-model loop: ${cfg.mode === "manual" && cfg.review === "off" ? "off (manual slash/tool calls only)" : `advisor mode=${cfg.mode}, review=${cfg.review}`}`,
+    `  Head-of-Board: ${cfg.headOfBoard.mode}; triggers=user_request or material Board risk; maxTokens=${cfg.headOfBoard.maxTokens}; reasoning=${cfg.headOfBoard.reasoning}`,
+    `  Specialists: ${cfg.specialistDispatch.mode}; read-only; cooldown=${cfg.specialistDispatch.cooldownTurns} turns; maxCalls=${cfg.specialistDispatch.maxCallsPerSession}; maxCost=${cfg.specialistDispatch.maxCostTier}; maxTokens=${cfg.specialistDispatch.maxTokens}`,
+    "  Denials/skips are explicit: disabled, not_material, rate_limited, cooldown, budget, cost_tier, or tool_escalation.",
+  ].join("\n");
+}
+
 export function disableAdvisorBoardProfile(current: AdvisorConfig): AdvisorConfig {
   const normalized = normalizeAdvisorConfig(current);
   if (normalized.profile !== BUDGET_BOARD_PROFILE_ID) return normalized;
@@ -2860,6 +2873,8 @@ function advisorBoardProfileText(plan: AdvisorBoardProfilePlan): string {
     `  board.shadow: ${plan.advisorConfig.board.mode}`,
     `  headOfBoard: ${plan.advisorConfig.headOfBoard.mode}`,
     `  specialists: ${plan.advisorConfig.specialistDispatch.mode} (read-only, maxCost=${plan.advisorConfig.specialistDispatch.maxCostTier}, maxCalls=${plan.advisorConfig.specialistDispatch.maxCallsPerSession})`,
+    "",
+    budgetBoardEscalationPolicyText(plan.advisorConfig),
     "",
     `Writes on enable: ${plan.files.advisor}`,
     "Safety: explicit, reversible, no global driver/default model mutation, specialists remain read-only and suggest/explicit-call gated.",
@@ -3868,7 +3883,7 @@ export function registerAdvisor(pi: ExtensionAPI): void {
       if (cmd === "board") {
         const v = rest[0] || "status";
         if (v === "status") {
-          ctx.ui.notify(`${formatBoardShadowStatus(cfg.board, state.board)}\n\n${headOfBoardStatusText(cfg, state)}\n\n${specialistDispatchStatusText(cfg, state)}`, "info");
+          ctx.ui.notify(`${formatBoardShadowStatus(cfg.board, state.board)}\n\n${headOfBoardStatusText(cfg, state)}\n\n${specialistDispatchStatusText(cfg, state)}${cfg.profile === BUDGET_BOARD_PROFILE_ID ? `\n\n${budgetBoardEscalationPolicyText(cfg)}` : ""}`, "info");
           return;
         }
         if (v === "shadow" || v === "on") {

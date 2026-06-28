@@ -6,6 +6,7 @@ import { completeSimple } from "@earendil-works/pi-ai";
 import {
   applyAdvisorBoardProfilePlan,
   applyPiRogueConfigurePlan,
+  budgetBoardEscalationPolicyText,
   buildAdvisorBoardProfilePlan,
   buildAdvisorCheckinPrompt,
   buildPiRogueConfigurePlan,
@@ -110,6 +111,19 @@ describe("Advisor budget-board profile", () => {
       },
     } as any;
   }
+
+  it("reports explicit escalation limits and cost gates for status output", () => {
+    const plan = buildAdvisorBoardProfilePlan(ctx(), normalizeAdvisorConfig({}));
+    const text = budgetBoardEscalationPolicyText(plan.advisorConfig);
+
+    expect(text).toContain("profile: active");
+    expect(text).toContain("strong-model loop: off");
+    expect(text).toContain("triggers=user_request or material Board risk");
+    expect(text).toContain("cooldown=6 turns");
+    expect(text).toContain("maxCalls=3");
+    expect(text).toContain("maxCost=cheap");
+    expect(text).toContain("Denials/skips are explicit");
+  });
 
   it("resolves an explicit cheap-driver/strong-advisor plan without mutating global driver defaults", () => {
     const plan = buildAdvisorBoardProfilePlan(ctx(), normalizeAdvisorConfig({}));
