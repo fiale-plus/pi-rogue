@@ -13,9 +13,9 @@ describe("advisor completions", () => {
     expect(values).toEqual(["light", "strict", "off"]);
   });
 
-  it("offers board shadow controls", () => {
+  it("offers board shadow and head-of-board controls", () => {
     expect(advisorArgumentCompletions("")?.map((i) => i.value)).toContain("board");
-    expect(advisorArgumentCompletions("board ")?.map((i) => i.value)).toEqual(["status", "shadow", "off", "reset"]);
+    expect(advisorArgumentCompletions("board ")?.map((i) => i.value)).toEqual(["status", "shadow", "off", "reset", "head"]);
   });
 
 });

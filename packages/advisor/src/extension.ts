@@ -25,7 +25,16 @@ import { type TrajectoryFeatures } from "./binary-gate-eval.js";
 import { classifyIntent, classifyMode } from "./preflight-signals.js";
 import { findMissingArtifactReferences } from "./artifact-preflight.js";
 import { findMissingReviewArtifacts } from "./review-preflight.js";
+import { buildBoardLedger, decideBoardAction } from "./board.js";
 import {
+  callHeadOfBoardAdapter,
+  defaultHeadOfBoardConfig,
+  mergeHeadOfBoardRisks,
+  normalizeHeadOfBoardConfig,
+  type HeadOfBoardConfig,
+} from "./board-head.js";
+import {
+  boardEventsFromAdvisorState,
   defaultBoardShadowConfig,
   defaultBoardShadowState,
   formatBoardShadowStatus,
@@ -53,6 +62,8 @@ export interface AdvisorConfig {
   model?: string;
   /** Advisor Board phase-1 shadow/probation mode. */
   board: BoardShadowConfig;
+  /** Isolated Head-of-Board escalation adapter; disabled by default. */
+  headOfBoard: HeadOfBoardConfig;
 }
 
 const DEFAULT_CONFIG: AdvisorConfig = {
@@ -61,6 +72,7 @@ const DEFAULT_CONFIG: AdvisorConfig = {
   checkins: "off",
   checkinIntervalMinutes: 30,
   board: defaultBoardShadowConfig(),
+  headOfBoard: defaultHeadOfBoardConfig(),
 };
 
 const CONFIG_PATH = featureFile("advisor", "config.json");
@@ -126,6 +138,12 @@ interface SessionState {
   rateLimit?: AdvisorRateLimitState;
   advisorLoop?: AdvisorLoopState;
   board?: BoardShadowState;
+  headOfBoard?: {
+    calls: number;
+    lastAt?: string;
+    lastModel?: string;
+    lastSkipped?: string;
+  };
   advisorPauseUntilTurn?: number;
 }
 
@@ -191,6 +209,7 @@ function defaultState(): SessionState {
     workflow: {},
     advisorLoop: defaultAdvisorLoopState(),
     board: defaultBoardShadowState(),
+    headOfBoard: { calls: 0 },
   };
 }
 
@@ -224,6 +243,7 @@ export function normalizeAdvisorConfig(raw: Partial<AdvisorConfig> = {}): Adviso
     checkinStartedAt: Number.isFinite(startedAt) ? startedAt : undefined,
     model: raw.model || undefined,
     board: normalizeBoardShadowConfig(raw.board),
+    headOfBoard: normalizeHeadOfBoardConfig(raw.headOfBoard),
   };
 }
 
@@ -407,6 +427,12 @@ function loadStateFromPath(path: string): SessionState {
       lastObservedAt: typeof (raw.advisorLoop as { lastObservedAt?: unknown }).lastObservedAt === "string" ? (raw.advisorLoop as { lastObservedAt?: string }).lastObservedAt : undefined,
     } : defaultAdvisorLoopState(),
     board: normalizeBoardShadowState(raw.board),
+    headOfBoard: raw.headOfBoard && typeof raw.headOfBoard === "object" ? {
+      calls: Math.max(0, Math.floor(Number((raw.headOfBoard as { calls?: unknown }).calls) || 0)),
+      lastAt: typeof (raw.headOfBoard as { lastAt?: unknown }).lastAt === "string" ? (raw.headOfBoard as { lastAt?: string }).lastAt : undefined,
+      lastModel: typeof (raw.headOfBoard as { lastModel?: unknown }).lastModel === "string" ? (raw.headOfBoard as { lastModel?: string }).lastModel : undefined,
+      lastSkipped: typeof (raw.headOfBoard as { lastSkipped?: unknown }).lastSkipped === "string" ? (raw.headOfBoard as { lastSkipped?: string }).lastSkipped : undefined,
+    } : { calls: 0 },
     advisorPauseUntilTurn: Number.isFinite(pauseUntil) ? pauseUntil : undefined,
   }, path);
 }
@@ -510,7 +536,7 @@ function boardShadowArtifactContext(state: SessionState, result: ReturnType<type
       modelCalls: 0,
       liveWhispers: 0,
       specialistDispatches: 0,
-      seniorAdvisorEscalations: 0,
+      seniorAdvisorEscalations: state.headOfBoard?.calls ?? 0,
       steerActions: 0,
       mutatingToolAccess: 0,
       duplicateAdviceSignals: Math.max(0, repeatCount - 1),
@@ -539,6 +565,51 @@ function recordBoardShadowIfEnabled(ctx: any, cfg: AdvisorConfig, state: Session
     risks: result.risks,
     context: boardShadowArtifactContext(state, result),
   })}\n`);
+}
+
+function headOfBoardStatusText(cfg: AdvisorConfig, state: SessionState): string {
+  return [
+    `Advisor Head-of-Board: ${cfg.headOfBoard.mode}`,
+    `Calls: ${state.headOfBoard?.calls ?? 0}`,
+    state.headOfBoard?.lastAt ? `Last: ${state.headOfBoard.lastAt}` : "Last: never",
+    state.headOfBoard?.lastModel ? `Last model: ${state.headOfBoard.lastModel}` : undefined,
+    state.headOfBoard?.lastSkipped ? `Last skipped: ${state.headOfBoard.lastSkipped}` : undefined,
+    "Constraints: isolated, read-only, compact board ledger only, no mutating tools/raw transcript.",
+  ].filter(Boolean).join("\n");
+}
+
+async function runHeadOfBoardCommand(ctx: any, cfg: AdvisorConfig, state: SessionState, question: string): Promise<void> {
+  const events = boardEventsFromAdvisorState({
+    sessionId: sessionKey(ctx),
+    worktree: String(ctx?.cwd || ""),
+    turns: state.turns,
+    pendingFiles: state.board?.pendingFiles,
+    evidenceLedger: state.evidenceLedger,
+  });
+  const ledger = mergeHeadOfBoardRisks(buildBoardLedger(events), state.board?.lastRisks);
+  const decision = decideBoardAction(ledger);
+  state.headOfBoard = state.headOfBoard ?? { calls: 0 };
+  const result = await callHeadOfBoardAdapter(cfg.headOfBoard, { ledger, decision, question, reason: "user_request" }, async (systemPrompt, messages, options) => {
+    return completeWithHigherAdvisorModel(ctx, cfg, systemPrompt, messages, { ...options, allowRegularFallback: false, maxAttempts: 1 });
+  });
+  if (result.skipped) {
+    state.headOfBoard.lastSkipped = result.skipped;
+    saveState(state);
+    ctx.ui.notify(`Head-of-Board skipped: ${result.skipped}. Enable with /pi-rogue-advisor board head on.`, "info");
+    return;
+  }
+  if (!result.response) {
+    state.headOfBoard.lastSkipped = "no_response";
+    saveState(state);
+    ctx.ui.notify("Head-of-Board produced no response.", "warning");
+    return;
+  }
+  state.headOfBoard.calls += result.accounting.headOfBoardCalls;
+  state.headOfBoard.lastAt = new Date().toISOString();
+  state.headOfBoard.lastModel = result.response.model;
+  state.headOfBoard.lastSkipped = undefined;
+  saveState(state);
+  ctx.ui.notify(`Head-of-Board (${result.response.model}):\n${result.response.text}`, "info");
 }
 
 function loadCache(): Record<string, string> {
@@ -3360,8 +3431,10 @@ export function registerAdvisor(pi: ExtensionAPI): void {
     description: "Senior engineering advisor. Usage: /pi-rogue-advisor [|status|mode|model|review|pause|unpause|checkins|question]",
     getArgumentCompletions: (prefix: string) => advisorArgumentCompletions(prefix),
     handler: async (args, ctx) => {
-      const a = String(args ?? "").trim().toLowerCase();
-      const [cmd, ...rest] = a.split(/\s+/);
+      const rawArg = String(args ?? "").trim();
+      const a = rawArg.toLowerCase();
+      const rawParts = rawArg ? rawArg.split(/\s+/) : [];
+      const [cmd = "", ...rest] = a ? a.split(/\s+/) : [];
       const cfg = loadConfig();
       const state = loadState(ctx);
 
@@ -3450,6 +3523,7 @@ export function registerAdvisor(pi: ExtensionAPI): void {
           pause > 0 ? `  advisorPauseUntilTurn: ${pause} turn${pause === 1 ? "" : "s"} remaining` : "  advisorPauseUntilTurn: off",
           `  model: "${cfg.model || "auto"}" — optional override for higher/advanced advisor model`,
           `  board.mode: "${cfg.board.mode}" — off | shadow (phase-1 deterministic logging only)`,
+          `  headOfBoard.mode: "${cfg.headOfBoard.mode}" — off | enabled (isolated read-only adapter)`,
           "",
           "Router logs: evals/advisor-router.jsonl",
           "Run /pi-rogue-advisor <question> for immediate advice.",
@@ -3465,7 +3539,7 @@ export function registerAdvisor(pi: ExtensionAPI): void {
       if (cmd === "board") {
         const v = rest[0] || "status";
         if (v === "status") {
-          ctx.ui.notify(formatBoardShadowStatus(cfg.board, state.board), "info");
+          ctx.ui.notify(`${formatBoardShadowStatus(cfg.board, state.board)}\n\n${headOfBoardStatusText(cfg, state)}`, "info");
           return;
         }
         if (v === "shadow" || v === "on") {
@@ -3476,19 +3550,52 @@ export function registerAdvisor(pi: ExtensionAPI): void {
           return;
         }
         if (v === "off") {
-          const next: AdvisorConfig = { ...cfg, board: { mode: "off" } };
+          const next: AdvisorConfig = { ...cfg, board: { mode: "off" }, headOfBoard: { ...cfg.headOfBoard, mode: "off" } };
           saveConfig(next);
           setPiRogueStatus(ctx, next, state);
-          ctx.ui.notify("Advisor Board shadow mode disabled.", "info");
+          ctx.ui.notify("Advisor Board shadow mode and Head-of-Board adapter disabled.", "info");
           return;
         }
         if (v === "reset") {
           state.board = defaultBoardShadowState();
+          state.headOfBoard = { calls: 0 };
           saveState(state);
-          ctx.ui.notify("Advisor Board shadow counters reset.", "info");
+          ctx.ui.notify("Advisor Board shadow and Head-of-Board counters reset.", "info");
           return;
         }
-        ctx.ui.notify("Usage: /pi-rogue-advisor board status|shadow|off|reset", "error");
+        if (v === "head") {
+          const action = rest[1] || "status";
+          if (action === "status") {
+            ctx.ui.notify(headOfBoardStatusText(cfg, state), "info");
+            return;
+          }
+          if (action === "on" || action === "enable") {
+            const next: AdvisorConfig = { ...cfg, headOfBoard: { ...cfg.headOfBoard, mode: "enabled" } };
+            saveConfig(next);
+            setPiRogueStatus(ctx, next, state);
+            ctx.ui.notify("Advisor Head-of-Board adapter enabled. Calls are isolated, read-only, episodic, and use compact board ledger input only.", "info");
+            return;
+          }
+          if (action === "off" || action === "disable") {
+            const next: AdvisorConfig = { ...cfg, headOfBoard: { ...cfg.headOfBoard, mode: "off" } };
+            saveConfig(next);
+            setPiRogueStatus(ctx, next, state);
+            ctx.ui.notify("Advisor Head-of-Board adapter disabled.", "info");
+            return;
+          }
+          if (action === "ask") {
+            const question = rawParts.slice(3).join(" ").trim();
+            if (!question) {
+              ctx.ui.notify("Usage: /pi-rogue-advisor board head ask <decision question>", "error");
+              return;
+            }
+            await runHeadOfBoardCommand(ctx, cfg, state, question);
+            return;
+          }
+          ctx.ui.notify("Usage: /pi-rogue-advisor board head status|on|off|ask <decision question>", "error");
+          return;
+        }
+        ctx.ui.notify("Usage: /pi-rogue-advisor board status|shadow|off|reset|head status|head on|head off|head ask <question>", "error");
         return;
       }
       if (cmd === "checkins" || cmd === "checkin") {
