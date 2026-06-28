@@ -33,6 +33,16 @@ import {
   normalizeHeadOfBoardConfig,
   type HeadOfBoardConfig,
 } from "./board-head.js";
+import { loadBoardRoleBody, loadBoardRoleCatalog } from "./board-roles.js";
+import {
+  callReadOnlySpecialist,
+  defaultSpecialistCallState,
+  defaultSpecialistDispatchConfig,
+  normalizeSpecialistDispatchConfig,
+  suggestSpecialistRoles,
+  type SpecialistCallState,
+  type SpecialistDispatchConfig,
+} from "./board-specialist.js";
 import {
   boardEventsFromAdvisorState,
   defaultBoardShadowConfig,
@@ -64,6 +74,8 @@ export interface AdvisorConfig {
   board: BoardShadowConfig;
   /** Isolated Head-of-Board escalation adapter; disabled by default. */
   headOfBoard: HeadOfBoardConfig;
+  /** Read-only specialist dispatch policy; suggest-only by default. */
+  specialistDispatch: SpecialistDispatchConfig;
 }
 
 const DEFAULT_CONFIG: AdvisorConfig = {
@@ -73,6 +85,7 @@ const DEFAULT_CONFIG: AdvisorConfig = {
   checkinIntervalMinutes: 30,
   board: defaultBoardShadowConfig(),
   headOfBoard: defaultHeadOfBoardConfig(),
+  specialistDispatch: defaultSpecialistDispatchConfig(),
 };
 
 const CONFIG_PATH = featureFile("advisor", "config.json");
@@ -144,6 +157,12 @@ interface SessionState {
     lastModel?: string;
     lastSkipped?: string;
   };
+  specialistDispatch?: SpecialistCallState & {
+    lastAt?: string;
+    lastRole?: string;
+    lastNote?: string;
+    lastDenied?: string;
+  };
   advisorPauseUntilTurn?: number;
 }
 
@@ -210,6 +229,7 @@ function defaultState(): SessionState {
     advisorLoop: defaultAdvisorLoopState(),
     board: defaultBoardShadowState(),
     headOfBoard: { calls: 0 },
+    specialistDispatch: defaultSpecialistCallState(),
   };
 }
 
@@ -244,6 +264,7 @@ export function normalizeAdvisorConfig(raw: Partial<AdvisorConfig> = {}): Adviso
     model: raw.model || undefined,
     board: normalizeBoardShadowConfig(raw.board),
     headOfBoard: normalizeHeadOfBoardConfig(raw.headOfBoard),
+    specialistDispatch: normalizeSpecialistDispatchConfig(raw.specialistDispatch),
   };
 }
 
@@ -433,6 +454,14 @@ function loadStateFromPath(path: string): SessionState {
       lastModel: typeof (raw.headOfBoard as { lastModel?: unknown }).lastModel === "string" ? (raw.headOfBoard as { lastModel?: string }).lastModel : undefined,
       lastSkipped: typeof (raw.headOfBoard as { lastSkipped?: unknown }).lastSkipped === "string" ? (raw.headOfBoard as { lastSkipped?: string }).lastSkipped : undefined,
     } : { calls: 0 },
+    specialistDispatch: raw.specialistDispatch && typeof raw.specialistDispatch === "object" ? {
+      calls: Math.max(0, Math.floor(Number((raw.specialistDispatch as { calls?: unknown }).calls) || 0)),
+      byRole: (raw.specialistDispatch as { byRole?: SpecialistCallState["byRole"] }).byRole && typeof (raw.specialistDispatch as { byRole?: unknown }).byRole === "object" ? (raw.specialistDispatch as { byRole: SpecialistCallState["byRole"] }).byRole : {},
+      lastAt: typeof (raw.specialistDispatch as { lastAt?: unknown }).lastAt === "string" ? (raw.specialistDispatch as { lastAt?: string }).lastAt : undefined,
+      lastRole: typeof (raw.specialistDispatch as { lastRole?: unknown }).lastRole === "string" ? (raw.specialistDispatch as { lastRole?: string }).lastRole : undefined,
+      lastNote: typeof (raw.specialistDispatch as { lastNote?: unknown }).lastNote === "string" ? (raw.specialistDispatch as { lastNote?: string }).lastNote : undefined,
+      lastDenied: typeof (raw.specialistDispatch as { lastDenied?: unknown }).lastDenied === "string" ? (raw.specialistDispatch as { lastDenied?: string }).lastDenied : undefined,
+    } : defaultSpecialistCallState(),
     advisorPauseUntilTurn: Number.isFinite(pauseUntil) ? pauseUntil : undefined,
   }, path);
 }
@@ -578,7 +607,7 @@ function headOfBoardStatusText(cfg: AdvisorConfig, state: SessionState): string 
   ].filter(Boolean).join("\n");
 }
 
-async function runHeadOfBoardCommand(ctx: any, cfg: AdvisorConfig, state: SessionState, question: string): Promise<void> {
+function currentBoardLedger(ctx: any, state: SessionState) {
   const events = boardEventsFromAdvisorState({
     sessionId: sessionKey(ctx),
     worktree: String(ctx?.cwd || ""),
@@ -586,7 +615,11 @@ async function runHeadOfBoardCommand(ctx: any, cfg: AdvisorConfig, state: Sessio
     pendingFiles: state.board?.pendingFiles,
     evidenceLedger: state.evidenceLedger,
   });
-  const ledger = mergeHeadOfBoardRisks(buildBoardLedger(events), state.board?.lastRisks);
+  return mergeHeadOfBoardRisks(buildBoardLedger(events), state.board?.lastRisks);
+}
+
+async function runHeadOfBoardCommand(ctx: any, cfg: AdvisorConfig, state: SessionState, question: string): Promise<void> {
+  const ledger = currentBoardLedger(ctx, state);
   const decision = decideBoardAction(ledger);
   state.headOfBoard = state.headOfBoard ?? { calls: 0 };
   const result = await callHeadOfBoardAdapter(cfg.headOfBoard, { ledger, decision, question, reason: "user_request" }, async (systemPrompt, messages, options) => {
@@ -610,6 +643,73 @@ async function runHeadOfBoardCommand(ctx: any, cfg: AdvisorConfig, state: Sessio
   state.headOfBoard.lastSkipped = undefined;
   saveState(state);
   ctx.ui.notify(`Head-of-Board (${result.response.model}):\n${result.response.text}`, "info");
+}
+
+function specialistDispatchStatusText(cfg: AdvisorConfig, state: SessionState): string {
+  return [
+    `Advisor Specialists: ${cfg.specialistDispatch.mode}`,
+    `Calls: ${state.specialistDispatch?.calls ?? 0}`,
+    state.specialistDispatch?.lastRole ? `Last role: ${state.specialistDispatch.lastRole}` : "Last role: none",
+    state.specialistDispatch?.lastNote ? `Last note: ${truncate(sanitizeAdvisorText(state.specialistDispatch.lastNote), 240)}` : undefined,
+    state.specialistDispatch?.lastDenied ? `Last denied: ${state.specialistDispatch.lastDenied}` : undefined,
+    `Policy: cooldown=${cfg.specialistDispatch.cooldownTurns} turns, maxCalls=${cfg.specialistDispatch.maxCallsPerSession}, maxCost=${cfg.specialistDispatch.maxCostTier}`,
+    "Constraints: read-only specialists only, compact ledger input, strict JSON result schema.",
+  ].filter(Boolean).join("\n");
+}
+
+function specialistById(roleId: string) {
+  const catalog = loadBoardRoleCatalog();
+  if (catalog.diagnostics.length > 0) return { diagnostic: catalog.diagnostics[0]?.message ?? "catalog diagnostics" };
+  const summary = catalog.roles.find((role) => role.id === roleId);
+  if (!summary) return { diagnostic: `unknown specialist '${roleId}'` };
+  const loaded = loadBoardRoleBody(summary);
+  if (loaded.diagnostic) return { diagnostic: loaded.diagnostic.message };
+  return { role: loaded.role };
+}
+
+async function runSpecialistCommand(ctx: any, cfg: AdvisorConfig, state: SessionState, roleId: string, task: string): Promise<void> {
+  const found = specialistById(roleId);
+  if (!found.role) {
+    ctx.ui.notify(found.diagnostic ?? "Specialist unavailable.", "error");
+    return;
+  }
+  state.specialistDispatch = state.specialistDispatch ?? defaultSpecialistCallState();
+  const result = await callReadOnlySpecialist({
+    role: found.role,
+    ledger: currentBoardLedger(ctx, state),
+    task,
+    config: cfg.specialistDispatch,
+    state: state.specialistDispatch,
+    currentTurn: state.turns,
+    complete: async (systemPrompt, messages, options) => {
+      const resp = await completeWithHigherAdvisorModel(ctx, cfg, systemPrompt, messages, { maxTokens: options.maxTokens, reasoning: "medium", allowRegularFallback: false, maxAttempts: 1 });
+      if (!resp || resp.rateLimited) throw new Error(resp?.text || "specialist model unavailable");
+      return resp.text;
+    },
+  });
+  if ("denied" in result) {
+    state.specialistDispatch.lastDenied = result.denied;
+    saveState(state);
+    ctx.ui.notify(`Specialist dispatch denied: ${result.denied}`, "warning");
+    return;
+  }
+  if ("error" in result) {
+    state.specialistDispatch = { ...result.state, lastAt: new Date().toISOString(), lastRole: roleId, lastNote: undefined, lastDenied: result.error };
+    saveState(state);
+    ctx.ui.notify(`Specialist ${roleId} failed: ${result.error}`, "warning");
+    return;
+  }
+  state.specialistDispatch = { ...result.state, lastAt: new Date().toISOString(), lastRole: roleId, lastNote: result.note, lastDenied: undefined };
+  saveState(state);
+  ctx.ui.notify(`Specialist ${roleId}:\n${result.note}`, "info");
+}
+
+function suggestedSpecialistText(ctx: any, state: SessionState): string {
+  const catalog = loadBoardRoleCatalog();
+  if (catalog.diagnostics.length > 0) return `Role catalog diagnostics: ${catalog.diagnostics.map((item) => item.message).join("; ")}`;
+  const suggestions = suggestSpecialistRoles(catalog.roles, currentBoardLedger(ctx, state));
+  if (suggestions.length === 0) return "No specialist suggestion from current compact board ledger.";
+  return suggestions.map((role) => `${role.id} — ${role.summary}`).join("\n");
 }
 
 function loadCache(): Record<string, string> {
@@ -3524,6 +3624,7 @@ export function registerAdvisor(pi: ExtensionAPI): void {
           `  model: "${cfg.model || "auto"}" — optional override for higher/advanced advisor model`,
           `  board.mode: "${cfg.board.mode}" — off | shadow (phase-1 deterministic logging only)`,
           `  headOfBoard.mode: "${cfg.headOfBoard.mode}" — off | enabled (isolated read-only adapter)`,
+          `  specialistDispatch.mode: "${cfg.specialistDispatch.mode}" — off | suggest | auto (read-only specialists)`,
           "",
           "Router logs: evals/advisor-router.jsonl",
           "Run /pi-rogue-advisor <question> for immediate advice.",
@@ -3539,7 +3640,7 @@ export function registerAdvisor(pi: ExtensionAPI): void {
       if (cmd === "board") {
         const v = rest[0] || "status";
         if (v === "status") {
-          ctx.ui.notify(`${formatBoardShadowStatus(cfg.board, state.board)}\n\n${headOfBoardStatusText(cfg, state)}`, "info");
+          ctx.ui.notify(`${formatBoardShadowStatus(cfg.board, state.board)}\n\n${headOfBoardStatusText(cfg, state)}\n\n${specialistDispatchStatusText(cfg, state)}`, "info");
           return;
         }
         if (v === "shadow" || v === "on") {
@@ -3550,17 +3651,55 @@ export function registerAdvisor(pi: ExtensionAPI): void {
           return;
         }
         if (v === "off") {
-          const next: AdvisorConfig = { ...cfg, board: { mode: "off" }, headOfBoard: { ...cfg.headOfBoard, mode: "off" } };
+          const next: AdvisorConfig = { ...cfg, board: { mode: "off" }, headOfBoard: { ...cfg.headOfBoard, mode: "off" }, specialistDispatch: { ...cfg.specialistDispatch, mode: "off" } };
           saveConfig(next);
           setPiRogueStatus(ctx, next, state);
-          ctx.ui.notify("Advisor Board shadow mode and Head-of-Board adapter disabled.", "info");
+          ctx.ui.notify("Advisor Board shadow mode, Head-of-Board adapter, and specialist dispatch disabled.", "info");
           return;
         }
         if (v === "reset") {
           state.board = defaultBoardShadowState();
           state.headOfBoard = { calls: 0 };
+          state.specialistDispatch = defaultSpecialistCallState();
           saveState(state);
           ctx.ui.notify("Advisor Board shadow and Head-of-Board counters reset.", "info");
+          return;
+        }
+        if (v === "specialist" || v === "specialists") {
+          const action = rest[1] || "status";
+          if (action === "status") {
+            ctx.ui.notify(specialistDispatchStatusText(cfg, state), "info");
+            return;
+          }
+          if (action === "suggest") {
+            ctx.ui.notify(suggestedSpecialistText(ctx, state), "info");
+            return;
+          }
+          if (action === "off" || action === "disable") {
+            const next: AdvisorConfig = { ...cfg, specialistDispatch: { ...cfg.specialistDispatch, mode: "off" } };
+            saveConfig(next);
+            setPiRogueStatus(ctx, next, state);
+            ctx.ui.notify("Advisor specialist dispatch disabled.", "info");
+            return;
+          }
+          if (action === "suggest-mode" || action === "suggestions") {
+            const next: AdvisorConfig = { ...cfg, specialistDispatch: { ...cfg.specialistDispatch, mode: "suggest" } };
+            saveConfig(next);
+            setPiRogueStatus(ctx, next, state);
+            ctx.ui.notify("Advisor specialist dispatch set to suggest mode.", "info");
+            return;
+          }
+          if (action === "ask") {
+            const roleId = rest[2];
+            const task = rawParts.slice(4).join(" ").trim();
+            if (!roleId || !task) {
+              ctx.ui.notify("Usage: /pi-rogue-advisor board specialist ask <role-id> <task>", "error");
+              return;
+            }
+            await runSpecialistCommand(ctx, cfg, state, roleId, task);
+            return;
+          }
+          ctx.ui.notify("Usage: /pi-rogue-advisor board specialist status|suggest|suggest-mode|off|ask <role-id> <task>", "error");
           return;
         }
         if (v === "head") {
@@ -3595,7 +3734,7 @@ export function registerAdvisor(pi: ExtensionAPI): void {
           ctx.ui.notify("Usage: /pi-rogue-advisor board head status|on|off|ask <decision question>", "error");
           return;
         }
-        ctx.ui.notify("Usage: /pi-rogue-advisor board status|shadow|off|reset|head status|head on|head off|head ask <question>", "error");
+        ctx.ui.notify("Usage: /pi-rogue-advisor board status|shadow|off|reset|head status|head on|head off|head ask <question>|specialist status|specialist suggest|specialist ask <role-id> <task>", "error");
         return;
       }
       if (cmd === "checkins" || cmd === "checkin") {

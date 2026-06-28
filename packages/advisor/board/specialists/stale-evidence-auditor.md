@@ -3,7 +3,7 @@ id: stale-evidence-auditor
 kind: specialist
 version: 1
 enabledByDefault: true
-callableBy: [navigator, head-of-board]
+callableBy: [codriver, navigator, head-of-board]
 costTier: cheap
 allowedTools: [read, context_lookup]
 outputSchema: boardFinding.v1

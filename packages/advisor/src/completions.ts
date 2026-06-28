@@ -48,7 +48,7 @@ const advisorNested: Record<string, Array<[string, string?]>> = {
   mode: [["auto"], ["manual"], ["off"]],
   review: [["light"], ["strict"], ["off"]],
   model: [["auto"], ["openai-codex/gpt-5.5"], ["anthropic/claude-opus-4-6"]],
-  board: [["status"], ["shadow"], ["off"], ["reset"], ["head"]],
+  board: [["status"], ["shadow"], ["off"], ["reset"], ["head"], ["specialist"]],
 };
 
 const piRogueTopLevel: Array<[string, string?]> = [
