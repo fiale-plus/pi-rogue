@@ -20,7 +20,7 @@ describe("advisor completions", () => {
 
   it("offers board shadow, head-of-board, and specialist controls", () => {
     expect(advisorArgumentCompletions("")?.map((i) => i.value)).toContain("board");
-    expect(advisorArgumentCompletions("board ")?.map((i) => i.value)).toEqual(["status", "shadow", "off", "reset", "head", "specialist", "discover-specialists"]);
+    expect(advisorArgumentCompletions("board ")?.map((i) => i.value)).toEqual(["status", "why", "report", "shadow", "off", "reset", "head", "specialist", "discover-specialists"]);
   });
 
   it("offers personal specialist discovery controls", () => {
