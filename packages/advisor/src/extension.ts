@@ -27,6 +27,7 @@ import { findMissingArtifactReferences } from "./artifact-preflight.js";
 import { findMissingReviewArtifacts } from "./review-preflight.js";
 import { buildBoardLedger, decideBoardAction } from "./board.js";
 import { appendBoardFlightRecord, buildBoardFlightRecord } from "./board-flight-recorder.js";
+import { boardTelemetryPath } from "./board-telemetry.js";
 import { formatBoardFlightWhy, formatBoardFlightReport, formatBoardFlightStatus, loadBoardFlightRecords } from "./board-flight-ux.js";
 import {
   callHeadOfBoardAdapter,
@@ -631,6 +632,9 @@ function boardShadowArtifactContext(state: SessionState, result: ReturnType<type
 
 function recordBoardShadowIfEnabled(ctx: any, cfg: AdvisorConfig, state: SessionState, source: string, toolResults?: any[]): void {
   if (cfg.board.mode !== "shadow") return;
+  const shadowPath = boardTelemetryPath(ctx, "board-shadow.jsonl");
+  const flightPath = boardTelemetryPath(ctx, "board-flight.jsonl");
+  if (!shadowPath || !flightPath) return;
   const started = Date.now();
   const result = runBoardShadowDecision({
     sessionId: sessionKey(ctx),
@@ -654,7 +658,7 @@ function recordBoardShadowIfEnabled(ctx: any, cfg: AdvisorConfig, state: Session
     estimatedOutputTokens: 0,
     estimatedCostUsd: 0,
   });
-  appendText(join(advisorSessionDir(ctx), "board-shadow.jsonl"), `${JSON.stringify({
+  appendText(shadowPath, `${JSON.stringify({
     schema: "pi-rogue.advisor-board.shadow.v1",
     at: result.state.lastAt,
     source,
@@ -663,7 +667,7 @@ function recordBoardShadowIfEnabled(ctx: any, cfg: AdvisorConfig, state: Session
     risks: result.risks,
     context: boardShadowArtifactContext(state, result),
   })}\n`);
-  appendBoardFlightRecord(join(advisorSessionDir(ctx), "board-flight.jsonl"), flight);
+  appendBoardFlightRecord(flightPath, flight);
 }
 
 function headOfBoardStatusText(cfg: AdvisorConfig, state: SessionState): string {
@@ -3911,20 +3915,20 @@ export function registerAdvisor(pi: ExtensionAPI): void {
       if (cmd === "board") {
         const v = rest[0] || "status";
         if (v === "status") {
-          const flightPath = join(advisorSessionDir(ctx), "board-flight.jsonl");
-          const flightRecords = loadBoardFlightRecords(flightPath, 20);
+          const flightPath = boardTelemetryPath(ctx, "board-flight.jsonl");
+          const flightRecords = flightPath ? loadBoardFlightRecords(flightPath, 20) : [];
           ctx.ui.notify(`${formatBoardShadowStatus(cfg.board, state.board)}\n\n${formatBoardFlightStatus(flightRecords, state.board)}\n\n${headOfBoardStatusText(cfg, state)}\n\n${specialistDispatchStatusText(cfg, state)}${cfg.profile === BUDGET_BOARD_PROFILE_ID ? `\n\n${budgetBoardEscalationPolicyText(cfg)}` : ""}`, "info");
           return;
         }
         if (v === "why") {
-          const flightPath = join(advisorSessionDir(ctx), "board-flight.jsonl");
-          const flightRecords = loadBoardFlightRecords(flightPath, 20);
+          const flightPath = boardTelemetryPath(ctx, "board-flight.jsonl");
+          const flightRecords = flightPath ? loadBoardFlightRecords(flightPath, 20) : [];
           ctx.ui.notify(formatBoardFlightWhy(flightRecords[0], state.board), "info");
           return;
         }
         if (v === "report") {
-          const flightPath = join(advisorSessionDir(ctx), "board-flight.jsonl");
-          const flightRecords = loadBoardFlightRecords(flightPath, 20);
+          const flightPath = boardTelemetryPath(ctx, "board-flight.jsonl");
+          const flightRecords = flightPath ? loadBoardFlightRecords(flightPath, 20) : [];
           ctx.ui.notify(formatBoardFlightReport(flightRecords, state.board), "info");
           return;
         }
