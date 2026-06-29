@@ -3917,7 +3917,7 @@ export function registerAdvisor(pi: ExtensionAPI): void {
         if (v === "status") {
           const flightPath = boardTelemetryPath(ctx, "board-flight.jsonl");
           const flightRecords = flightPath ? loadBoardFlightRecords(flightPath, 20) : [];
-          ctx.ui.notify(`${formatBoardShadowStatus(cfg.board, state.board)}\n\n${formatBoardFlightStatus(flightRecords, state.board)}\n\n${headOfBoardStatusText(cfg, state)}\n\n${specialistDispatchStatusText(cfg, state)}${cfg.profile === BUDGET_BOARD_PROFILE_ID ? `\n\n${budgetBoardEscalationPolicyText(cfg)}` : ""}`, "info");
+          ctx.ui.notify(`${formatBoardShadowStatus(cfg.board, state.board)}\n\n${formatBoardFlightStatus(flightRecords, state.board, { telemetryPath: flightPath })}\n\n${headOfBoardStatusText(cfg, state)}\n\n${specialistDispatchStatusText(cfg, state)}${cfg.profile === BUDGET_BOARD_PROFILE_ID ? `\n\n${budgetBoardEscalationPolicyText(cfg)}` : ""}`, "info");
           return;
         }
         if (v === "why") {
@@ -3929,7 +3929,7 @@ export function registerAdvisor(pi: ExtensionAPI): void {
         if (v === "report") {
           const flightPath = boardTelemetryPath(ctx, "board-flight.jsonl");
           const flightRecords = flightPath ? loadBoardFlightRecords(flightPath, 20) : [];
-          ctx.ui.notify(formatBoardFlightReport(flightRecords, state.board), "info");
+          ctx.ui.notify(formatBoardFlightReport(flightRecords, state.board, { telemetryPath: flightPath }), "info");
           return;
         }
         if (v === "shadow" || v === "on") {
