@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { buildBoardLedger, decideBoardAction, type BoardDecision, type BoardEvent, type BoardRisk } from "./board.js";
 import { defaultBoardRiskLifecycleState, normalizeBoardRiskLifecycleState, updateBoardRiskLifecycle, type BoardRiskLifecycleState } from "./board-risk-lifecycle.js";
 
@@ -25,6 +26,15 @@ export interface BoardShadowState {
   lastSuppressedRiskIds: string[];
   pendingFiles: string[];
   riskLifecycle: BoardRiskLifecycleState;
+  lastTelemetryFingerprint?: string;
+  telemetrySuppressedCount: number;
+}
+
+export interface BoardTelemetryWritePlan {
+  write: boolean;
+  fingerprint: string;
+  suppressedCount: number;
+  reason?: "same-ledger-update";
 }
 
 type AdvisorEvidence = {
@@ -91,6 +101,7 @@ export function defaultBoardShadowState(): BoardShadowState {
     lastSuppressedRiskIds: [],
     pendingFiles: [],
     riskLifecycle: defaultBoardRiskLifecycleState(),
+    telemetrySuppressedCount: 0,
   };
 }
 
@@ -129,6 +140,8 @@ export function normalizeBoardShadowState(raw: unknown): BoardShadowState {
     lastSuppressedRiskIds: Array.isArray((record as { lastSuppressedRiskIds?: unknown }).lastSuppressedRiskIds) ? (record as { lastSuppressedRiskIds: unknown[] }).lastSuppressedRiskIds.map(String).slice(-16) : [],
     pendingFiles: Array.isArray((record as { pendingFiles?: unknown }).pendingFiles) ? (record as { pendingFiles: unknown[] }).pendingFiles.map(String).slice(-16) : [],
     riskLifecycle: normalizeBoardRiskLifecycleState((record as { riskLifecycle?: unknown }).riskLifecycle),
+    lastTelemetryFingerprint: typeof (record as { lastTelemetryFingerprint?: unknown }).lastTelemetryFingerprint === "string" ? (record as { lastTelemetryFingerprint: string }).lastTelemetryFingerprint : undefined,
+    telemetrySuppressedCount: finiteCount((record as { telemetrySuppressedCount?: unknown }).telemetrySuppressedCount),
   };
 }
 
@@ -366,6 +379,53 @@ function pendingFilesAfterEvents(events: BoardEvent[]): string[] {
     }
   }
   return [...pending].slice(-16);
+}
+
+function stableJson(value: unknown): string {
+  if (value === null || typeof value !== "object") return JSON.stringify(value);
+  if (Array.isArray(value)) return `[${value.map(stableJson).join(",")}]`;
+  const entries = Object.entries(value as Record<string, unknown>).sort(([a], [b]) => a.localeCompare(b));
+  return `{${entries.map(([key, nested]) => `${JSON.stringify(key)}:${stableJson(nested)}`).join(",")}}`;
+}
+
+function digest(value: unknown): string {
+  return createHash("sha256").update(stableJson(value)).digest("hex").slice(0, 24);
+}
+
+export function boardTelemetryFingerprint(decision: BoardDecision, risks: BoardRisk[]): string {
+  return digest({
+    action: decision.action,
+    severity: decision.action === "would_whisper" ? decision.severity : undefined,
+    riskIds: risks.map((risk) => risk.id).sort(),
+    risks: [...risks].sort((a, b) => a.id.localeCompare(b.id)).map((risk) => ({
+      id: risk.id,
+      type: risk.type,
+      severity: risk.severity,
+      evidence: risk.evidence,
+      evidencePointers: [...risk.evidencePointers].sort(),
+    })),
+  });
+}
+
+export function planBoardTelemetryWrite(previous: BoardShadowState | undefined, decision: BoardDecision, risks: BoardRisk[]): BoardTelemetryWritePlan {
+  const fingerprint = boardTelemetryFingerprint(decision, risks);
+  const repeatedLedgerUpdate = decision.action === "ledger_update" && previous?.lastTelemetryFingerprint === fingerprint;
+  if (repeatedLedgerUpdate) {
+    return {
+      write: false,
+      fingerprint,
+      suppressedCount: (previous?.telemetrySuppressedCount ?? 0) + 1,
+      reason: "same-ledger-update",
+    };
+  }
+  return { write: true, fingerprint, suppressedCount: 0 };
+}
+
+export function applyBoardTelemetryWritePlan(state: BoardShadowState, plan: BoardTelemetryWritePlan): BoardShadowState {
+  const next = structuredClone(state);
+  next.lastTelemetryFingerprint = plan.fingerprint;
+  next.telemetrySuppressedCount = plan.suppressedCount;
+  return next;
 }
 
 export function updateBoardShadowState(previous: BoardShadowState | undefined, decision: BoardDecision, risks: BoardRisk[], now = new Date(), pendingFiles?: string[], riskLifecycle?: BoardRiskLifecycleState, suppressedRiskIds?: string[]): BoardShadowState {

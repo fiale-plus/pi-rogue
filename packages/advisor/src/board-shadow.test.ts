@@ -1,9 +1,11 @@
 import { describe, expect, it } from "vitest";
 import {
+  applyBoardTelemetryWritePlan,
   boardEventsFromAdvisorState,
   defaultBoardShadowState,
   formatBoardShadowStatus,
   normalizeBoardShadowConfig,
+  planBoardTelemetryWrite,
   runBoardShadowDecision,
   updateBoardShadowState,
   type BoardShadowConfig,
@@ -190,5 +192,46 @@ describe("board shadow", () => {
     expect(state.counters).toMatchObject({ runs: 1, ledgerUpdate: 1, byRisk: { no_progress: 1 } });
     expect(formatBoardShadowStatus(config, state)).toContain("Board shadow: shadow");
     expect(formatBoardShadowStatus(config, state)).toContain("no model calls");
+  });
+
+  it("suppresses writer repeats for identical ledger updates", () => {
+    const evidenceLedger = [
+      { kind: "validation" as const, command: "npm test", result: "fail" as const, exitCode: 1, timestamp: "2026-06-27T00:00:00Z" },
+      { kind: "validation" as const, command: "npm test", result: "pass" as const, exitCode: 0, timestamp: "2026-06-27T00:01:00Z" },
+    ];
+    const first = runBoardShadowDecision({ turns: 12, evidenceLedger });
+    const firstPlan = planBoardTelemetryWrite(undefined, first.decision, first.risks);
+    const firstWrittenState = applyBoardTelemetryWritePlan(first.state, firstPlan);
+    const second = runBoardShadowDecision({ turns: 13, evidenceLedger }, firstWrittenState);
+    const secondPlan = planBoardTelemetryWrite(firstWrittenState, second.decision, second.risks);
+    const secondWrittenState = applyBoardTelemetryWritePlan(second.state, secondPlan);
+    const third = runBoardShadowDecision({ turns: 14, evidenceLedger }, secondWrittenState);
+    const thirdPlan = planBoardTelemetryWrite(secondWrittenState, third.decision, third.risks);
+
+    expect(first.decision.action).toBe("would_whisper");
+    expect(firstPlan.write).toBe(true);
+    expect(second.decision.action).toBe("ledger_update");
+    expect(secondPlan.write).toBe(true);
+    expect(third.decision.action).toBe("ledger_update");
+    expect(third.risks.map((risk) => risk.type)).toEqual(["stale_evidence"]);
+    expect(thirdPlan).toMatchObject({ write: false, reason: "same-ledger-update", suppressedCount: 1 });
+  });
+
+  it("still writes changed ledger updates after a suppressed repeat", () => {
+    const risk = {
+      id: "r1",
+      type: "no_progress" as const,
+      severity: "note" as const,
+      evidence: "stalled",
+      evidencePointers: ["turn:6"],
+    };
+    const first = updateBoardShadowState(defaultBoardShadowState(), { action: "ledger_update", riskIds: ["r1"] }, [risk]);
+    const firstPlan = planBoardTelemetryWrite(undefined, { action: "ledger_update", riskIds: ["r1"] }, [risk]);
+    const firstWrittenState = applyBoardTelemetryWritePlan(first, firstPlan);
+    const repeatPlan = planBoardTelemetryWrite(firstWrittenState, { action: "ledger_update", riskIds: ["r1"] }, [risk]);
+    const changedPlan = planBoardTelemetryWrite(applyBoardTelemetryWritePlan(firstWrittenState, repeatPlan), { action: "ledger_update", riskIds: ["r2"] }, [{ ...risk, id: "r2", evidencePointers: ["turn:7"] }]);
+
+    expect(repeatPlan.write).toBe(false);
+    expect(changedPlan.write).toBe(true);
   });
 });

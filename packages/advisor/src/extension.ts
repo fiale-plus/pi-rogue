@@ -48,12 +48,14 @@ import {
   type SpecialistDispatchConfig,
 } from "./board-specialist.js";
 import {
+  applyBoardTelemetryWritePlan,
   boardEventsFromAdvisorState,
   defaultBoardShadowConfig,
   defaultBoardShadowState,
   formatBoardShadowStatus,
   normalizeBoardShadowConfig,
   normalizeBoardShadowState,
+  planBoardTelemetryWrite,
   runBoardShadowDecision,
   type BoardShadowConfig,
   type BoardShadowState,
@@ -636,15 +638,18 @@ function recordBoardShadowIfEnabled(ctx: any, cfg: AdvisorConfig, state: Session
   const flightPath = boardTelemetryPath(ctx, "board-flight.jsonl");
   if (!shadowPath || !flightPath) return;
   const started = Date.now();
+  const previousBoard = state.board;
   const result = runBoardShadowDecision({
     sessionId: sessionKey(ctx),
     worktree: String(ctx?.cwd || ""),
     turns: state.turns,
     evidenceLedger: state.evidenceLedger,
     toolResults,
-  }, state.board);
+  }, previousBoard);
   const latencyMs = Math.max(0, Date.now() - started);
-  state.board = result.state;
+  const writePlan = planBoardTelemetryWrite(previousBoard, result.decision, result.risks);
+  state.board = applyBoardTelemetryWritePlan(result.state, writePlan);
+  if (!writePlan.write) return;
   const ledger = buildBoardLedger(result.events);
   const flight = buildBoardFlightRecord({
     ledger,
