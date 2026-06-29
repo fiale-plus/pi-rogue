@@ -1,4 +1,5 @@
 import { buildBoardLedger, decideBoardAction, type BoardDecision, type BoardEvent, type BoardRisk } from "./board.js";
+import { defaultBoardRiskLifecycleState, normalizeBoardRiskLifecycleState, updateBoardRiskLifecycle, type BoardRiskLifecycleState } from "./board-risk-lifecycle.js";
 
 export type BoardShadowMode = "off" | "shadow";
 
@@ -21,7 +22,9 @@ export interface BoardShadowState {
   lastDecision?: BoardDecision;
   lastRiskIds: string[];
   lastRisks: BoardRisk[];
+  lastSuppressedRiskIds: string[];
   pendingFiles: string[];
+  riskLifecycle: BoardRiskLifecycleState;
 }
 
 type AdvisorEvidence = {
@@ -85,7 +88,9 @@ export function defaultBoardShadowState(): BoardShadowState {
     },
     lastRiskIds: [],
     lastRisks: [],
+    lastSuppressedRiskIds: [],
     pendingFiles: [],
+    riskLifecycle: defaultBoardRiskLifecycleState(),
   };
 }
 
@@ -121,7 +126,9 @@ export function normalizeBoardShadowState(raw: unknown): BoardShadowState {
     lastDecision: record.lastDecision,
     lastRiskIds: Array.isArray(record.lastRiskIds) ? record.lastRiskIds.map(String).slice(-16) : [],
     lastRisks: Array.isArray(record.lastRisks) ? record.lastRisks.slice(-8) : [],
+    lastSuppressedRiskIds: Array.isArray((record as { lastSuppressedRiskIds?: unknown }).lastSuppressedRiskIds) ? (record as { lastSuppressedRiskIds: unknown[] }).lastSuppressedRiskIds.map(String).slice(-16) : [],
     pendingFiles: Array.isArray((record as { pendingFiles?: unknown }).pendingFiles) ? (record as { pendingFiles: unknown[] }).pendingFiles.map(String).slice(-16) : [],
+    riskLifecycle: normalizeBoardRiskLifecycleState((record as { riskLifecycle?: unknown }).riskLifecycle),
   };
 }
 
@@ -361,7 +368,7 @@ function pendingFilesAfterEvents(events: BoardEvent[]): string[] {
   return [...pending].slice(-16);
 }
 
-export function updateBoardShadowState(previous: BoardShadowState | undefined, decision: BoardDecision, risks: BoardRisk[], now = new Date(), pendingFiles?: string[]): BoardShadowState {
+export function updateBoardShadowState(previous: BoardShadowState | undefined, decision: BoardDecision, risks: BoardRisk[], now = new Date(), pendingFiles?: string[], riskLifecycle?: BoardRiskLifecycleState, suppressedRiskIds?: string[]): BoardShadowState {
   const next = previous ? structuredClone(previous) : defaultBoardShadowState();
   next.pendingFiles = pendingFiles ?? next.pendingFiles ?? [];
   next.counters.runs += 1;
@@ -376,14 +383,24 @@ export function updateBoardShadowState(previous: BoardShadowState | undefined, d
   next.lastDecision = decision;
   next.lastRiskIds = risks.map((risk) => risk.id);
   next.lastRisks = risks.slice(0, 8);
+  next.lastSuppressedRiskIds = suppressedRiskIds ?? next.lastSuppressedRiskIds ?? [];
+  next.riskLifecycle = riskLifecycle ?? next.riskLifecycle ?? defaultBoardRiskLifecycleState();
   return next;
 }
 
 export function runBoardShadowDecision(input: AdvisorBoardStateInput, previous?: BoardShadowState, now = new Date()): { events: BoardEvent[]; risks: BoardRisk[]; decision: BoardDecision; state: BoardShadowState } {
   const events = boardEventsFromAdvisorState({ ...input, pendingFiles: input.pendingFiles ?? previous?.pendingFiles });
   const ledger = buildBoardLedger(events);
-  const decision = decideBoardAction(ledger);
-  return { events, risks: ledger.risks, decision, state: updateBoardShadowState(previous, decision, ledger.risks, now, pendingFilesAfterEvents(events)) };
+  const lifecycle = updateBoardRiskLifecycle(previous?.riskLifecycle, ledger, ledger.risks);
+  let decision: BoardDecision;
+  if (lifecycle.visibleRisks.length > 0) {
+    decision = decideBoardAction({ ...ledger, risks: lifecycle.visibleRisks });
+  } else if (ledger.risks.length > 0) {
+    decision = { action: "ledger_update", riskIds: ledger.risks.map((risk) => risk.id) };
+  } else {
+    decision = { action: "silent" };
+  }
+  return { events, risks: ledger.risks, decision, state: updateBoardShadowState(previous, decision, ledger.risks, now, pendingFilesAfterEvents(events), lifecycle.state, lifecycle.suppressedRiskIds) };
 }
 
 export function formatBoardShadowStatus(config: BoardShadowConfig, state?: BoardShadowState): string {
