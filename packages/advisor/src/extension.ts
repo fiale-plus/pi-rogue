@@ -12,6 +12,7 @@ import { advisorArgumentCompletions, piRogueArgumentCompletions } from "./comple
 import {
   appendRouteLog,
   binaryGatePredict,
+  inspectBinaryGateArtifact,
   formatAdvisorDisplay,
   heuristicRoute,
   mergeReviewPolicy,
@@ -19,6 +20,7 @@ import {
   summarizeRoute,
   type AdvisorRouteDecision,
   type AdvisorRouteInput,
+  type BinaryGateArtifactStatus,
   type ReviewPolicy,
 } from "./router.js";
 import { type TrajectoryFeatures } from "./binary-gate-eval.js";
@@ -2537,12 +2539,61 @@ function formatSubsystemStatusRows(rows: SubsystemStatusRow[]): string {
   ].join("\n");
 }
 
+function advisorBinaryGatePathStatus(config: AdvisorConfig): { preflight: string; review: string } {
+  const normalized = normalizeAdvisorConfig(config);
+  const preflight = normalized.mode === "auto"
+    ? "active in auto preflight"
+    : normalized.mode === "manual"
+      ? "dormant (mode=manual)"
+      : "off (mode=off)";
+  const review = normalized.mode === "off"
+    ? "off (mode=off)"
+    : normalized.review === "off"
+      ? "dormant (review=off)"
+      : `active in ${normalized.review} review`;
+  return { preflight, review };
+}
+
+export function formatAdvisorBinaryGateStatus(config: AdvisorConfig, state: any, status: BinaryGateArtifactStatus = inspectBinaryGateArtifact()): string {
+  const paths = advisorBinaryGatePathStatus(config);
+  const route = state?.router?.review ?? state?.router?.preflight;
+  const latest = route?.source === "model"
+    ? `${route.phase}: ${route.reason || "model route"}${typeof route.confidence === "number" ? ` (confidence=${route.confidence.toFixed(2)})` : ""}`
+    : route
+      ? `no recent binary-gate route (latest source=${route.source || "unknown"})`
+      : "no advisor route yet";
+  const model = status.usable
+    ? `${status.kind}; features=${status.features ?? "unknown"}; source=${status.source}; stacked=${status.stacked ? "yes" : "no"}`
+    : status.available
+      ? `unusable (${status.source}: ${status.error || "invalid artifact"})`
+      : `unavailable (${status.error || "missing artifact"})`;
+  const canAct = status.usable && (paths.preflight.startsWith("active") || paths.review.startsWith("active"))
+    ? "yes"
+    : status.usable
+      ? "wired but dormant under current advisor config"
+      : "no";
+  return [
+    "Binary gate:",
+    `- model: ${model}`,
+    `- advisor preflight: ${paths.preflight}`,
+    `- advisor review: ${paths.review}`,
+    `- can act now: ${canAct}`,
+    `- latest route: ${latest}`,
+    `- artifact: ${status.path}`,
+  ].join("\n");
+}
+
 function piRogueSubsystemRows(config: AdvisorConfig, state: SessionState, ctx: any): SubsystemStatusRow[] {
   const normalized = normalizeAdvisorConfig(config);
   const pause = advisorPauseRemaining(state, state.turns);
   const pauseText = pause > 0 ? `pause=${pause} turn${pause === 1 ? "" : "s"}` : "pause=off";
 
   const checkinsText = checkinDescription(normalized).replace(/^checkins\s+/, "");
+  const gateArtifact = inspectBinaryGateArtifact();
+  const gatePaths = advisorBinaryGatePathStatus(normalized);
+  const gateSummary = gateArtifact.usable
+    ? (gatePaths.preflight.startsWith("active") || gatePaths.review.startsWith("active") ? "gate=active" : "gate=dormant")
+    : "gate=unavailable";
   const advisorRow: SubsystemStatusRow = {
     subsystem: "advisor",
     status: normalized.mode === "off" ? "off" : "on",
@@ -2553,6 +2604,7 @@ function piRogueSubsystemRows(config: AdvisorConfig, state: SessionState, ctx: a
       `turns=${state.turns}`,
       `calls=${state.advisorCalls}`,
       state.cacheHits > 0 ? `cache=${state.cacheHits}` : "",
+      gateSummary,
       state.checkin.lastAt ? `last=${new Date(state.checkin.lastAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}` : "last=never",
       pause > 0 ? pauseText : "",
     ].filter(Boolean).join(" · "),
@@ -3754,7 +3806,7 @@ export function registerAdvisor(pi: ExtensionAPI): void {
           "  /pi-rogue doctor              read-only setup checks",
           "",
           "Subsystems:",
-          "  /pi-rogue-advisor status|profile|mode|model|review|pause|unpause|checkins",
+          "  /pi-rogue-advisor status|gate|profile|mode|model|review|pause|unpause|checkins",
           "  /pi-rogue-router status||mode|profile|print|models|profiles|cycle|configure",
           "  /pi-rogue-fusion status|reload|configure",
           "  /pi-rogue-orchestration status|goal|loop|autoresearch|lab",
@@ -3780,7 +3832,7 @@ export function registerAdvisor(pi: ExtensionAPI): void {
 
   // ── /pi-rogue-advisor command ──────────────────────────────────────────
   pi.registerCommand("pi-rogue-advisor", {
-    description: "Senior engineering advisor. Usage: /pi-rogue-advisor [|status|profile|mode|model|review|pause|unpause|checkins|question]",
+    description: "Senior engineering advisor. Usage: /pi-rogue-advisor [|status|gate|profile|mode|model|review|pause|unpause|checkins|question]",
     getArgumentCompletions: (prefix: string) => advisorArgumentCompletions(prefix),
     handler: async (args, ctx) => {
       const rawArg = String(args ?? "").trim();
@@ -3801,6 +3853,7 @@ export function registerAdvisor(pi: ExtensionAPI): void {
           route ? `Router: ${summarizeRoute(route)}${route.safety ? " · safety" : ""}` : "",
           "",
           `Mode: ${cfg.mode} | Profile: ${cfg.profile ?? "off"} | Review: ${cfg.review} | Check-ins: ${checkinDescription(cfg)} (orchestration-managed) | Model: ${resolved?.label || cfg.model || "auto"}`,
+          formatAdvisorBinaryGateStatus(cfg, state),
           `Board shadow: ${cfg.board.mode} | Runs: ${state.board?.counters.runs ?? 0} | Last: ${state.board?.lastDecision?.action ?? "none"}`,
           pause > 0 ? `Advisor pause: ${pause} turn${pause === 1 ? "" : "s"} remaining` : "Advisor pause: off",
           loop?.repeatCount && loop.repeatCount > 1 ? `Advisor loop guard: ${loop.repeatCount} repeated outputs across changing context` : "Advisor loop guard: idle",
@@ -3874,6 +3927,15 @@ export function registerAdvisor(pi: ExtensionAPI): void {
         ctx.ui.notify("Usage: /pi-rogue-advisor profile status|budget-board|off", "error");
         return;
       }
+      if (cmd === "gate" || cmd === "binary-gate" || cmd === "binary") {
+        const action = rest[0] || "status";
+        if (action === "status" || action === "show") {
+          ctx.ui.notify(formatAdvisorBinaryGateStatus(cfg, state), "info");
+          return;
+        }
+        ctx.ui.notify("Usage: /pi-rogue-advisor gate status", "error");
+        return;
+      }
       if (cmd === "model") {
         const v = rest.join("/").trim();
         if (!v || !v.includes("/")) {
@@ -3898,6 +3960,7 @@ export function registerAdvisor(pi: ExtensionAPI): void {
           `  profile: "${cfg.profile ?? "off"}" — budget-board is explicit opt-in; off is built-in behavior`,
           `  mode: "${cfg.mode}" — auto (preflight+post+cache) | manual | off`,
           `  review: "${cfg.review}" — light (changes/errors) | strict (every 3) | off`,
+          formatAdvisorBinaryGateStatus(cfg, state).split("\n").map((line) => `  ${line}`).join("\n"),
           `  checkins: "${cfg.checkins}" — set by active /pi-rogue-orchestration goal or loop lifecycle`,
           `  checkinIntervalMinutes: ${cfg.checkinIntervalMinutes}`,
           pause > 0 ? `  advisorPauseUntilTurn: ${pause} turn${pause === 1 ? "" : "s"} remaining` : "  advisorPauseUntilTurn: off",

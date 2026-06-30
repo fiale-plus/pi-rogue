@@ -96,6 +96,19 @@ export interface StackedGateModel {
   thresholds?: GateThresholds;
 }
 
+export interface BinaryGateArtifactStatus {
+  path: string;
+  available: boolean;
+  usable: boolean;
+  source: "installed" | "bundled" | "seeded" | "missing" | "malformed" | "unsupported";
+  kind?: BinaryGateModel["kind"];
+  features?: number;
+  labels?: string[];
+  stacked?: boolean;
+  thresholds?: GateThresholds;
+  error?: string;
+}
+
 let _binaryGateCache: BinaryGateModel | null | undefined = undefined;
 
 function ensureBinaryGateSeeded(): void {
@@ -113,13 +126,72 @@ function ensureBinaryGateSeeded(): void {
   }
 }
 
+function isSupportedBinaryGateModel(value: unknown): value is BinaryGateModel {
+  if (!value || typeof value !== "object") return false;
+  const model = value as Partial<BinaryGateModel>;
+  return (model.kind === "binary-logreg-v1" || model.kind === "binary-logreg-v2") &&
+    Array.isArray(model.labels) &&
+    Array.isArray(model.features) &&
+    Array.isArray(model.idf) &&
+    Array.isArray(model.bias) &&
+    Array.isArray(model.weights);
+}
+
+export function binaryGateArtifactPath(): string {
+  return BINARY_GATE_PATH;
+}
+
+function inspectBinaryGateJson(path: string, source: BinaryGateArtifactStatus["source"]): BinaryGateArtifactStatus {
+  try {
+    const parsed = JSON.parse(readFileSync(path, "utf8")) as unknown;
+    if (!isSupportedBinaryGateModel(parsed)) {
+      const kind = parsed && typeof parsed === "object" ? String((parsed as { kind?: unknown }).kind ?? "unknown") : typeof parsed;
+      return { path, available: true, usable: false, source: "unsupported", error: `unsupported artifact kind/shape: ${kind}` };
+    }
+    return {
+      path,
+      available: true,
+      usable: true,
+      source,
+      kind: parsed.kind,
+      labels: parsed.labels.slice(0, 4),
+      features: parsed.features.length,
+      stacked: Boolean(parsed.stacked),
+      thresholds: parsed.thresholds,
+    };
+  } catch (error) {
+    return {
+      path,
+      available: true,
+      usable: false,
+      source: "malformed",
+      error: error instanceof Error ? error.message : String(error),
+    };
+  }
+}
+
+export function inspectBinaryGateArtifact(path: string = BINARY_GATE_PATH, seed = false): BinaryGateArtifactStatus {
+  const existedBeforeSeed = existsSync(path);
+  if (seed) ensureBinaryGateSeeded();
+  if (existsSync(path)) return inspectBinaryGateJson(path, seed && !existedBeforeSeed ? "seeded" : "installed");
+  // Read-only status should not materialize runtime files, but it should still
+  // report the bundled gate accurately because loadBinaryGate() can seed it
+  // before prediction. Inspect the package asset directly as a non-mutating
+  // fallback for the canonical runtime path.
+  if (!seed && path === BINARY_GATE_PATH && existsSync(BINARY_GATE_SOURCE_PATH)) {
+    return inspectBinaryGateJson(BINARY_GATE_SOURCE_PATH, "bundled");
+  }
+  return { path, available: false, usable: false, source: "missing", error: "artifact missing" };
+}
+
 function loadBinaryGate(): BinaryGateModel | null {
   if (_binaryGateCache !== undefined) return _binaryGateCache;
   try {
     ensureBinaryGateSeeded();
     if (!existsSync(BINARY_GATE_PATH)) return null;
-    _binaryGateCache = JSON.parse(readFileSync(BINARY_GATE_PATH, "utf8")) as BinaryGateModel;
-    if (_binaryGateCache.kind !== "binary-logreg-v1" && _binaryGateCache.kind !== "binary-logreg-v2") { _binaryGateCache = null; return null; }
+    const parsed = JSON.parse(readFileSync(BINARY_GATE_PATH, "utf8")) as unknown;
+    if (!isSupportedBinaryGateModel(parsed)) { _binaryGateCache = null; return null; }
+    _binaryGateCache = parsed;
     return _binaryGateCache;
   } catch { _binaryGateCache = null; return null; }
 }
