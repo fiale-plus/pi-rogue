@@ -75,6 +75,12 @@ export interface AdvisorProfileRestore {
   model?: string;
   /** Advisor model written by the profile; used to distinguish profile-owned vs user-changed model overrides. */
   profileModel?: string;
+  /** Active mode written by the profile; used to distinguish profile-owned vs user-changed mode. */
+  profileMode?: "auto" | "manual" | "off";
+  /** Active review setting written by the profile; used to distinguish profile-owned vs user-changed review. */
+  profileReview?: "light" | "strict" | "off";
+  /** Active check-in setting written by the profile; used to distinguish profile-owned vs user-changed check-ins. */
+  profileCheckins?: "mid-hour" | "off";
   board: BoardShadowConfig;
   headOfBoard: HeadOfBoardConfig;
   specialistDispatch: SpecialistDispatchConfig;
@@ -297,6 +303,9 @@ function normalizeProfileRestore(raw: unknown): AdvisorProfileRestore | undefine
     ),
     model: record.model || undefined,
     profileModel: record.profileModel || undefined,
+    profileMode: record.profileMode === "manual" || record.profileMode === "off" ? record.profileMode : record.profileMode === "auto" ? "auto" : undefined,
+    profileReview: record.profileReview === "strict" || record.profileReview === "off" ? record.profileReview : record.profileReview === "light" ? "light" : undefined,
+    profileCheckins: record.profileCheckins === "mid-hour" ? "mid-hour" : record.profileCheckins === "off" ? "off" : undefined,
     board: normalizeBoardShadowConfig(record.board),
     headOfBoard: normalizeHeadOfBoardConfig(record.headOfBoard),
     specialistDispatch: normalizeSpecialistDispatchConfig(record.specialistDispatch),
@@ -2693,6 +2702,7 @@ function piRogueCockpitText(config: AdvisorConfig, state: SessionState, _current
   const rows = piRogueSubsystemRows(config, state, ctx);
   return [
     "Pi-Rogue status",
+    `posture: ${activePostureText()}`,
     formatSubsystemStatusRows(rows),
     "",
     "Commands: /pi-rogue status · /pi-rogue-advisor|router|fusion|orchestration|context status",
@@ -2702,6 +2712,8 @@ function piRogueCockpitText(config: AdvisorConfig, state: SessionState, _current
 function piRogueRootDir(): string {
   return join(homedir(), ".pi", "agent", "pi-rogue");
 }
+
+export type PiRoguePostureId = "guarded";
 
 type PiRogueConfigureMode = "status" | "on";
 
@@ -2852,6 +2864,9 @@ export function buildAdvisorBoardProfilePlan(ctx: any, current: AdvisorConfig = 
     checkinIntervalMinutes: normalized.checkinIntervalMinutes,
     model: normalized.model,
     profileModel: advisorModel.startsWith("<") ? normalized.model : advisorModel,
+    profileMode: "manual",
+    profileReview: "off",
+    profileCheckins: "off",
     board: normalized.board,
     headOfBoard: normalized.headOfBoard,
     specialistDispatch: normalized.specialistDispatch,
@@ -2931,13 +2946,16 @@ export function disableAdvisorBoardProfile(current: AdvisorConfig): AdvisorConfi
   const profileHead = profileHeadOfBoardConfig();
   const profileSpecialists = profileSpecialistDispatchConfig();
   const currentModelIsProfileOwned = restore.profileModel !== undefined && normalized.model === restore.profileModel;
+  const profileMode = restore.profileMode ?? "manual";
+  const profileReview = restore.profileReview ?? "off";
+  const profileCheckins = restore.profileCheckins ?? "off";
   return normalizeAdvisorConfig({
     ...normalized,
     profile: undefined,
     profileRestore: undefined,
-    mode: normalized.mode !== "manual" ? normalized.mode : restore.mode,
-    review: normalized.review !== "off" ? normalized.review : restore.review,
-    checkins: normalized.checkins !== "off" ? normalized.checkins : restore.checkins,
+    mode: normalized.mode !== profileMode ? normalized.mode : restore.mode,
+    review: normalized.review !== profileReview ? normalized.review : restore.review,
+    checkins: normalized.checkins !== profileCheckins ? normalized.checkins : restore.checkins,
     checkinIntervalMinutes: normalized.checkinIntervalMinutes,
     model: currentModelIsProfileOwned ? restore.model : normalized.model,
     board: JSON.stringify(normalized.board) !== JSON.stringify(profileBoard) ? normalized.board : restore.board,
@@ -3013,6 +3031,201 @@ function upsertModelCards(path: string, cards: any[]): void {
   for (const card of existing) map.set(`${card.provider}/${card.modelId}`, card);
   for (const card of cards) map.set(`${card.provider}/${card.modelId}`, card);
   writeText(path, [...map.values()].map((card) => JSON.stringify(card)).join("\n") + "\n");
+}
+
+export interface PiRoguePosturePlan {
+  posture: PiRoguePostureId;
+  root: string;
+  advisorModel: string;
+  files: {
+    summary: string;
+    advisor: string;
+    router: string;
+    contextBrokerConfig: string;
+  };
+}
+
+export interface PiRoguePostureApplyResult {
+  posture: PiRoguePostureId;
+  files: PiRoguePosturePlan["files"];
+  advisor: AdvisorConfig;
+}
+
+export function parsePiRoguePosture(value: unknown): PiRoguePostureId | null {
+  return String(value ?? "").trim().toLowerCase() === "guarded" ? "guarded" : null;
+}
+
+function strongAdvisorForGuarded(ctx: any, current: AdvisorConfig): string {
+  const preferred = SOTA_CHAIN.map((item) => `${item.provider}/${item.model}`);
+  if (current.model && preferred.includes(current.model)) return current.model;
+  const available = availableTextModels(ctx);
+  return firstPreferredDetected(ctx, available, preferred) ?? current.model ?? "openai-codex/gpt-5.5";
+}
+
+export function buildPiRoguePosturePlan(ctx: any, postureValue: unknown): PiRoguePosturePlan {
+  const posture = parsePiRoguePosture(postureValue);
+  if (!posture) throw new Error(`unknown posture: ${String(postureValue ?? "") || "(empty)"}. Supported: guarded`);
+  const root = piRogueRootDir();
+  const current = loadConfig();
+  return {
+    posture,
+    root,
+    advisorModel: strongAdvisorForGuarded(ctx, current),
+    files: {
+      summary: join(root, "config.json"),
+      advisor: CONFIG_PATH,
+      router: join(root, "router", "config.json"),
+      contextBrokerConfig: join(root, "context-broker", "config.json"),
+    },
+  };
+}
+
+function guardedRouterProfiles(advisorModel: string): Record<string, any> {
+  const spark = "openai-codex/gpt-5.3-codex-spark";
+  const local = "llamacpp-qwen-unsloth/qwen3.6-35b-a3b-ud-q4-k-m";
+  const fusion = "fusion/opencode-go-qwen-deepseek-gpt55";
+  return {
+    "all-smart": { worker: advisorModel, smart: advisorModel, teacher: advisorModel, reviewer: advisorModel, explore: advisorModel, debug_diagnose: advisorModel, review: advisorModel, verify: advisorModel },
+    "spark-smart": { worker: spark, smart: advisorModel, teacher: advisorModel, reviewer: advisorModel, explore: spark, debug_diagnose: advisorModel, review: advisorModel, verify: spark },
+    "local-smart": { worker: local, smart: advisorModel, teacher: advisorModel, reviewer: advisorModel, explore: local, debug_diagnose: advisorModel, review: advisorModel, verify: local },
+    quick: { worker: spark, smart: spark, teacher: spark, reviewer: spark },
+    balanced: { worker: spark, smart: advisorModel, teacher: advisorModel, reviewer: advisorModel },
+    "fusion-smart": { worker: fusion, smart: fusion, teacher: fusion, reviewer: fusion, explore: fusion, debug_diagnose: fusion, review: fusion, verify: fusion },
+  };
+}
+
+export function applyPiRoguePosturePlan(plan: PiRoguePosturePlan): PiRoguePostureApplyResult {
+  const existingSummary = readJsonLoose(plan.files.summary);
+  const now = existingSummary?.posture === plan.posture && typeof existingSummary?.configuredAt === "string"
+    ? existingSummary.configuredAt
+    : new Date().toISOString();
+  const existingAdvisor = readJson<Partial<AdvisorConfig>>(plan.files.advisor, {});
+  const normalizedExistingAdvisor = normalizeAdvisorConfig(existingAdvisor);
+  const baseRestore: AdvisorProfileRestore = normalizedExistingAdvisor.profile === BUDGET_BOARD_PROFILE_ID && normalizedExistingAdvisor.profileRestore
+    ? normalizedExistingAdvisor.profileRestore
+    : {
+      mode: normalizedExistingAdvisor.mode,
+      review: normalizedExistingAdvisor.review,
+      checkins: normalizedExistingAdvisor.checkins,
+      checkinIntervalMinutes: normalizedExistingAdvisor.checkinIntervalMinutes,
+      model: normalizedExistingAdvisor.model,
+      board: normalizedExistingAdvisor.board,
+      headOfBoard: normalizedExistingAdvisor.headOfBoard,
+      specialistDispatch: normalizedExistingAdvisor.specialistDispatch,
+    };
+  const profileRestore: AdvisorProfileRestore = {
+    ...baseRestore,
+    profileModel: plan.advisorModel,
+    profileMode: "auto",
+    profileReview: "light",
+    profileCheckins: "off",
+  };
+  const advisor = normalizeAdvisorConfig({
+    ...existingAdvisor,
+    profile: BUDGET_BOARD_PROFILE_ID,
+    profileRestore,
+    mode: "auto",
+    review: "light",
+    checkins: "off",
+    model: plan.advisorModel,
+    board: { mode: "shadow" },
+    headOfBoard: profileHeadOfBoardConfig(),
+    specialistDispatch: profileSpecialistDispatchConfig(),
+  });
+  writeJson(plan.files.advisor, advisor);
+  writeJson(plan.files.summary, {
+    schema: "pi-rogue.config.v1",
+    posture: plan.posture,
+    configuredAt: now,
+    advisor: { model: plan.advisorModel },
+    context: { enabled: true, durable: true, store: join(plan.root, "context-broker", "artifacts.sqlite"), rewriteThresholdBytes: 2048 },
+    router: { enabled: false, mode: "auto_model", activeProfile: "spark-smart", config: plan.files.router },
+    fusion: { enabled: false, recipeId: "opencode-go-qwen-deepseek-gpt55", recipes: join(plan.root, "fusion", "recipes.json") },
+    storage: { root: plan.root },
+  });
+  writeJson(plan.files.router, {
+    enabled: false,
+    mode: "auto_model",
+    print: "off",
+    activeProfile: "spark-smart",
+    profileOrder: ["spark-smart", "local-smart", "balanced", "quick", "all-smart", "fusion-smart"],
+    profiles: guardedRouterProfiles(plan.advisorModel),
+  });
+  const existingContext = readJson<Record<string, unknown>>(plan.files.contextBrokerConfig, {});
+  const existingRewriteThreshold = typeof existingContext.rewriteThresholdBytes === "number"
+    ? existingContext.rewriteThresholdBytes
+    : typeof existingContext.rewrite_threshold_bytes === "number"
+      ? existingContext.rewrite_threshold_bytes
+      : 2048;
+  const existingLensesEnabled = typeof existingContext.contextLensesEnabled === "boolean"
+    ? existingContext.contextLensesEnabled
+    : typeof existingContext.context_lenses_enabled === "boolean"
+      ? existingContext.context_lenses_enabled
+      : true;
+  writeJson(plan.files.contextBrokerConfig, {
+    ...existingContext,
+    rewriteThresholdBytes: existingRewriteThreshold,
+    contextLensesEnabled: existingLensesEnabled,
+  });
+  return { posture: plan.posture, files: plan.files, advisor };
+}
+
+export function applyPiRoguePostureConfig(ctx: any, input: { posture?: unknown }): PiRoguePostureApplyResult {
+  return applyPiRoguePosturePlan(buildPiRoguePosturePlan(ctx, input?.posture));
+}
+
+function piRoguePostureText(result: PiRoguePostureApplyResult): string {
+  return [
+    `posture: ${result.posture}`,
+    "Applied guarded posture:",
+    `  advisor: mode=${result.advisor.mode}, review=${result.advisor.review}, model=${result.advisor.model ?? "auto"}`,
+    `  board: ${result.advisor.board.mode}; head=${result.advisor.headOfBoard.mode}; specialists=${result.advisor.specialistDispatch.mode}/${result.advisor.specialistDispatch.maxCostTier}/maxCalls=${result.advisor.specialistDispatch.maxCallsPerSession}`,
+    "  router: off; default profile=spark-smart",
+    "  fusion: off",
+    "  context: on",
+    "Verify: /pi-rogue status · /pi-rogue-advisor gate status",
+  ].join("\n");
+}
+
+export function isGuardedPostureConfig(summary: any, advisor: AdvisorConfig, router: any): boolean {
+  const cfg = normalizeAdvisorConfig(advisor);
+  return parsePiRoguePosture(summary?.posture) === "guarded" &&
+    cfg.profile === BUDGET_BOARD_PROFILE_ID &&
+    cfg.mode === "auto" &&
+    cfg.review === "light" &&
+    cfg.board.mode === "shadow" &&
+    cfg.headOfBoard.mode === "enabled" &&
+    cfg.specialistDispatch.mode === "suggest" &&
+    cfg.specialistDispatch.maxCostTier === "cheap" &&
+    cfg.specialistDispatch.maxCallsPerSession === 3 &&
+    summary?.router?.enabled === false &&
+    summary?.router?.activeProfile === "spark-smart" &&
+    summary?.fusion?.enabled === false &&
+    router?.enabled === false &&
+    router?.activeProfile === "spark-smart";
+}
+
+function activePostureText(): string {
+  const root = piRogueRootDir();
+  const summary = readJsonLoose(join(root, "config.json"));
+  const router = readJsonLoose(join(root, "router", "config.json")) ?? {};
+  return isGuardedPostureConfig(summary, loadConfig(), router) ? "guarded" : "custom";
+}
+
+export function parseCfgPostureArgs(args: unknown): PiRoguePostureId | null {
+  const raw = String(args ?? "").trim();
+  if (!raw) return null;
+  if (raw.startsWith("{")) {
+    try {
+      const parsed = JSON.parse(raw) as { posture?: unknown };
+      return parsePiRoguePosture(parsed.posture);
+    } catch {
+      return null;
+    }
+  }
+  const parts = raw.toLowerCase().split(/\s+/).filter(Boolean);
+  if (parts[0] === "posture") return parsePiRoguePosture(parts[1]);
+  return parsePiRoguePosture(parts[0]);
 }
 
 export function applyPiRogueConfigurePlan(plan: PiRogueConfigurePlan): void {
@@ -3606,7 +3819,26 @@ export function registerAdvisor(pi: ExtensionAPI): void {
     ctx.ui.setStatus("pi-rogue", undefined);
   });
 
-  // ── Tool ───────────────────────────────────────────────────────────────
+  // ── Tools ──────────────────────────────────────────────────────────────
+  pi.registerTool({
+    name: "cfg",
+    label: "Pi-Rogue Config",
+    description: "Apply compact Pi-Rogue configuration presets. Use { posture: \"guarded\" } to enable guarded posture.",
+    parameters: Type.Object({
+      posture: Type.Optional(Type.String({ description: "Supported: guarded" })),
+    }),
+    async execute(_id, params, _signal, onUpdate, ctx) {
+      const posture = parsePiRoguePosture(params?.posture);
+      if (!posture) {
+        return { content: [{ type: "text", text: "Unsupported cfg posture. Usage: { \"posture\": \"guarded\" }" }], details: { error: "unsupported_posture" } };
+      }
+      const result = applyPiRoguePostureConfig(ctx, { posture });
+      setPiRogueStatus(ctx, result.advisor, loadState(ctx));
+      onUpdate?.({ content: [{ type: "text", text: `Applied posture ${result.posture}` }], details: { posture: result.posture } });
+      return { content: [{ type: "text", text: piRoguePostureText(result) }], details: { posture: result.posture } };
+    },
+  });
+
   pi.registerTool({
     name: "advisor",
     label: "Advisor",
@@ -3804,6 +4036,7 @@ export function registerAdvisor(pi: ExtensionAPI): void {
           "Pi-Rogue commands:",
           "  /pi-rogue status              read-only status dashboard + aggregate setup",
           "  /pi-rogue doctor              read-only setup checks",
+          "  /cfg posture guarded          apply compact posture preset",
           "",
           "Subsystems:",
           "  /pi-rogue-advisor status|gate|profile|mode|model|review|pause|unpause|checkins",
@@ -3827,6 +4060,30 @@ export function registerAdvisor(pi: ExtensionAPI): void {
       }
 
       ctx.ui.notify("Usage: /pi-rogue status|help|doctor", "error");
+    },
+  });
+
+  // ── /cfg compact configuration command ────────────────────────────────
+  pi.registerCommand("cfg", {
+    description: "Compact Pi-Rogue config. Usage: /cfg posture guarded",
+    getArgumentCompletions: (prefix: string) => {
+      const q = prefix.trimStart().toLowerCase();
+      const values = q.startsWith("posture ") ? ["guarded"] : ["posture"];
+      return values.filter((value) => value.startsWith(q.split(/\s+/).pop() || "")).map((value) => ({ value, label: value }));
+    },
+    handler: async (args, ctx) => {
+      const posture = parseCfgPostureArgs(args);
+      if (!posture) {
+        ctx.ui.notify("Usage: /cfg posture guarded", "error");
+        return;
+      }
+      try {
+        const result = applyPiRoguePostureConfig(ctx, { posture });
+        setPiRogueStatus(ctx, result.advisor, loadState(ctx));
+        ctx.ui.notify(piRoguePostureText(result), "info");
+      } catch (error) {
+        ctx.ui.notify(error instanceof Error ? error.message : String(error), "error");
+      }
     },
   });
 

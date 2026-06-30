@@ -6,16 +6,20 @@ import { completeSimple } from "@earendil-works/pi-ai";
 import {
   applyAdvisorBoardProfilePlan,
   applyPiRogueConfigurePlan,
+  applyPiRoguePosturePlan,
   budgetBoardEscalationPolicyText,
   buildAdvisorBoardProfilePlan,
   buildAdvisorCheckinPrompt,
   buildPiRogueConfigurePlan,
+  buildPiRoguePosturePlan,
   disableAdvisorBoardProfile,
   completeWithHigherAdvisorModel,
   completeWithModelFallback,
   contentText,
   formatAdvisorBinaryGateStatus,
+  isGuardedPostureConfig,
   normalizeAdvisorConfig,
+  parseCfgPostureArgs,
   parseReviewPayload,
   sanitizeAdvisorText,
   shouldRunCheckin,
@@ -605,6 +609,224 @@ describe("advisor completion fallback behavior", () => {
   });
 });
 
+
+describe("Pi-Rogue posture presets", () => {
+  function withHome<T>(fn: (home: string) => T): T {
+    const oldHome = process.env.HOME;
+    const home = mkdtempSync(join(tmpdir(), "pi-rogue-posture-home-"));
+    process.env.HOME = home;
+    try {
+      return fn(home);
+    } finally {
+      if (oldHome === undefined) delete process.env.HOME;
+      else process.env.HOME = oldHome;
+      rmSync(home, { recursive: true, force: true });
+    }
+  }
+
+  it("parses slash and JSON posture inputs", () => {
+    expect(parseCfgPostureArgs("posture guarded")).toBe("guarded");
+    expect(parseCfgPostureArgs("guarded")).toBe("guarded");
+    expect(parseCfgPostureArgs('{"posture":"guarded"}')).toBe("guarded");
+    expect(parseCfgPostureArgs("posture wild")).toBeNull();
+    expect(parseCfgPostureArgs("{}")).toBeNull();
+  });
+
+  it("applies guarded posture idempotently through the shared backend", () => withHome((home) => {
+    const root = join(home, ".pi", "agent", "pi-rogue");
+    const plan = {
+      posture: "guarded" as const,
+      root,
+      advisorModel: "openai-codex/gpt-5.5",
+      files: {
+        summary: join(root, "config.json"),
+        advisor: join(root, "advisor", "config.json"),
+        router: join(root, "router", "config.json"),
+        contextBrokerConfig: join(root, "context-broker", "config.json"),
+      },
+    };
+
+    const first = applyPiRoguePosturePlan(plan);
+    const firstSummaryText = readFileSync(join(root, "config.json"), "utf8");
+    const second = applyPiRoguePosturePlan(plan);
+    const secondSummaryText = readFileSync(join(root, "config.json"), "utf8");
+    const summary = JSON.parse(secondSummaryText);
+    const advisor = JSON.parse(readFileSync(join(root, "advisor", "config.json"), "utf8"));
+    const router = JSON.parse(readFileSync(join(root, "router", "config.json"), "utf8"));
+    const contextConfig = JSON.parse(readFileSync(join(root, "context-broker", "config.json"), "utf8"));
+
+    expect(first.posture).toBe("guarded");
+    expect(second.posture).toBe("guarded");
+    expect(secondSummaryText).toBe(firstSummaryText);
+    expect(summary.posture).toBe("guarded");
+    expect(summary.router).toMatchObject({ enabled: false, activeProfile: "spark-smart" });
+    expect(summary.fusion).toMatchObject({ enabled: false });
+    expect(advisor).toMatchObject({ profile: "budget-board", mode: "auto", review: "light", model: "openai-codex/gpt-5.5", board: { mode: "shadow" } });
+    expect(advisor.profileRestore).toMatchObject({ mode: "auto", review: "light", checkins: "off", profileMode: "auto", profileReview: "light" });
+    expect(advisor.headOfBoard.mode).toBe("enabled");
+    expect(advisor.specialistDispatch).toMatchObject({ mode: "suggest", maxCostTier: "cheap", maxCallsPerSession: 3 });
+    expect(router).toMatchObject({ enabled: false, mode: "auto_model", activeProfile: "spark-smart" });
+    expect(router.profileOrder[0]).toBe("spark-smart");
+    expect(contextConfig.rewriteThresholdBytes).toBe(2048);
+    expect(contextConfig.contextLensesEnabled).toBe(true);
+  }));
+
+  it("preserves prior advisor settings for profile off restoration", () => withHome((home) => {
+    const root = join(home, ".pi", "agent", "pi-rogue");
+    const plan = {
+      posture: "guarded" as const,
+      root,
+      advisorModel: "openai-codex/gpt-5.5",
+      files: {
+        summary: join(root, "config.json"),
+        advisor: join(root, "advisor", "config.json"),
+        router: join(root, "router", "config.json"),
+        contextBrokerConfig: join(root, "context-broker", "config.json"),
+      },
+    };
+    mkdirSync(join(root, "advisor"), { recursive: true });
+    writeFileSync(plan.files.advisor, JSON.stringify(normalizeAdvisorConfig({
+      mode: "manual",
+      review: "strict",
+      model: "anthropic/claude-opus-4-6",
+      board: { mode: "off" },
+    }), null, 2), "utf8");
+
+    applyPiRoguePosturePlan(plan);
+    const advisor = JSON.parse(readFileSync(plan.files.advisor, "utf8"));
+
+    expect(advisor.profileRestore).toMatchObject({
+      mode: "manual",
+      review: "strict",
+      model: "anthropic/claude-opus-4-6",
+      profileMode: "auto",
+      profileReview: "light",
+      board: { mode: "off" },
+    });
+
+    const disabled = disableAdvisorBoardProfile(normalizeAdvisorConfig(advisor));
+    expect(disabled.profile).toBeUndefined();
+    expect(disabled.mode).toBe("manual");
+    expect(disabled.review).toBe("strict");
+    expect(disabled.model).toBe("anthropic/claude-opus-4-6");
+    expect(disabled.board).toEqual({ mode: "off" });
+  }));
+
+  it("refreshes profile ownership markers when guarded is applied over active budget-board", () => withHome((home) => {
+    const root = join(home, ".pi", "agent", "pi-rogue");
+    const plan = {
+      posture: "guarded" as const,
+      root,
+      advisorModel: "openai-codex/gpt-5.5",
+      files: {
+        summary: join(root, "config.json"),
+        advisor: join(root, "advisor", "config.json"),
+        router: join(root, "router", "config.json"),
+        contextBrokerConfig: join(root, "context-broker", "config.json"),
+      },
+    };
+    mkdirSync(join(root, "advisor"), { recursive: true });
+    writeFileSync(plan.files.advisor, JSON.stringify(normalizeAdvisorConfig({
+      profile: "budget-board",
+      profileRestore: {
+        mode: "manual",
+        review: "strict",
+        checkins: "off",
+        checkinIntervalMinutes: 30,
+        model: "anthropic/claude-opus-4-6",
+        profileModel: "openai-codex/gpt-5.5",
+        profileMode: "manual",
+        profileReview: "off",
+        profileCheckins: "off",
+        board: { mode: "off" },
+        headOfBoard: { mode: "off", maxEvidence: 8, maxRisks: 6, maxFailures: 4, maxSubagents: 6, maxTokens: 1200, reasoning: "medium" },
+        specialistDispatch: { mode: "suggest", cooldownTurns: 6, maxCallsPerSession: 3, maxCostTier: "cheap", maxTokens: 900 },
+      },
+      mode: "manual",
+      review: "off",
+      model: "openai-codex/gpt-5.5",
+      board: { mode: "shadow" },
+    }), null, 2), "utf8");
+
+    const result = applyPiRoguePosturePlan(plan);
+    const disabled = disableAdvisorBoardProfile(result.advisor);
+
+    expect(result.advisor.profileRestore).toMatchObject({ profileMode: "auto", profileReview: "light", profileModel: "openai-codex/gpt-5.5" });
+    expect(disabled.mode).toBe("manual");
+    expect(disabled.review).toBe("strict");
+    expect(disabled.model).toBe("anthropic/claude-opus-4-6");
+  }));
+
+  it("preserves user changes made after guarded posture activation", () => withHome((home) => {
+    const root = join(home, ".pi", "agent", "pi-rogue");
+    const plan = {
+      posture: "guarded" as const,
+      root,
+      advisorModel: "openai-codex/gpt-5.5",
+      files: {
+        summary: join(root, "config.json"),
+        advisor: join(root, "advisor", "config.json"),
+        router: join(root, "router", "config.json"),
+        contextBrokerConfig: join(root, "context-broker", "config.json"),
+      },
+    };
+
+    const result = applyPiRoguePosturePlan(plan);
+    const disabled = disableAdvisorBoardProfile({ ...result.advisor, review: "strict" });
+
+    expect(disabled.review).toBe("strict");
+    expect(disabled.mode).toBe("auto");
+  }));
+
+  it("validates current config before reporting guarded posture", () => {
+    const summary = { posture: "guarded", router: { enabled: false, activeProfile: "spark-smart" }, fusion: { enabled: false } };
+    const advisor = normalizeAdvisorConfig({
+      profile: "budget-board",
+      mode: "auto",
+      review: "light",
+      board: { mode: "shadow" },
+      headOfBoard: { mode: "enabled" } as any,
+      specialistDispatch: { mode: "suggest", cooldownTurns: 6, maxCallsPerSession: 3, maxCostTier: "cheap", maxTokens: 900 },
+    });
+    const router = { enabled: false, activeProfile: "spark-smart" };
+
+    expect(isGuardedPostureConfig(summary, advisor, router)).toBe(true);
+    expect(isGuardedPostureConfig(summary, { ...advisor, review: "strict" }, router)).toBe(false);
+    expect(isGuardedPostureConfig(summary, advisor, { enabled: true, activeProfile: "spark-smart" })).toBe(false);
+  });
+
+  it("preserves supported snake_case context-broker settings", () => withHome((home) => {
+    const root = join(home, ".pi", "agent", "pi-rogue");
+    const plan = {
+      posture: "guarded" as const,
+      root,
+      advisorModel: "openai-codex/gpt-5.5",
+      files: {
+        summary: join(root, "config.json"),
+        advisor: join(root, "advisor", "config.json"),
+        router: join(root, "router", "config.json"),
+        contextBrokerConfig: join(root, "context-broker", "config.json"),
+      },
+    };
+    mkdirSync(join(root, "context-broker"), { recursive: true });
+    writeFileSync(plan.files.contextBrokerConfig, JSON.stringify({ rewrite_threshold_bytes: 12345, context_lenses_enabled: false }, null, 2), "utf8");
+
+    applyPiRoguePosturePlan(plan);
+    const contextConfig = JSON.parse(readFileSync(plan.files.contextBrokerConfig, "utf8"));
+
+    expect(contextConfig.rewrite_threshold_bytes).toBe(12345);
+    expect(contextConfig.rewriteThresholdBytes).toBe(12345);
+    expect(contextConfig.context_lenses_enabled).toBe(false);
+    expect(contextConfig.contextLensesEnabled).toBe(false);
+  }));
+
+  it("rejects unknown posture values before writing config", () => withHome((home) => {
+    const ctx = { modelRegistry: { getAvailable: () => [] } } as any;
+
+    expect(() => buildPiRoguePosturePlan(ctx, "wild")).toThrow(/unknown posture/);
+    expect(existsSync(join(home, ".pi", "agent", "pi-rogue", "config.json"))).toBe(false);
+  }));
+});
 
 describe("Pi-Rogue configure planning", () => {
   function ctx(cwd: string) {

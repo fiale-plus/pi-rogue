@@ -55,6 +55,7 @@ describe("bundle extension defaults", () => {
     expect(commands.has("autoresearch-lab")).toBe(false);
     expect([...commands.keys()]).toEqual([
       "pi-rogue",
+      "cfg",
       "pi-rogue-advisor",
       "pi-rogue-router",
       "pi-rogue-fusion",
