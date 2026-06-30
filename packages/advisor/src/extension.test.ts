@@ -14,6 +14,7 @@ import {
   completeWithHigherAdvisorModel,
   completeWithModelFallback,
   contentText,
+  formatAdvisorBinaryGateStatus,
   normalizeAdvisorConfig,
   parseReviewPayload,
   sanitizeAdvisorText,
@@ -95,6 +96,58 @@ describe("AdvisorConfig", () => {
     expect(parsed.checkinIntervalMinutes).toBe(30);
     expect(parsed.model).toBe("claude-opus-4-6");
     expect(parsed.profile).toBe("budget-board");
+  });
+});
+
+describe("Advisor binary gate status", () => {
+  const usableGate = {
+    path: "/tmp/binary-gate-model.json",
+    available: true,
+    usable: true,
+    source: "installed" as const,
+    kind: "binary-logreg-v2" as const,
+    features: 6000,
+    labels: ["continue", "escalate"],
+    stacked: true,
+    thresholds: { default: 0.5, preflight: 0.7, review: 0.6 },
+  };
+
+  it("shows a wired-but-dormant gate under budget-board manual/review-off posture", () => {
+    const text = formatAdvisorBinaryGateStatus(
+      normalizeAdvisorConfig({ mode: "manual", review: "off" }),
+      state({ router: { review: { phase: "review", source: "model", reason: "local gate predicts review", confidence: 0.82 } } }),
+      usableGate,
+    );
+
+    expect(text).toContain("Binary gate:");
+    expect(text).toContain("binary-logreg-v2; features=6000");
+    expect(text).toContain("advisor preflight: dormant (mode=manual)");
+    expect(text).toContain("advisor review: dormant (review=off)");
+    expect(text).toContain("can act now: wired but dormant under current advisor config");
+    expect(text).toContain("latest route: review: local gate predicts review (confidence=0.82)");
+  });
+
+  it("shows active advisor paths when auto mode and review are enabled", () => {
+    const text = formatAdvisorBinaryGateStatus(
+      normalizeAdvisorConfig({ mode: "auto", review: "light" }),
+      state(),
+      usableGate,
+    );
+
+    expect(text).toContain("advisor preflight: active in auto preflight");
+    expect(text).toContain("advisor review: active in light review");
+    expect(text).toContain("can act now: yes");
+  });
+
+  it("surfaces missing or malformed artifacts as unavailable", () => {
+    const text = formatAdvisorBinaryGateStatus(
+      normalizeAdvisorConfig({ mode: "auto", review: "light" }),
+      state(),
+      { path: "/tmp/missing.json", available: false, usable: false, source: "missing", error: "artifact missing" },
+    );
+
+    expect(text).toContain("model: unavailable (artifact missing)");
+    expect(text).toContain("can act now: no");
   });
 });
 

@@ -1,5 +1,48 @@
+import { mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { binaryGatePredict } from "./router.js";
+import { binaryGatePredict, inspectBinaryGateArtifact } from "./router.js";
+
+describe("binary gate artifact status", () => {
+  it("reports a missing artifact without seeding arbitrary paths", () => {
+    const path = join(mkdtempSync(join(tmpdir(), "pi-rogue-gate-missing-")), "missing.json");
+    const status = inspectBinaryGateArtifact(path, false);
+
+    expect(status).toMatchObject({ available: false, usable: false, source: "missing" });
+    expect(status.path).toBe(path);
+  });
+
+  it("reports malformed artifacts as unusable", () => {
+    const path = join(mkdtempSync(join(tmpdir(), "pi-rogue-gate-malformed-")), "gate.json");
+    writeFileSync(path, "{not json", "utf8");
+
+    const status = inspectBinaryGateArtifact(path, false);
+
+    expect(status.available).toBe(true);
+    expect(status.usable).toBe(false);
+    expect(status.source).toBe("malformed");
+    expect(status.error).toBeTruthy();
+  });
+
+  it("reports valid v2 artifacts as usable", () => {
+    const path = join(mkdtempSync(join(tmpdir(), "pi-rogue-gate-valid-")), "gate.json");
+    writeFileSync(path, JSON.stringify({
+      kind: "binary-logreg-v2",
+      labels: ["continue", "escalate"],
+      features: [],
+      idf: [],
+      bias: [0, 0],
+      weights: [[], []],
+      thresholds: { default: 0.5, preflight: 0.6 },
+    }), "utf8");
+
+    const status = inspectBinaryGateArtifact(path, false);
+
+    expect(status).toMatchObject({ available: true, usable: true, source: "installed", kind: "binary-logreg-v2", features: 0, stacked: false });
+    expect(status.thresholds?.preflight).toBe(0.6);
+  });
+});
 
 describe("binary gate model", () => {
   it("returns a decision when model is available", () => {
