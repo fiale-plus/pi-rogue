@@ -1,0 +1,9 @@
+services:
+  portkey:
+    image: portkeyai/gateway:latest
+    container_name: rogue-portkey-gateway
+    ports:
+      - "8787:8787"
+    env_file:
+      - .env
+    restart: unless-stopped
