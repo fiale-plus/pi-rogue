@@ -1,7 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { homedir } from "node:os";
-import { sessionKey } from "./internal.js";
+import { sessionScopedDir } from "@fiale-plus/pi-core";
 
 type AdvisorConfig = Record<string, unknown> & { checkins?: "mid-hour" | "off"; checkinStartedAt?: number };
 type AdvisorState = Record<string, unknown> & {
@@ -35,13 +35,8 @@ const ADVISOR_DIR = join(homedir(), ".pi", "agent", "pi-rogue", "advisor");
 const ADVISOR_CONFIG_PATH = join(homedir(), ".pi", "agent", "pi-rogue", "advisor", "config.json");
 const ADVISOR_STATE_PATH = join(ADVISOR_DIR, "state.json");
 
-function safeSessionKey(key: string): string {
-  const safe = String(key || "session").replace(/[^A-Za-z0-9._-]+/g, "-").replace(/^-+|-+$/g, "");
-  return safe || "session";
-}
-
 export function advisorSessionStatePath(ctx: any): string {
-  return join(ADVISOR_DIR, "sessions", safeSessionKey(sessionKey(ctx)), "state.json");
+  return join(sessionScopedDir(join(ADVISOR_DIR, "sessions"), ctx), "state.json");
 }
 
 function readJson<T>(file: string): T {
