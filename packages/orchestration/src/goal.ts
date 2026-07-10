@@ -2,7 +2,7 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { appendText, contentText, featureFile, readText, sessionFile, truncate, writeText } from "./internal.js";
 import { clearResearchStateForGoal, readResearchState, writeResearchState, type ResearchState } from "./autoresearch-state.js";
-import { beginGoalCheck, buildGoalCheckPrompt, endGoalCheck, goalCheckResult, hasGoalCheckPending } from "./goal-resolution.js";
+import { beginGoalCheck, buildGoalCheckPrompt, consumeDeliveredGoalCheck, endGoalCheck, goalCheckResult, hasGoalCheckPending, invalidateGoalChecks } from "./goal-resolution.js";
 import { clearLoop, triggerLoopTick } from "./loop.js";
 import { clearNoProgressRecovery } from "./novelty-guard.js";
 import { resetAdvisorSessionContext, setAdvisorCheckinsEnabled } from "./advisor-checkins.js";
@@ -73,7 +73,7 @@ export function setGoal(ctx: any, goal: string, options: { restartDuplicate?: bo
   if (note) {
     setAdvisorCheckinsEnabled(true);
   }
-  endGoalCheck(ctx);
+  invalidateGoalChecks(ctx);
 
   if (note) {
     appendText(HISTORY_FILE, `${JSON.stringify({ at: new Date().toISOString(), goal: note })}\n`);
@@ -83,6 +83,7 @@ export function setGoal(ctx: any, goal: string, options: { restartDuplicate?: bo
 
 export function clearGoal(ctx: any): void {
   writeText(sessionFile(FEATURE, ctx, CURRENT_FILE), "");
+  invalidateGoalChecks(ctx);
   clearNoProgressRecovery(ctx);
   resetAdvisorSessionContext(ctx);
 }
@@ -167,10 +168,11 @@ export function startGoalProcessing(pi: ExtensionAPI, ctx: any, goal: string): G
     return "loop";
   }
 
-  beginGoalCheck(ctx);
+  const request = beginGoalCheck(ctx, goal);
   const prompt = buildGoalCheckPrompt(
     goal,
     "Start processing the goal immediately. Take the first concrete step now: inspect, run, edit, or ask only if a specific blocker prevents action.",
+    request,
   );
   if (ctx.isIdle?.() === false) {
     pi.sendUserMessage(prompt, { deliverAs: "followUp" });
@@ -186,7 +188,7 @@ export function registerGoal(pi: ExtensionAPI): void {
   p.__piRogueGoalRegistered = true;
 
   pi.on("session_start", (_event, ctx) => {
-    endGoalCheck(ctx);
+    invalidateGoalChecks(ctx);
     const goal = activeGoal(ctx);
     setGoalStatus(ctx, goal || null);
     if (goal) {
@@ -195,15 +197,14 @@ export function registerGoal(pi: ExtensionAPI): void {
   });
 
   pi.on("session_shutdown", (_event, ctx) => {
-    endGoalCheck(ctx);
+    invalidateGoalChecks(ctx);
   });
 
   pi.on("agent_end", async (event, ctx) => {
     const goal = activeGoal(ctx);
-    if (!goal || !hasGoalCheckPending(ctx)) return;
+    if (!goal || !consumeDeliveredGoalCheck(ctx, event, goal)) return;
 
     const result = goalCheckResult(assistantText(event));
-    endGoalCheck(ctx);
 
     const research = researchForGoal(ctx, goal);
     if (research) recordResearchResult(ctx, research, result);

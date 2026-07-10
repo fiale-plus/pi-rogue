@@ -32,7 +32,7 @@ describe("orchestration session identity", () => {
     expect(readFileSync(firstGoal, "utf8")).toBe("first\n");
     expect(readFileSync(secondGoal, "utf8")).toBe("second\n");
 
-    goalResolution.beginGoalCheck(firstCtx);
+    goalResolution.beginGoalCheck(firstCtx, "first goal");
     expect(goalResolution.hasGoalCheckPending(firstCtx)).toBe(true);
     expect(goalResolution.hasGoalCheckPending(secondCtx)).toBe(false);
     goalResolution.endGoalCheck(firstCtx);

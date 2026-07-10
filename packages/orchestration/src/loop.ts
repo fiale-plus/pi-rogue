@@ -179,16 +179,13 @@ function runLoopTick(pi: ExtensionAPI, ctx: any, generation?: number): boolean {
     return false;
   }
 
-  const prompt = goal ? buildGoalCheckPrompt(goal, current.instruction) : current.instruction;
   const live = readLoopState(ctx);
   if (activeGeneration !== live.generation || !live.enabled || !live.instruction || live.instruction !== current.instruction || parseIntervalMs(live.interval) !== currentIntervalMs) {
     return false;
   }
 
-  if (goal) {
-    beginGoalCheck(ctx);
-  }
-
+  const request = goal ? beginGoalCheck(ctx, goal) : undefined;
+  const prompt = request ? buildGoalCheckPrompt(goal, current.instruction, request) : current.instruction;
   if (ctx.isIdle()) {
     pi.sendUserMessage(prompt);
   } else {
