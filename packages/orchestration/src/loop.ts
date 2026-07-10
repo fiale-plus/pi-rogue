@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { appendText, featureFile, readText, sessionFile, sessionKey, truncate } from "./internal.js";
 import { clearResearchState, hasActiveResearch } from "./autoresearch-state.js";
@@ -12,6 +13,8 @@ const GOAL_FILE = "goal.md";
 const LOOP_HISTORY_FILE = featureFile(FEATURE, "loop-history.jsonl");
 const MIN_INTERVAL_MS = 60_000;
 const loopTimers = new Map<string, NodeJS.Timeout>();
+type OutstandingTick = { generation: number; requestId: string };
+const outstandingTicks = new Map<string, OutstandingTick>();
 
 type LoopState = {
   enabled: boolean;
@@ -81,11 +84,13 @@ function archiveLoopState(ctx: any, previous: LoopState): void {
 }
 
 export function clearLoop(ctx: any, options: { clearResearch?: boolean; preserveCheckins?: boolean } = {}): LoopState {
+  const key = sessionKey(ctx);
+  outstandingTicks.delete(key);
   const current = readLoopState(ctx);
   archiveLoopState(ctx, current);
   const next = clearLoopState(ctx);
   clearNoProgressRecovery(ctx);
-  stopLoopTimer(sessionKey(ctx));
+  stopLoopTimer(key);
   setLoopStatus(ctx, next);
   if (!options.preserveCheckins) {
     setAdvisorCheckinsEnabled(false);
@@ -151,6 +156,29 @@ async function runAdvisorCheckinTick(pi: ExtensionAPI, ctx: any): Promise<void> 
   await advisorLoopCheckinFn(pi, ctx, "loop_tick");
 }
 
+function plainTickPrompt(instruction: string, tick: OutstandingTick): string {
+  return `[PI_ROGUE_LOOP_TICK v1 request=${tick.requestId} generation=${tick.generation}]\n${instruction}`;
+}
+
+function messageText(content: unknown): string {
+  if (typeof content === "string") return content;
+  if (!Array.isArray(content)) return "";
+  return content
+    .filter((block: any) => block?.type === "text" && typeof block.text === "string")
+    .map((block: any) => block.text)
+    .join("\n");
+}
+
+function deliveredPlainTick(event: any, tick: OutstandingTick): boolean {
+  const messages = Array.isArray(event?.messages) ? event.messages : [];
+  const expected = plainTickPrompt("", tick).split("\n", 1)[0];
+  const markers = messages
+    .filter((message: any) => message?.role === "user")
+    .map((message: any) => messageText(message.content).split("\n", 1)[0]?.trim() ?? "")
+    .filter((line: string) => line.startsWith("[PI_ROGUE_LOOP_TICK"));
+  return markers.at(-1) === expected && markers.filter((marker: string) => marker === expected).length === 1;
+}
+
 function runLoopTick(pi: ExtensionAPI, ctx: any, generation?: number): boolean {
   const key = sessionKey(ctx);
   const current = readLoopState(ctx);
@@ -172,12 +200,17 @@ function runLoopTick(pi: ExtensionAPI, ctx: any, generation?: number): boolean {
     return false;
   }
 
+  const pendingTick = outstandingTicks.get(key);
+  if (pendingTick?.generation === activeGeneration) return false;
+  if (pendingTick) outstandingTicks.delete(key);
+
   const goal = activeGoal(ctx);
   if (goal && hasGoalCheckPending(ctx)) {
     if (activeGeneration !== current.generation) return false;
     void runAdvisorCheckinTick(pi, ctx);
     return false;
   }
+  if (!goal && (ctx.isIdle?.() === false || ctx.hasPendingMessages?.() === true)) return false;
 
   const live = readLoopState(ctx);
   if (activeGeneration !== live.generation || !live.enabled || !live.instruction || live.instruction !== current.instruction || parseIntervalMs(live.interval) !== currentIntervalMs) {
@@ -185,11 +218,20 @@ function runLoopTick(pi: ExtensionAPI, ctx: any, generation?: number): boolean {
   }
 
   const request = goal ? beginGoalCheck(ctx, goal) : undefined;
-  const prompt = request ? buildGoalCheckPrompt(goal, current.instruction, request) : current.instruction;
-  if (ctx.isIdle()) {
-    pi.sendUserMessage(prompt);
-  } else {
-    pi.sendUserMessage(prompt, { deliverAs: "followUp" });
+  const tick = goal ? undefined : { generation: activeGeneration, requestId: randomUUID() };
+  const prompt = request
+    ? buildGoalCheckPrompt(goal, current.instruction, request)
+    : plainTickPrompt(current.instruction, tick!);
+  if (tick) outstandingTicks.set(key, tick);
+  try {
+    if (ctx.isIdle?.() === false) {
+      pi.sendUserMessage(prompt, { deliverAs: "followUp" });
+    } else {
+      pi.sendUserMessage(prompt);
+    }
+  } catch (error) {
+    if (tick) outstandingTicks.delete(key);
+    throw error;
   }
 
   ctx.ui.notify(goal ? `🎯 Goal check: ${truncate(goal, 80)}` : `↻ Loop tick: ${truncate(current.instruction, 80)}`, "info");
@@ -236,6 +278,7 @@ export function startLoop(pi: ExtensionAPI, ctx: any, interval: string, instruct
   }
 
   clearNoProgressRecovery(ctx);
+  outstandingTicks.delete(sessionKey(ctx));
   const current = readLoopState(ctx);
   const next = writeLoopState(ctx, {
     enabled: true,
@@ -263,13 +306,24 @@ export function registerLoop(pi: ExtensionAPI): void {
   p.__piRogueLoopRegistered = true;
 
   pi.on("session_start", (_event, ctx) => {
+    outstandingTicks.delete(sessionKey(ctx));
     syncLoopTimer(pi, ctx);
   });
 
+  pi.on("agent_end", (event, ctx) => {
+    const key = sessionKey(ctx);
+    const tick = outstandingTicks.get(key);
+    if (tick?.generation === readLoopState(ctx).generation && deliveredPlainTick(event, tick)) {
+      outstandingTicks.delete(key);
+    }
+  });
+
   pi.on("session_shutdown", (_event, ctx) => {
+    const key = sessionKey(ctx);
+    outstandingTicks.delete(key);
     const current = readLoopState(ctx);
     writeLoopState(ctx, { generation: current.generation + 1 });
-    stopLoopTimer(sessionKey(ctx));
+    stopLoopTimer(key);
     setLoopStatus(ctx, defaultLoopState());
   });
 
