@@ -67,7 +67,9 @@ function makeHandlers() {
 }
 
 const ADVISOR_STATE_DIR = join(homedir(), ".pi", "agent", "pi-rogue", "advisor");
-const ADVISOR_STATE_PATH = advisorSessionStatePath("session");
+const ADVISOR_STATE_PATH = advisorSessionStatePath({
+  sessionManager: { getSessionFile: () => join(homedir(), ".pi", "agent", "pi-rogue", "advisor", "session.jsonl") },
+});
 const ADVISOR_CONFIG_PATH = join(ADVISOR_STATE_DIR, "config.json");
 const ADVISOR_CACHE_PATH = join(ADVISOR_STATE_DIR, "cache.json");
 const ADVISOR_DIAGNOSTICS_PATH = join(ADVISOR_STATE_DIR, "diagnostics.jsonl");

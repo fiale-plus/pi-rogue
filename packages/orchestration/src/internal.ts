@@ -1,6 +1,7 @@
 import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { basename, dirname, join } from "node:path";
+import { dirname, join } from "node:path";
 import { homedir } from "node:os";
+import { sessionKey as sharedSessionKey, sessionScopedDir } from "@fiale-plus/pi-core";
 
 const ROOT_DIR = join(homedir(), ".pi", "agent", "fiale-plus");
 
@@ -77,25 +78,12 @@ export function featureDir(feature: string): string {
   return dir;
 }
 
-function safeSessionKey(key: string): string {
-  const safe = String(key || "session").replace(/[^A-Za-z0-9._-]+/g, "-").replace(/^-+|-+$/g, "");
-  return safe || "session";
-}
-
 export function sessionKey(ctx: any): string {
-  const sessionFile = ctx?.sessionManager?.getSessionFile?.();
-  if (typeof sessionFile === "string" && sessionFile.length > 0) {
-    return safeSessionKey(basename(String(sessionFile)).replace(/\.[^.]+$/, ""));
-  }
-  const sessionId = ctx?.session?.id || process.env.PI_ROGUE_SESSION_ID;
-  if (typeof sessionId === "string" && sessionId.length > 0) return safeSessionKey(sessionId);
-  return "session";
+  return sharedSessionKey(ctx);
 }
 
 export function sessionDir(feature: string, ctx: any): string {
-  const dir = join(featureDir(feature), sessionKey(ctx));
-  mkdirSync(dir, { recursive: true });
-  return dir;
+  return sessionScopedDir(featureDir(feature), ctx);
 }
 
 export function featureFile(feature: string, filename: string): string {

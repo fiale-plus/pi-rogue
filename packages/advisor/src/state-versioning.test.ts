@@ -38,7 +38,9 @@ function makeHandlers() {
 
 const ADVISOR_STATE_DIR = join(homedir(), ".pi", "agent", "pi-rogue", "advisor");
 const ADVISOR_CONFIG_PATH = join(ADVISOR_STATE_DIR, "config.json");
-const ADVISOR_STATE_PATH = advisorSessionStatePath("session");
+const ADVISOR_STATE_PATH = advisorSessionStatePath({
+  sessionManager: { getSessionFile: () => join(homedir(), ".pi", "agent", "pi-rogue", "advisor", "session.jsonl") },
+});
 
 function readAdvisorState(): any {
   return JSON.parse(readFileSync(ADVISOR_STATE_PATH, "utf8"));
@@ -236,11 +238,11 @@ describe("state versioning and recovery", () => {
     void h.session_start?.[0]?.({}, ctxA);
     await h.before_agent_start?.[0]?.({ prompt: "train advisor on regex logs", systemPrompt: "base" }, ctxA);
 
-    const stateA = JSON.parse(readFileSync(advisorSessionStatePath("model-training"), "utf8"));
+    const stateA = JSON.parse(readFileSync(advisorSessionStatePath(ctxA), "utf8"));
     expect(stateA.lastTask).toBe("train advisor on regex logs");
 
     void h.session_start?.[0]?.({}, ctxB);
-    const stateB = JSON.parse(readFileSync(advisorSessionStatePath("runpod"), "utf8"));
+    const stateB = JSON.parse(readFileSync(advisorSessionStatePath(ctxB), "utf8"));
     expect(stateB.lastTask).toBe("");
     expect(stateB.followUp).toBe("");
     expect(stateB.reviewSignals).toEqual([]);

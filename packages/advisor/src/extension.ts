@@ -7,6 +7,7 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Box, Text } from "@earendil-works/pi-tui";
 import { completeSimple, type ThinkingLevel } from "@earendil-works/pi-ai";
 import { Type } from "typebox";
+import { sessionKey as sharedSessionKey, sessionScopedDir } from "@fiale-plus/pi-core";
 import { appendText, featureDir, featureFile, readText, truncate, writeText, atomicWriteText } from "./internal.js";
 import { advisorArgumentCompletions, piRogueArgumentCompletions } from "./completions.js";
 import {
@@ -345,8 +346,9 @@ function saveConfig(c: AdvisorConfig) {
 }
 
 function advisorSessionDir(ctxOrKey?: any): string {
-  const key = typeof ctxOrKey === "string" ? ctxOrKey : sessionKey(ctxOrKey);
-  return join(featureDir("advisor"), "sessions", safeSessionKey(key));
+  const root = join(featureDir("advisor"), "sessions");
+  if (typeof ctxOrKey === "string") return join(root, safeSessionKey(ctxOrKey));
+  return sessionScopedDir(root, ctxOrKey);
 }
 
 export function advisorSessionStatePath(ctxOrKey?: any): string {
@@ -2306,13 +2308,7 @@ function mergeRouteReview(configReview: AdvisorConfig["review"], route?: ReviewP
 }
 
 function sessionKey(ctx: any): string {
-  const sessionFile = ctx?.sessionManager?.getSessionFile?.();
-  if (typeof sessionFile === "string" && sessionFile.length > 0) {
-    return safeSessionKey(basename(String(sessionFile)).replace(/\.[^.]+$/, ""));
-  }
-  const sessionId = ctx?.session?.id || process.env.PI_ROGUE_SESSION_ID;
-  if (typeof sessionId === "string" && sessionId.length > 0) return safeSessionKey(sessionId);
-  return "session";
+  return sharedSessionKey(ctx);
 }
 
 type OrchestrationSnapshot = {
@@ -2322,7 +2318,7 @@ type OrchestrationSnapshot = {
 };
 
 function readOrchestrationSnapshot(ctx: any): OrchestrationSnapshot {
-  const dir = join(ORCHESTRATION_DIR, sessionKey(ctx));
+  const dir = sessionScopedDir(ORCHESTRATION_DIR, ctx);
   return {
     goal: readText(join(dir, "goal.md")).trim(),
     loop: readJson(join(dir, "loop.json"), {}),
