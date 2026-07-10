@@ -49,7 +49,7 @@ function orchestrationHelp(): string {
   return [
     "pi-rogue-orchestration command tree:",
     "  /pi-rogue-orchestration status",
-    "  /pi-rogue-orchestration goal [show|set <text>|clear|list]",
+    "  /pi-rogue-orchestration goal [show|status|set <text>|clear|list]",
     "  /pi-rogue-orchestration loop [status|off|clear|stop|<interval> <instruction>]",
     "  /pi-rogue-orchestration autoresearch [status|clear|<instruction>]",
     "  /pi-rogue-orchestration lab [status|clear|<instruction>]",

@@ -260,8 +260,8 @@ export function registerGoal(pi: ExtensionAPI): void {
 export async function handleGoalCommand(pi: ExtensionAPI, args: unknown, ctx: any): Promise<void> {
   const input = String(args ?? "").trim();
   const [cmd, ...rest] = input.split(/\s+/);
-  const known = new Set(["set", "show", "clear", "list"]);
-  const resolved = !input ? "show" : known.has(cmd) ? cmd : "set";
+  const known = new Set(["set", "show", "status", "clear", "list"]);
+  const resolved = !input || cmd === "status" ? "show" : known.has(cmd) ? cmd : "set";
   const text = resolved === "set" && known.has(cmd) ? rest.join(" ").trim() : input;
 
   if (resolved === "show") {

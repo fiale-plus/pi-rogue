@@ -95,6 +95,33 @@ describe("goal processing", () => {
     clearGoal(ctx);
   });
 
+  it("treats goal status as a read-only show alias", async () => {
+    const pi = { sendUserMessage: vi.fn() } as any;
+    const ctx = fakeCtx();
+    const notify = vi.fn();
+    ctx.ui.notify = notify;
+
+    const goal = `preserve status goal ${randomUUID()}`;
+    setGoal(ctx, goal);
+    const goalBefore = activeGoal(ctx);
+    const historyCountBefore = countGoalEntries(readText(featureFile("orchestration", "goal-history.jsonl")), goal);
+    const loopBefore = readText(sessionFile("orchestration", ctx, "loop.json"));
+    const researchBefore = readText(sessionFile("orchestration", ctx, "autoresearch.json"));
+
+    await handleGoalCommand(pi, "status", ctx);
+
+    expect(notify).toHaveBeenCalledWith(
+      `A goal is already active: ${goal}\nUse \`/goal show\` to see it, \`/goal clear\` to stop it, or \`/goal set ...\` to replace it.`,
+      "info",
+    );
+    expect(pi.sendUserMessage).not.toHaveBeenCalled();
+    expect(activeGoal(ctx)).toBe(goalBefore);
+    expect(countGoalEntries(readText(featureFile("orchestration", "goal-history.jsonl")), goal)).toBe(historyCountBefore);
+    expect(readText(sessionFile("orchestration", ctx, "loop.json"))).toBe(loopBefore);
+    expect(readText(sessionFile("orchestration", ctx, "autoresearch.json"))).toBe(researchBefore);
+    clearGoal(ctx);
+  });
+
   it("shows next commands instead of restarting an exact duplicate goal", async () => {
     const pi = { sendUserMessage: vi.fn() } as any;
     const ctx = fakeCtx();
