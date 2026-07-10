@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { activeGoal } from "./goal.js";
 import { registerOrchestration } from "./extension.js";
 
@@ -30,7 +30,7 @@ function registerAndCaptureCommands(): { commands: Map<string, CommandHandle>; p
     registerCommand: (name: string, command: CommandHandle) => {
       commands.set(name, command);
     },
-    sendUserMessage: () => undefined,
+    sendUserMessage: vi.fn(),
     on: () => undefined,
   };
   registerOrchestration(pi as any);
@@ -60,6 +60,26 @@ describe("orchestration command aliases", () => {
     expect(ctx.notifications.at(-1)).toContain("/goal set ...");
     await goalCommand!.handler("clear", ctx);
     expect(activeGoal(ctx)).toBe("");
+  });
+
+  it("routes goal status read-only through short and canonical commands", async () => {
+    const { commands, pi } = registerAndCaptureCommands();
+    const ctx = fakeCtx();
+    const goalCommand = commands.get("goal");
+    const orchestrationCommand = commands.get("pi-rogue-orchestration");
+
+    await goalCommand!.handler("set keep status read-only", ctx);
+    pi.sendUserMessage.mockClear();
+
+    await goalCommand!.handler("status", ctx);
+    expect(activeGoal(ctx)).toBe("keep status read-only");
+    expect(pi.sendUserMessage).not.toHaveBeenCalled();
+
+    await orchestrationCommand!.handler("goal status", ctx);
+    expect(activeGoal(ctx)).toBe("keep status read-only");
+    expect(pi.sendUserMessage).not.toHaveBeenCalled();
+
+    await goalCommand!.handler("clear", ctx);
   });
 
   it("routes /loop to orchestration loop handling", async () => {

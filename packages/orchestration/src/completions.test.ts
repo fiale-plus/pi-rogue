@@ -4,7 +4,7 @@ import { autoresearchArgumentCompletions, goalArgumentCompletions, loopArgumentC
 describe("goal completions", () => {
   it("offers goal management choices", () => {
     const values = goalArgumentCompletions("")?.map((i) => i.value);
-    expect(values).toEqual(expect.arrayContaining(["show", "clear", "list", "set"]));
+    expect(values).toEqual(expect.arrayContaining(["show", "status", "clear", "list", "set"]));
   });
 });
 
