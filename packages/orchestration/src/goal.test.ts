@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { resetAdvisorSessionContext, setAdvisorCheckinsEnabled } from "./advisor-checkins.js";
-import { endGoalCheck } from "./goal-resolution.js";
+import { endGoalCheck, hasGoalCheckPending } from "./goal-resolution.js";
 import { activeGoal, clearGoal, completeActiveGoal, handleGoalCommand, registerGoal, setGoal, startGoalProcessing } from "./goal.js";
 import { featureFile, readText, sessionFile, writeText } from "./internal.js";
 
@@ -275,14 +275,15 @@ describe("goal processing", () => {
     expect(activeGoal(ctx)).toBe("");
   });
 
-  it("clears the active goal immediately when a pending check returns GOAL_DONE", async () => {
+  it("clears the active goal only when its delivered check returns GOAL_DONE", async () => {
     const handlers: Record<string, Array<(event: any, ctx: any) => Promise<void> | void>> = {};
+    const sent: string[] = [];
     const pi = {
       on: (name: string, handler: (event: any, ctx: any) => Promise<void> | void) => {
         handlers[name] = [...(handlers[name] ?? []), handler];
       },
       registerCommand: () => undefined,
-      sendUserMessage: () => undefined,
+      sendUserMessage: (text: string) => sent.push(text),
     } as any;
     const ctx = fakeCtx();
 
@@ -290,10 +291,103 @@ describe("goal processing", () => {
     setGoal(ctx, "ship the thing");
     startGoalProcessing(pi, ctx, "ship the thing");
     await handlers.agent_end?.[0]?.({
-      messages: [{ role: "assistant", content: "GOAL_DONE: shipped with evidence" }],
+      messages: [
+        { role: "user", content: [{ type: "text", text: sent[0] }] },
+        { role: "user", content: [{ type: "text", text: "Also include the final verification detail." }] },
+        { role: "assistant", content: [{ type: "text", text: "GOAL_DONE: shipped with evidence" }] },
+      ],
     }, ctx);
 
     expect(activeGoal(ctx)).toBe("");
+  });
+
+  it("fails closed when a malformed goal marker follows the delivered request", async () => {
+    const handlers: Record<string, Array<(event: any, ctx: any) => Promise<void> | void>> = {};
+    const sent: string[] = [];
+    const pi = {
+      on: (name: string, handler: (event: any, ctx: any) => Promise<void> | void) => {
+        handlers[name] = [...(handlers[name] ?? []), handler];
+      },
+      registerCommand: () => undefined,
+      sendUserMessage: (text: string) => sent.push(text),
+    } as any;
+    const ctx = fakeCtx();
+
+    registerGoal(pi);
+    setGoal(ctx, "goal with malformed follow-up");
+    startGoalProcessing(pi, ctx, "goal with malformed follow-up");
+    await handlers.agent_end?.[0]?.({
+      messages: [
+        { role: "user", content: sent[0] },
+        { role: "user", content: "[PI_ROGUE_GOAL_CHECK malformed]" },
+        { role: "assistant", content: "GOAL_DONE: should not be accepted" },
+      ],
+    }, ctx);
+
+    expect(activeGoal(ctx)).toBe("goal with malformed follow-up");
+    expect(hasGoalCheckPending(ctx)).toBe(true);
+    clearGoal(ctx);
+  });
+
+  it("ignores old-A completion after replacing A with B", async () => {
+    const handlers: Record<string, Array<(event: any, ctx: any) => Promise<void> | void>> = {};
+    const sent: string[] = [];
+    const pi = {
+      on: (name: string, handler: (event: any, ctx: any) => Promise<void> | void) => {
+        handlers[name] = [...(handlers[name] ?? []), handler];
+      },
+      registerCommand: () => undefined,
+      sendUserMessage: (text: string) => sent.push(text),
+    } as any;
+    const ctx = fakeCtx();
+
+    registerGoal(pi);
+    setGoal(ctx, "goal A");
+    startGoalProcessing(pi, ctx, "goal A");
+    const oldPrompt = sent[0];
+    setGoal(ctx, "goal B");
+    startGoalProcessing(pi, ctx, "goal B");
+
+    await handlers.agent_end?.[0]?.({
+      messages: [
+        { role: "user", content: oldPrompt },
+        { role: "assistant", content: "GOAL_DONE: stale A result" },
+      ],
+    }, ctx);
+
+    expect(activeGoal(ctx)).toBe("goal B");
+    expect(hasGoalCheckPending(ctx)).toBe(true);
+    clearGoal(ctx);
+  });
+
+  it("ignores old-A completion after clearing A without restarting work", async () => {
+    const handlers: Record<string, Array<(event: any, ctx: any) => Promise<void> | void>> = {};
+    const sent: string[] = [];
+    const pi = {
+      on: (name: string, handler: (event: any, ctx: any) => Promise<void> | void) => {
+        handlers[name] = [...(handlers[name] ?? []), handler];
+      },
+      registerCommand: () => undefined,
+      sendUserMessage: (text: string) => sent.push(text),
+    } as any;
+    const ctx = fakeCtx();
+
+    registerGoal(pi);
+    setGoal(ctx, "goal A");
+    startGoalProcessing(pi, ctx, "goal A");
+    const oldPrompt = sent[0];
+    clearGoal(ctx);
+
+    await handlers.agent_end?.[0]?.({
+      messages: [
+        { role: "user", content: oldPrompt },
+        { role: "assistant", content: "GOAL_DONE: stale A result" },
+      ],
+    }, ctx);
+
+    expect(activeGoal(ctx)).toBe("");
+    expect(hasGoalCheckPending(ctx)).toBe(false);
+    expect(sent).toHaveLength(1);
   });
 
 });
