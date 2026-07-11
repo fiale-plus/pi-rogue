@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { appendText, featureFile, readText, sessionFile, sessionKey, truncate } from "./internal.js";
 import { clearResearchState, hasActiveResearch } from "./autoresearch-state.js";
-import { setAdvisorCheckinsEnabled } from "./advisor-checkins.js";
+import { setAdvisorCheckinDemand } from "./advisor-checkins.js";
 import { buildGoalCheckPrompt, beginGoalCheck, hasGoalCheckPending } from "./goal-resolution.js";
 import { clearNoProgressRecovery } from "./novelty-guard.js";
 import { readSessionJson, writeSessionJson } from "./state.js";
@@ -92,9 +92,7 @@ export function clearLoop(ctx: any, options: { clearResearch?: boolean; preserve
   clearNoProgressRecovery(ctx);
   stopLoopTimer(key);
   setLoopStatus(ctx, next);
-  if (!options.preserveCheckins) {
-    setAdvisorCheckinsEnabled(false);
-  }
+  setAdvisorCheckinDemand(ctx, "loop", false);
   if (options.clearResearch) {
     clearResearchState(ctx);
   }
@@ -246,18 +244,18 @@ function syncLoopTimer(pi: ExtensionAPI, ctx: any): void {
   const state = readLoopState(ctx);
   setLoopStatus(ctx, state);
   if (!state.enabled || !state.instruction) {
-    setAdvisorCheckinsEnabled(false);
+    setAdvisorCheckinDemand(ctx, "loop", false);
     return;
   }
 
   const intervalMs = parseIntervalMs(state.interval);
   if (intervalMs === null) {
     ctx.ui.notify("Loop interval must be at least 1m (e.g. 1m, 5m, 1h).", "warning");
-    setAdvisorCheckinsEnabled(false);
+    setAdvisorCheckinDemand(ctx, "loop", false);
     return;
   }
 
-  setAdvisorCheckinsEnabled(true);
+  setAdvisorCheckinDemand(ctx, "loop", true);
   const generation = state.generation;
   const tick = () => {
     const currentIntervalMs = parseIntervalMs(readLoopState(ctx).interval);
@@ -287,7 +285,7 @@ export function startLoop(pi: ExtensionAPI, ctx: any, interval: string, instruct
     updatedAt: "",
     generation: current.generation + 1,
   });
-  setAdvisorCheckinsEnabled(true);
+  setAdvisorCheckinDemand(ctx, "loop", true);
   setLoopStatus(ctx, next);
   syncLoopTimer(pi, ctx);
   if (options.triggerNow) {

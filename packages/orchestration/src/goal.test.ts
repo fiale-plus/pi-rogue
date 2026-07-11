@@ -1,17 +1,17 @@
 import { randomUUID } from "node:crypto";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { resetAdvisorSessionContext, setAdvisorCheckinsEnabled } from "./advisor-checkins.js";
+import { resetAdvisorSessionContext, setAdvisorCheckinDemand } from "./advisor-checkins.js";
 import { endGoalCheck, hasGoalCheckPending } from "./goal-resolution.js";
 import { activeGoal, clearGoal, completeActiveGoal, handleGoalCommand, registerGoal, setGoal, startGoalProcessing } from "./goal.js";
 import { featureFile, readText, sessionFile, writeText } from "./internal.js";
 
 vi.mock("./advisor-checkins.js", () => ({
   resetAdvisorSessionContext: vi.fn(),
-  setAdvisorCheckinsEnabled: vi.fn(),
+  setAdvisorCheckinDemand: vi.fn(),
 }));
 
 const resetAdvisorSessionContextMock = vi.mocked(resetAdvisorSessionContext);
-const setAdvisorCheckinsEnabledMock = vi.mocked(setAdvisorCheckinsEnabled);
+const setAdvisorCheckinDemandMock = vi.mocked(setAdvisorCheckinDemand);
 
 function fakeCtx(id = randomUUID(), idle = true) {
   return {
@@ -29,7 +29,7 @@ function fakeCtx(id = randomUUID(), idle = true) {
 describe("goal processing", () => {
   beforeEach(() => {
     resetAdvisorSessionContextMock.mockClear();
-    setAdvisorCheckinsEnabledMock.mockClear();
+    setAdvisorCheckinDemandMock.mockClear();
   });
 
   function countGoalEntries(text: string, goal: string): number {
@@ -65,7 +65,7 @@ describe("goal processing", () => {
     const before = readText(featureFile("orchestration", "goal-history.jsonl"));
 
     expect(setGoal(ctx, goal)).toBe("updated");
-    setAdvisorCheckinsEnabledMock.mockClear();
+    setAdvisorCheckinDemandMock.mockClear();
     const afterFirst = readText(featureFile("orchestration", "goal-history.jsonl"));
     expect(setGoal(ctx, goal)).toBe("duplicate");
     const afterSecond = readText(featureFile("orchestration", "goal-history.jsonl"));
@@ -74,7 +74,7 @@ describe("goal processing", () => {
     expect(countGoalEntries(afterFirst, goal)).toBe(1);
     expect(countGoalEntries(afterSecond, goal)).toBe(1);
     expect(resetAdvisorSessionContextMock).toHaveBeenCalledTimes(1);
-    expect(setAdvisorCheckinsEnabledMock).toHaveBeenCalledWith(true);
+    expect(setAdvisorCheckinDemandMock).toHaveBeenCalledWith(ctx, "goal", true);
     clearGoal(ctx);
   });
 
@@ -208,11 +208,11 @@ describe("goal processing", () => {
 
     registerGoal(pi);
     setGoal(ctx, "resume heartbeat after compaction");
-    setAdvisorCheckinsEnabledMock.mockClear();
+    setAdvisorCheckinDemandMock.mockClear();
 
     void handlers.session_start?.[0]?.({}, ctx);
 
-    expect(setAdvisorCheckinsEnabledMock).toHaveBeenCalledWith(true);
+    expect(setAdvisorCheckinDemandMock).toHaveBeenCalledWith(ctx, "goal", true);
   });
 
   it("disables advisor check-ins when orchestration goal clear stops the loop", async () => {
@@ -220,10 +220,10 @@ describe("goal processing", () => {
     const ctx = fakeCtx();
 
     setGoal(ctx, "clear lifecycle test");
-    setAdvisorCheckinsEnabledMock.mockClear();
+    setAdvisorCheckinDemandMock.mockClear();
     await handleGoalCommand(pi, "clear", ctx);
 
-    expect(setAdvisorCheckinsEnabledMock).toHaveBeenCalledWith(false);
+    expect(setAdvisorCheckinDemandMock).toHaveBeenCalledWith(ctx, "goal", false);
   });
 
   it("completes an active goal through the explicit completion signal", () => {
