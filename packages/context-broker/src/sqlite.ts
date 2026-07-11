@@ -20,6 +20,8 @@ export interface SqliteContextBrokerOptions extends ContextBrokerOptions {
   path?: string;
   dir?: string;
   busyTimeoutMs?: number;
+  busyRetryAttempts?: number;
+  busyRetryDelayMs?: number;
 }
 
 const DEFAULT_MAX_RECORDS = 256;
@@ -28,6 +30,9 @@ const DEFAULT_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 const DEFAULT_SUMMARY_BYTES = 320;
 const DEFAULT_BRIEF_BYTES = 2_000;
 const DEFAULT_BUSY_TIMEOUT_MS = 2_500;
+const DEFAULT_BUSY_RETRY_ATTEMPTS = 1;
+const DEFAULT_BUSY_RETRY_DELAY_MS = 25;
+const PUBLISH_BUSY_TIMEOUT_MAX_MS = 500;
 const TIER_ORDER: Record<ContextArtifactTier, number> = { hot: 0, warm: 1, cold: 2 };
 const TIER_REMOVAL_ORDER: Record<ContextArtifactTier, number> = { cold: 0, warm: 1, hot: 2 };
 
@@ -229,8 +234,9 @@ export function createSqliteContextBroker(options: SqliteContextBrokerOptions = 
   const dbPath = defaultSqlitePath(options);
   if (dbPath !== ":memory:" && !existsSync(dirname(dbPath))) ensureParent(dbPath);
   const db = new DatabaseSync(dbPath);
+  const busyTimeoutMs = Math.max(0, Math.floor(options.busyTimeoutMs ?? DEFAULT_BUSY_TIMEOUT_MS));
   try {
-    db.exec(`PRAGMA busy_timeout = ${Math.max(0, Math.floor(options.busyTimeoutMs ?? DEFAULT_BUSY_TIMEOUT_MS))}`);
+    db.exec(`PRAGMA busy_timeout = ${busyTimeoutMs}`);
     initialize(db);
   } catch (error) {
     try { db.close(); } catch { /* ignore close failure while preserving the initialization error */ }
@@ -266,6 +272,31 @@ export function createSqliteContextBroker(options: SqliteContextBrokerOptions = 
   const summaryBytes = Math.max(16, Math.floor(options.summaryBytes ?? DEFAULT_SUMMARY_BYTES));
   const defaultBriefBytes = Math.max(64, Math.floor(options.briefBytes ?? DEFAULT_BRIEF_BYTES));
   const vacuumThreshold = Math.max(128, maxRecords * 2);
+  const busyRetryAttempts = Math.max(0, Math.floor(options.busyRetryAttempts ?? DEFAULT_BUSY_RETRY_ATTEMPTS));
+  const busyRetryDelayMs = Math.max(0, Math.floor(options.busyRetryDelayMs ?? DEFAULT_BUSY_RETRY_DELAY_MS));
+  const retrySleeper = new Int32Array(new SharedArrayBuffer(4));
+
+  function restoreBusyTimeout(): void {
+    try { db.exec(`PRAGMA busy_timeout = ${busyTimeoutMs}`); } catch { /* preserve the publish result */ }
+  }
+
+  function beginImmediateWithRetry(): void {
+    const publishBusyTimeoutMs = Math.min(busyTimeoutMs, PUBLISH_BUSY_TIMEOUT_MAX_MS);
+    if (publishBusyTimeoutMs !== busyTimeoutMs) db.exec(`PRAGMA busy_timeout = ${publishBusyTimeoutMs}`);
+    for (let attempt = 0; ; attempt += 1) {
+      try {
+        db.exec("BEGIN IMMEDIATE");
+        return;
+      } catch (error) {
+        if (!isSqliteLockedError(error) || attempt >= busyRetryAttempts) {
+          restoreBusyTimeout();
+          throw error;
+        }
+        const jitter = Math.floor(Math.random() * Math.max(1, busyRetryDelayMs));
+        Atomics.wait(retrySleeper, 0, 0, busyRetryDelayMs * (attempt + 1) + jitter);
+      }
+    }
+  }
 
   function nextSequence(): number {
     const row = db.prepare("SELECT value FROM meta WHERE key = 'sequence'").get();
@@ -510,15 +541,15 @@ export function createSqliteContextBroker(options: SqliteContextBrokerOptions = 
   }
 
   function publish(input: ContextArtifactInput): ContextArtifact {
-    const expiredRemoved = dropExpired();
+    const now = input.createdAt ?? Date.now();
     const source = stableSource(input);
     if (source) {
-      const existing = db.prepare("SELECT * FROM artifacts WHERE sessionId = ? AND parentIdsJson LIKE ? ESCAPE '\\' ORDER BY createdAt DESC, sequence DESC LIMIT 1")
-        .get(input.sessionId, likePattern(`"${source}"`));
+      const existing = db.prepare("SELECT * FROM artifacts WHERE sessionId = ? AND parentIdsJson LIKE ? ESCAPE '\\' AND (pinned = 1 OR expiresAt IS NULL OR expiresAt > ?) ORDER BY createdAt DESC, sequence DESC LIMIT 1")
+        .get(input.sessionId, likePattern(`"${source}"`), now);
       if (existing) return rowToArtifact(existing);
     }
 
-    const now = input.createdAt ?? Date.now();
+
     const payload = payloadText(input.payload);
     const sha256 = hashPayload(input.payload);
     const bytes = payloadBytes(input.payload);
@@ -528,36 +559,37 @@ export function createSqliteContextBroker(options: SqliteContextBrokerOptions = 
     const baseTier = classifyBaseTier(input, tags);
     const tier: ContextArtifactTier = input.pinned ? "hot" : baseTier;
     const ttlMs = input.ttlMs ?? tierTtlMs[tier];
-    const sequence = nextSequence();
-    const id = `ctx-${now.toString(36)}-${String(sequence).padStart(4, "0")}-${sha256.slice(0, 12)}`;
-    const session = safeName(input.sessionId || "session");
-    const kind = input.kind;
-    const handle = `ctx://session/${session}/${kind}/${sha256.slice(0, 16)}/${id}`;
-    const artifact = {
-      id,
-      handle,
-      sessionId: input.sessionId,
-      kind,
-      createdAt: now,
-      updatedAt: now,
-      bytes,
-      sha256,
-      payload,
-      summary: summarizeArtifact(input.summary, kind, bytes, sha256, summaryBytes),
-      tags,
-      paths,
-      command: input.command?.trim() || undefined,
-      branch: input.branch?.trim() || undefined,
-      tier,
-      baseTier,
-      sequence,
-      expiresAt: ttlMs > 0 ? now + ttlMs : undefined,
-      pinned: Boolean(input.pinned),
-      parentIds,
-    } satisfies ContextArtifact & { baseTier: ContextArtifactTier; sequence: number };
+    let artifact: ContextArtifact & { baseTier: ContextArtifactTier; sequence: number };
 
-    db.exec("BEGIN IMMEDIATE");
+    beginImmediateWithRetry();
     try {
+      const sequence = nextSequence();
+      const id = `ctx-${now.toString(36)}-${String(sequence).padStart(4, "0")}-${sha256.slice(0, 12)}`;
+      const session = safeName(input.sessionId || "session");
+      const kind = input.kind;
+      const handle = `ctx://session/${session}/${kind}/${sha256.slice(0, 16)}/${id}`;
+      artifact = {
+        id,
+        handle,
+        sessionId: input.sessionId,
+        kind,
+        createdAt: now,
+        updatedAt: now,
+        bytes,
+        sha256,
+        payload,
+        summary: summarizeArtifact(input.summary, kind, bytes, sha256, summaryBytes),
+        tags,
+        paths,
+        command: input.command?.trim() || undefined,
+        branch: input.branch?.trim() || undefined,
+        tier,
+        baseTier,
+        sequence,
+        expiresAt: ttlMs > 0 ? now + ttlMs : undefined,
+        pinned: Boolean(input.pinned),
+        parentIds,
+      };
       db.prepare(`
         INSERT INTO artifacts(id, handle, sessionId, kind, createdAt, updatedAt, bytes, sha256, payload, summary, tagsJson, pathsJson, command, branch, tier, baseTier, sequence, expiresAt, pinned, parentIdsJson)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -593,13 +625,20 @@ export function createSqliteContextBroker(options: SqliteContextBrokerOptions = 
       );
       db.exec("COMMIT");
     } catch (error) {
-      db.exec("ROLLBACK");
+      try { db.exec("ROLLBACK"); } catch { /* transaction may not be active after a SQLite failure */ }
+      restoreBusyTimeout();
       throw error;
     }
 
-    prune(Date.now(), new Set([artifact.id]));
-    if (expiredRemoved > 0) maintainStorage(expiredRemoved, { purge: false });
-    return lookup({ id: artifact.id })[0] ?? artifact;
+    try {
+      prune(Date.now(), new Set([artifact.id]));
+      return lookup({ id: artifact.id })[0] ?? artifact;
+    } catch (error) {
+      console.warn("SQLite post-publish maintenance skipped", error);
+      return artifact;
+    } finally {
+      restoreBusyTimeout();
+    }
   }
 
   function lookup(query: ContextLookupQuery = {}): ContextArtifact[] {

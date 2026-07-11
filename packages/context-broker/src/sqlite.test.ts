@@ -220,6 +220,32 @@ describe("createSqliteContextBroker", () => {
     }
   });
 
+  it("retries locked publish transactions without consuming a sequence", () => {
+    const dir = mkdtempSync(join(tmpdir(), "ctx-sqlite-test-"));
+    try {
+      const path = join(dir, "artifacts.sqlite");
+      const broker = createSqliteContextBroker({ path, busyTimeoutMs: 20, busyRetryAttempts: 1, busyRetryDelayMs: 1 });
+      const first = broker.publish({ sessionId: "s", kind: "tool_output", payload: "first", summary: "first" });
+      expect(first.id).toContain("-0001-");
+
+      const lockDb = new DatabaseSync(path);
+      try {
+        lockDb.exec("BEGIN IMMEDIATE");
+        expect(() => broker.publish({ sessionId: "s", kind: "tool_output", payload: "locked", summary: "locked" }))
+          .toThrow(/database is locked/i);
+      } finally {
+        lockDb.exec("ROLLBACK");
+        lockDb.close();
+      }
+
+      const second = broker.publish({ sessionId: "s", kind: "tool_output", payload: "second", summary: "second" });
+      expect(second.id).toContain("-0002-");
+      expect(broker.lookup({ handle: second.handle })[0]?.payload).toBe("second");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it("survives database locks during prune cleanup", () => {
     const dir = mkdtempSync(join(tmpdir(), "ctx-sqlite-test-"));
     const now = 1_700_000_000_000;

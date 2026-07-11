@@ -679,7 +679,39 @@ export async function registerContextBrokerBeta(pi: ExtensionAPI, options: Conte
     pinCalls: 0,
     statusCalls: 0,
     pruneCalls: 0,
+    runtimePublishFailures: 0,
   };
+  let unreportedPublishFailures = 0;
+  let lastPublishFailureNoticeAt = 0;
+  let lastPublishFailureKind = "unavailable";
+
+  function recordPublishFailure(error: unknown): void {
+    routingTelemetry.runtimePublishFailures += 1;
+    unreportedPublishFailures += 1;
+    lastPublishFailureKind = /database is locked|SQLITE_BUSY|SQLITE_LOCKED/i.test(errorMessage(error)) ? "locked" : "unavailable";
+  }
+
+  function safeBrokerLookup(query: Parameters<typeof broker.lookup>[0]): ContextArtifact[] | null {
+    try {
+      return broker.lookup(query);
+    } catch (error) {
+      recordPublishFailure(error);
+      return null;
+    }
+  }
+
+  function notifyPublishFailure(ctx: { ui: UiLike }): void {
+    if (unreportedPublishFailures <= 0) return;
+    const now = Date.now();
+    if (lastPublishFailureNoticeAt > 0 && now - lastPublishFailureNoticeAt < 60_000) return;
+    const count = unreportedPublishFailures;
+    unreportedPublishFailures = 0;
+    lastPublishFailureNoticeAt = now;
+    ctx.ui.notify(
+      `Context broker durability ${lastPublishFailureKind}; preserved original tool/context flow (${count} publish failure${count === 1 ? "" : "s"}).`,
+      "warning",
+    );
+  }
 
   function refreshRewriteThresholdFromConfig(ctx: Pick<ExtensionContext, "cwd"> | { cwd?: unknown }): void {
     if (rewriteThresholdOption !== undefined || rewriteThresholdEnv !== undefined) return;
@@ -723,6 +755,7 @@ export async function registerContextBrokerBeta(pi: ExtensionAPI, options: Conte
       `exports=${routingTelemetry.exportCalls}`,
       `pins=${routingTelemetry.pinCalls}`,
       `pruneCalls=${routingTelemetry.pruneCalls}`,
+      `runtimePublishFailures=${routingTelemetry.runtimePublishFailures}`,
       `backfill scans=${routingTelemetry.backfillScans} added=${routingTelemetry.backfillAdded} errors=${routingTelemetry.backfillErrors}`,
     ];
     return `Context broker routing telemetry: ${line.join(", ")}`;
@@ -743,7 +776,9 @@ export async function registerContextBrokerBeta(pi: ExtensionAPI, options: Conte
     if (event.sourceId) {
       const existingHandle = sourceHandles.get(event.sourceId);
       if (existingHandle) {
-        const existing = broker.lookup({ handle: existingHandle })[0];
+        const matches = safeBrokerLookup({ handle: existingHandle });
+        if (matches === null) return null;
+        const existing = matches[0];
         if (existing) return existing;
         sourceHandles.delete(event.sourceId);
         seenSourceIds.delete(event.sourceId);
@@ -762,24 +797,30 @@ export async function registerContextBrokerBeta(pi: ExtensionAPI, options: Conte
     const bytes = Buffer.byteLength(payload, "utf8");
     const hostilePayload = isHostilePayload(payload) || hasHostileValue(sanitizedEvent);
     const opaquePayload = !hostilePayload && (isOpaquePayload(payload) || hasOpaqueValue(sanitizedEvent));
-    const artifact = broker.publish({
-      sessionId: activeSessionId,
-      kind: "tool_output",
-      payload,
-      summary: summarizeTool(sanitizedEvent, bytes, hostilePayload),
-      tags: [
-        event.toolName,
-        event.isError ? "error" : "ok",
-        event.sourceId ? "session-backfill" : "live",
-        ...(hostilePayload ? ["hostile", "binary"] : []),
-        ...(opaquePayload ? ["opaque"] : []),
-      ],
-      command: event.toolName === "bash" && typeof sanitizedEvent.input?.command === "string" ? sanitizedEvent.input.command : undefined,
-      paths: typeof sanitizedEvent.input?.path === "string" ? [sanitizedEvent.input.path] : [],
-      ttlMs: event.ttlMs ?? DEFAULT_TTL_MS,
-      parentIds: event.sourceId ? [event.sourceId] : [],
-      createdAt: event.createdAt,
-    });
+    let artifact: ContextArtifact;
+    try {
+      artifact = broker.publish({
+        sessionId: activeSessionId,
+        kind: "tool_output",
+        payload,
+        summary: summarizeTool(sanitizedEvent, bytes, hostilePayload),
+        tags: [
+          event.toolName,
+          event.isError ? "error" : "ok",
+          event.sourceId ? "session-backfill" : "live",
+          ...(hostilePayload ? ["hostile", "binary"] : []),
+          ...(opaquePayload ? ["opaque"] : []),
+        ],
+        command: event.toolName === "bash" && typeof sanitizedEvent.input?.command === "string" ? sanitizedEvent.input.command : undefined,
+        paths: typeof sanitizedEvent.input?.path === "string" ? [sanitizedEvent.input.path] : [],
+        ttlMs: event.ttlMs ?? DEFAULT_TTL_MS,
+        parentIds: event.sourceId ? [event.sourceId] : [],
+        createdAt: event.createdAt,
+      });
+    } catch (error) {
+      recordPublishFailure(error);
+      return null;
+    }
     if (artifact) routingTelemetry.toolResultArtifacts += 1;
     if (event.sourceId) sourceHandles.set(event.sourceId, artifact.handle);
     return artifact;
@@ -992,6 +1033,7 @@ export async function registerContextBrokerBeta(pi: ExtensionAPI, options: Conte
     activeSessionId = sessionIdFor(ctx);
     routingTelemetry.toolResultEvents += 1;
     publishToolArtifact({ ...event, sourceId: event.toolCallId });
+    notifyPublishFailure(ctx);
   });
 
   pi.on("context", async (event, ctx) => {
@@ -1150,7 +1192,12 @@ export async function registerContextBrokerBeta(pi: ExtensionAPI, options: Conte
         return draft.replacement;
       }
       if (!draft.artifact || !draft.rewrite) return draft.original;
-      const live = broker.lookup({ handle: draft.artifact.handle })[0];
+      const matches = safeBrokerLookup({ handle: draft.artifact.handle });
+      if (matches === null) {
+        for (const parentId of draft.artifact.parentIds) sourceHandles.delete(parentId);
+        return draft.original;
+      }
+      const live = matches[0];
       if (!live) {
         if (draft.usedContextLens) routingTelemetry.contextLensFallbacks += 1;
         for (const parentId of draft.artifact.parentIds) sourceHandles.delete(parentId);
@@ -1167,6 +1214,7 @@ export async function registerContextBrokerBeta(pi: ExtensionAPI, options: Conte
       return replacement;
     });
 
+    notifyPublishFailure(ctx);
     return changed ? { messages } : undefined;
   });
 
