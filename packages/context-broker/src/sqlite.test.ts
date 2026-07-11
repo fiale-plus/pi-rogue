@@ -3,9 +3,18 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { describe, expect, it, vi } from "vitest";
-import { createSqliteContextBroker } from "./sqlite.js";
+import { createSqliteContextBroker, isSqliteCorruptionError, isSqliteLockedError } from "./sqlite.js";
 
 describe("createSqliteContextBroker", () => {
+  it("classifies lock, corruption, extended, and unknown startup errors", () => {
+    expect(isSqliteLockedError(Object.assign(new Error("busy"), { code: "SQLITE_BUSY_SNAPSHOT" }))).toBe(true);
+    expect(isSqliteLockedError(new Error("database table is locked"))).toBe(true);
+    expect(isSqliteCorruptionError(Object.assign(new Error("corrupt"), { code: "SQLITE_CORRUPT_INDEX" }))).toBe(true);
+    expect(isSqliteCorruptionError(new Error("file is not a database"))).toBe(true);
+    expect(isSqliteLockedError(new Error("permission denied"))).toBe(false);
+    expect(isSqliteCorruptionError(new Error("permission denied"))).toBe(false);
+  });
+
   it("persists handles, payloads, tiers, and pin state without replay reconstruction", () => {
     const dir = mkdtempSync(join(tmpdir(), "ctx-sqlite-test-"));
     try {

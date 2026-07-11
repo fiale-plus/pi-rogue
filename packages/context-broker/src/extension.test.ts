@@ -2,6 +2,7 @@ import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync, existsSy
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { DatabaseSync } from "node:sqlite";
 
 vi.mock("./sqlite.js", async () => {
   const actual = await vi.importActual<typeof import("./sqlite.js")>("./sqlite.js");
@@ -1059,6 +1060,66 @@ maxRecords: 1,
       expect(thirdRun.notifications.at(-1)?.message).toContain("tier=hot");
       expect(thirdRun.notifications.at(-1)?.message).toContain("pinned");
     } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("preserves a locked healthy sqlite store and its existing handles", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "ctx-broker-lock-test-"));
+    const path = join(dir, "artifacts.sqlite");
+    try {
+      const original = createSqliteContextBroker({ path, busyTimeoutMs: 50 });
+      const artifact = original.publish({ sessionId: "locked-session", kind: "tool_output", payload: "preserved payload", summary: "preserved" });
+      const before = readFileSync(path);
+      const lockDb = new DatabaseSync(path);
+      try {
+        lockDb.exec("BEGIN IMMEDIATE");
+        const { pi, handlers } = createPiMock();
+        await registerContextBrokerBeta(pi, { durable: true, storeDir: dir });
+        const { ctx, notifications } = createCtx();
+        await runHandlers(handlers, "session_start", { type: "session_start" }, ctx);
+
+        expect(notifications[0]?.type).toBe("warning");
+        expect(notifications[0]?.message).toContain("SQLite store is locked");
+        expect(notifications[0]?.message).toContain("Store files were preserved");
+        expect(readdirSync(dir).some((entry) => entry.includes(".recovered-"))).toBe(false);
+        expect(existsSync(path)).toBe(true);
+        expect(readFileSync(path).subarray(0, 16)).toEqual(before.subarray(0, 16));
+      } finally {
+        lockDb.exec("ROLLBACK");
+        lockDb.close();
+      }
+
+      const reopened = createSqliteContextBroker({ path });
+      expect(reopened.lookup({ handle: artifact.handle })[0]?.payload).toBe("preserved payload");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("preserves sqlite artifacts on unknown non-corruption startup failures", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "ctx-broker-unknown-test-"));
+    const sqliteMock = vi.mocked(createSqliteContextBroker);
+    const original = sqliteMock.getMockImplementation();
+    try {
+      const path = join(dir, "artifacts.sqlite");
+      writeFileSync(path, "preserve me", "utf8");
+      writeFileSync(`${path}-wal`, "preserve wal", "utf8");
+      writeFileSync(`${path}-shm`, "preserve shm", "utf8");
+      sqliteMock.mockImplementationOnce(() => { throw new Error("permission denied"); });
+
+      const { pi, handlers } = createPiMock();
+      await registerContextBrokerBeta(pi, { durable: true, storeDir: dir });
+      const { ctx, notifications } = createCtx();
+      await runHandlers(handlers, "session_start", { type: "session_start" }, ctx);
+
+      expect(notifications[0]?.message).toContain("non-corruption SQLite startup failure");
+      expect(readFileSync(path, "utf8")).toBe("preserve me");
+      expect(readFileSync(`${path}-wal`, "utf8")).toBe("preserve wal");
+      expect(readFileSync(`${path}-shm`, "utf8")).toBe("preserve shm");
+      expect(readdirSync(dir).some((entry) => entry.includes(".recovered-"))).toBe(false);
+    } finally {
+      if (original) sqliteMock.mockImplementation(original);
       rmSync(dir, { recursive: true, force: true });
     }
   });

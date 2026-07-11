@@ -544,8 +544,23 @@ async function createDurableContextBroker(
       broker: sqliteModule.createSqliteContextBroker({ ...brokerOptions, dir: durableStoreDir }),
     };
   } catch (initialError) {
+    if (sqliteModule.isSqliteLockedError(initialError)) {
+      console.warn("Context broker SQLite store is locked; preserving the durable store and continuing in memory.", initialError, { sqliteStore });
+      return {
+        broker: createInMemoryContextBroker(brokerOptions),
+        startupNotice: `Context broker durability temporarily degraded because the SQLite store is locked at ${sqliteStore}: ${errorMessage(initialError)}. Store files were preserved; continuing with in-memory broker for this session.`,
+      };
+    }
+    if (!sqliteModule.isSqliteCorruptionError(initialError)) {
+      console.warn("Context broker SQLite initialization failed without evidence of corruption; preserving the durable store.", initialError, { sqliteStore });
+      return {
+        broker: createInMemoryContextBroker(brokerOptions),
+        startupNotice: `Context broker durability degraded after a non-corruption SQLite startup failure at ${sqliteStore}: ${errorMessage(initialError)}. Store files were preserved; continuing with in-memory broker.`,
+      };
+    }
+
     const backups = quarantineSqliteArtifacts(sqliteStore);
-    console.warn("Context broker SQLite initialization failed; attempting recovery.", initialError, { sqliteStore, backups });
+    console.warn("Context broker SQLite corruption detected; attempting recovery.", initialError, { sqliteStore, backups });
     try {
       const broker = sqliteModule.createSqliteContextBroker({ ...brokerOptions, dir: durableStoreDir });
       return {
@@ -553,12 +568,10 @@ async function createDurableContextBroker(
         startupNotice: sqliteRecoveryNotice("repaired", sqliteStore, backups, initialError),
       };
     } catch (retryError) {
-      const retryBackups = quarantineSqliteArtifacts(sqliteStore);
-      const allBackups = [...backups, ...retryBackups];
-      console.warn("Context broker SQLite recovery failed; switching to in-memory broker.", retryError, { sqliteStore, backups: allBackups });
+      console.warn("Context broker SQLite recovery failed; switching to in-memory broker without another quarantine.", retryError, { sqliteStore, backups });
       return {
         broker: createInMemoryContextBroker(brokerOptions),
-        startupNotice: sqliteRecoveryNotice("degraded", sqliteStore, allBackups, initialError, retryError),
+        startupNotice: sqliteRecoveryNotice("degraded", sqliteStore, backups, initialError, retryError),
       };
     }
   }
