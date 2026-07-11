@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { setAdvisorCheckinsEnabled } from "./advisor-checkins.js";
+import { setAdvisorCheckinDemand } from "./advisor-checkins.js";
 import { buildResearchGoal, buildResearchLoopInstruction } from "./autoresearch.js";
 import { registerOrchestration } from "./extension.js";
 import { formatResearchState, type ResearchState } from "./autoresearch-state.js";
@@ -8,10 +8,10 @@ import { clearLoop } from "./loop.js";
 
 vi.mock("./advisor-checkins.js", () => ({
   resetAdvisorSessionContext: vi.fn(),
-  setAdvisorCheckinsEnabled: vi.fn(),
+  setAdvisorCheckinDemand: vi.fn(),
 }));
 
-const setAdvisorCheckinsEnabledMock = vi.mocked(setAdvisorCheckinsEnabled);
+const setAdvisorCheckinDemandMock = vi.mocked(setAdvisorCheckinDemand);
 
 function fakeCtx(id = randomUUID()) {
   const notifications: string[] = [];
@@ -139,9 +139,9 @@ describe("autoresearch status", () => {
 
     registerOrchestration(pi);
     await handler?.("autoresearch improve lifecycle cleanup", ctx);
-    setAdvisorCheckinsEnabledMock.mockClear();
+    setAdvisorCheckinDemandMock.mockClear();
     await handler?.("autoresearch clear", ctx);
 
-    expect(setAdvisorCheckinsEnabledMock).toHaveBeenCalledWith(false);
+    expect(setAdvisorCheckinDemandMock).toHaveBeenCalledWith(ctx, "loop", false);
   });
 });

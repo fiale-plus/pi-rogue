@@ -5,7 +5,7 @@ import { clearResearchStateForGoal, readResearchState, writeResearchState, type 
 import { beginGoalCheck, buildGoalCheckPrompt, consumeDeliveredGoalCheck, endGoalCheck, goalCheckResult, hasGoalCheckPending, invalidateGoalChecks } from "./goal-resolution.js";
 import { clearLoop, triggerLoopTick } from "./loop.js";
 import { clearNoProgressRecovery } from "./novelty-guard.js";
-import { resetAdvisorSessionContext, setAdvisorCheckinsEnabled } from "./advisor-checkins.js";
+import { resetAdvisorSessionContext, setAdvisorCheckinDemand } from "./advisor-checkins.js";
 
 const FEATURE = "orchestration";
 const CURRENT_FILE = "goal.md";
@@ -58,7 +58,7 @@ export function setGoal(ctx: any, goal: string, options: { restartDuplicate?: bo
   const previous = activeGoal(ctx);
   if (previous === note && !options.restartDuplicate) {
     if (note) {
-      setAdvisorCheckinsEnabled(true);
+      setAdvisorCheckinDemand(ctx, "goal", true);
     }
     return "duplicate";
   }
@@ -66,13 +66,13 @@ export function setGoal(ctx: any, goal: string, options: { restartDuplicate?: bo
   if (previous && previous !== note) {
     clearResearchStateForGoal(ctx, previous);
   }
+  // Claim goal demand before releasing loop demand so the shared timer never flips off during transfer.
+  if (note) setAdvisorCheckinDemand(ctx, "goal", true);
   clearLoop(ctx, { clearResearch: true, preserveCheckins: true });
   clearNoProgressRecovery(ctx);
   writeText(sessionFile(FEATURE, ctx, CURRENT_FILE), note ? `${note}\n` : "");
   resetAdvisorSessionContext(ctx);
-  if (note) {
-    setAdvisorCheckinsEnabled(true);
-  }
+  setAdvisorCheckinDemand(ctx, "goal", Boolean(note));
   invalidateGoalChecks(ctx);
 
   if (note) {
@@ -83,6 +83,7 @@ export function setGoal(ctx: any, goal: string, options: { restartDuplicate?: bo
 
 export function clearGoal(ctx: any): void {
   writeText(sessionFile(FEATURE, ctx, CURRENT_FILE), "");
+  setAdvisorCheckinDemand(ctx, "goal", false);
   invalidateGoalChecks(ctx);
   clearNoProgressRecovery(ctx);
   resetAdvisorSessionContext(ctx);
@@ -191,9 +192,7 @@ export function registerGoal(pi: ExtensionAPI): void {
     invalidateGoalChecks(ctx);
     const goal = activeGoal(ctx);
     setGoalStatus(ctx, goal || null);
-    if (goal) {
-      setAdvisorCheckinsEnabled(true);
-    }
+    setAdvisorCheckinDemand(ctx, "goal", Boolean(goal));
   });
 
   pi.on("session_shutdown", (_event, ctx) => {

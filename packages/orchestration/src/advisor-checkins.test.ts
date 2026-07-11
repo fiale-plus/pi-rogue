@@ -1,8 +1,8 @@
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
 import { afterEach, describe, expect, it } from "vitest";
-import { resetAdvisorSessionContext, setAdvisorCheckinsEnabled } from "./advisor-checkins.js";
+import { resetAdvisorSessionContext, setAdvisorCheckinDemand, setAdvisorCheckinsEnabled } from "./advisor-checkins.js";
 
 const dirs: string[] = [];
 
@@ -12,6 +12,10 @@ function tempConfig() {
   const file = join(dir, "advisor", "config.json");
   mkdirSync(join(dir, "advisor"), { recursive: true });
   return file;
+}
+
+function demandCtx(name: string) {
+  return { sessionManager: { getSessionFile: () => join(tmpdir(), `${name}.jsonl`) } };
 }
 
 function tempState() {
@@ -60,6 +64,78 @@ describe("advisor check-in lifecycle bridge", () => {
 
     expect(next).toMatchObject({ checkins: "off", checkinIntervalMinutes: 30 });
     expect(JSON.parse(readFileSync(file, "utf8")).checkins).toBe("off");
+  });
+
+  it("aggregates persisted demand across sessions and preserves the global timer", () => {
+    const file = tempConfig();
+    const demand = join(dirname(file), "checkin-demand.json");
+    const first = demandCtx("checkin-demand-a");
+    const second = demandCtx("checkin-demand-b");
+
+    const enabled = setAdvisorCheckinDemand(first, "goal", true, file, demand);
+    const startedAt = enabled.checkinStartedAt;
+    setAdvisorCheckinDemand(second, "loop", true, file, demand);
+    const afterSecondClears = setAdvisorCheckinDemand(second, "loop", false, file, demand);
+
+    expect(afterSecondClears.checkins).toBe("mid-hour");
+    expect(afterSecondClears.checkinStartedAt).toBe(startedAt);
+    expect(Object.keys(JSON.parse(readFileSync(demand, "utf8")).sessions)).toHaveLength(1);
+
+    const disabled = setAdvisorCheckinDemand(first, "goal", false, file, demand);
+    expect(disabled.checkins).toBe("off");
+    expect(Object.keys(JSON.parse(readFileSync(demand, "utf8")).sessions)).toHaveLength(0);
+  });
+
+  it("recomputes global enablement from persisted ownership after restart", () => {
+    const file = tempConfig();
+    const demand = join(dirname(file), "checkin-demand.json");
+    const first = demandCtx("restart-demand-a");
+    const inactive = demandCtx("restart-demand-b");
+
+    setAdvisorCheckinDemand(first, "goal", true, file, demand);
+    writeFileSync(file, JSON.stringify({ checkins: "off", checkinIntervalMinutes: 30 }), "utf8");
+
+    const recovered = setAdvisorCheckinDemand(inactive, "loop", false, file, demand);
+    expect(recovered.checkins).toBe("mid-hour");
+    expect(recovered.checkinStartedAt).toBeTypeOf("number");
+  });
+
+  it("keeps goal and loop demand independent without resetting during ownership transfer", () => {
+    const file = tempConfig();
+    const demand = join(dirname(file), "checkin-demand.json");
+    const ctx = demandCtx("same-session-demand");
+
+    const loopEnabled = setAdvisorCheckinDemand(ctx, "loop", true, file, demand);
+    setAdvisorCheckinDemand(ctx, "goal", true, file, demand);
+    const transferred = setAdvisorCheckinDemand(ctx, "loop", false, file, demand);
+    expect(transferred.checkins).toBe("mid-hour");
+    expect(transferred.checkinStartedAt).toBe(loopEnabled.checkinStartedAt);
+    expect(setAdvisorCheckinDemand(ctx, "goal", false, file, demand).checkins).toBe("off");
+  });
+
+  it("fails safely without overwriting config or top-level malformed demand", () => {
+    const file = tempConfig();
+    const demand = join(dirname(file), "checkin-demand.json");
+    writeFileSync(file, JSON.stringify({ checkins: "mid-hour", checkinStartedAt: 123 }), "utf8");
+    writeFileSync(demand, "null\n", "utf8");
+
+    expect(() => setAdvisorCheckinDemand(demandCtx("malformed-demand"), "loop", false, file, demand))
+      .toThrow(/Invalid advisor check-in demand registry/);
+    expect(JSON.parse(readFileSync(file, "utf8"))).toMatchObject({ checkins: "mid-hour", checkinStartedAt: 123 });
+    expect(readFileSync(demand, "utf8")).toBe("null\n");
+  });
+
+  it("fails safely on malformed nested ownership instead of discarding it", () => {
+    const file = tempConfig();
+    const demand = join(dirname(file), "checkin-demand.json");
+    const malformed = { version: 1, sessions: { other: { goal: "true", updatedAt: "2026-07-11T00:00:00.000Z" } } };
+    writeFileSync(file, JSON.stringify({ checkins: "mid-hour", checkinStartedAt: 456 }), "utf8");
+    writeFileSync(demand, JSON.stringify(malformed), "utf8");
+
+    expect(() => setAdvisorCheckinDemand(demandCtx("unrelated-demand"), "loop", false, file, demand))
+      .toThrow(/Invalid advisor check-in demand registry entry/);
+    expect(JSON.parse(readFileSync(file, "utf8"))).toMatchObject({ checkins: "mid-hour", checkinStartedAt: 456 });
+    expect(JSON.parse(readFileSync(demand, "utf8"))).toEqual(malformed);
   });
 
   it("preserves legacy one-argument reset signature", () => {
