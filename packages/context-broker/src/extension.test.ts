@@ -491,6 +491,7 @@ lookupBytes: 500,
     expect(telemetry).toContain("lookups slash(calls=");
     expect(telemetry).toContain("exports=");
     expect(telemetry).toContain("pins=");
+    expect(telemetry).toContain("runtimePublishFailures=");
   });
 
   it("keeps current context_lookup results visible before the model consumes them", async () => {
@@ -1092,6 +1093,54 @@ maxRecords: 1,
 
       const reopened = createSqliteContextBroker({ path });
       expect(reopened.lookup({ handle: artifact.handle })[0]?.payload).toBe("preserved payload");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("contains locked runtime publishes in tool_result and context hooks, then recovers", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "ctx-broker-runtime-lock-test-"));
+    const path = join(dir, "artifacts.sqlite");
+    try {
+      const { pi, handlers } = createPiMock();
+      await registerContextBrokerBeta(pi, { durable: true, storeDir: dir, rewriteThresholdBytes: 1 });
+      const { ctx, notifications } = createCtx();
+      await runHandlers(handlers, "session_start", { type: "session_start" }, ctx);
+      notifications.splice(0);
+
+      const lockDb = new DatabaseSync(path);
+      const originalMessage = {
+        role: "toolResult",
+        toolCallId: "locked-context-call",
+        toolName: "bash",
+        content: [{ type: "text", text: "runtime payload that must remain in the original flow" }],
+        isError: false,
+        timestamp: 100,
+      };
+      try {
+        lockDb.exec("BEGIN IMMEDIATE");
+        await runHandlers(handlers, "tool_result", { ...originalMessage, type: "tool_result", input: { command: "echo runtime" } }, ctx);
+        const contextResult = await handlers.get("context")?.[0]({ type: "context", messages: [originalMessage] }, ctx);
+
+        expect(contextResult).toBeUndefined();
+        expect(notifications.filter((entry) => entry.message.includes("preserved original tool/context flow"))).toHaveLength(1);
+        expect(notifications.at(-1)?.message).not.toContain("runtime payload");
+        expect(readdirSync(dir).some((entry) => entry.includes(".recovered-"))).toBe(false);
+      } finally {
+        lockDb.exec("ROLLBACK");
+        lockDb.close();
+      }
+
+      await runHandlers(handlers, "tool_result", {
+        type: "tool_result",
+        toolCallId: "released-call",
+        toolName: "bash",
+        input: { command: "echo released" },
+        content: [{ type: "text", text: "persisted after release" }],
+        isError: false,
+        timestamp: 101,
+      }, ctx);
+      expect((pi as any).__piRogueContextBroker.lookup({ text: "persisted after release" })[0]?.payload).toContain("persisted after release");
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
