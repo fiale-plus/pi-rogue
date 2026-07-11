@@ -164,10 +164,18 @@ function stableSource(input: ContextArtifactInput): string | undefined {
   return input.parentIds?.find(Boolean);
 }
 
-function isSqliteLockedError(error: unknown): boolean {
+export function isSqliteLockedError(error: unknown): boolean {
   const message = error instanceof Error ? error.message : String(error);
   const code = typeof error === "object" && error !== null && "code" in error ? String((error as { code?: unknown }).code ?? "") : "";
-  return code === "SQLITE_BUSY" || code === "SQLITE_LOCKED" || /database is locked|database table is locked/i.test(message);
+  return code.startsWith("SQLITE_BUSY") || code.startsWith("SQLITE_LOCKED") || /database is locked|database table is locked/i.test(message);
+}
+
+export function isSqliteCorruptionError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  const code = typeof error === "object" && error !== null && "code" in error ? String((error as { code?: unknown }).code ?? "") : "";
+  return code.startsWith("SQLITE_CORRUPT")
+    || code.startsWith("SQLITE_NOTADB")
+    || /database disk image is malformed|file is not a database|malformed database schema/i.test(message);
 }
 
 function initialize(db: DatabaseSync): void {
@@ -221,8 +229,13 @@ export function createSqliteContextBroker(options: SqliteContextBrokerOptions = 
   const dbPath = defaultSqlitePath(options);
   if (dbPath !== ":memory:" && !existsSync(dirname(dbPath))) ensureParent(dbPath);
   const db = new DatabaseSync(dbPath);
-  db.exec(`PRAGMA busy_timeout = ${Math.max(0, Math.floor(options.busyTimeoutMs ?? DEFAULT_BUSY_TIMEOUT_MS))}`);
-  initialize(db);
+  try {
+    db.exec(`PRAGMA busy_timeout = ${Math.max(0, Math.floor(options.busyTimeoutMs ?? DEFAULT_BUSY_TIMEOUT_MS))}`);
+    initialize(db);
+  } catch (error) {
+    try { db.close(); } catch { /* ignore close failure while preserving the initialization error */ }
+    throw error;
+  }
 
   const maxRecords = Math.max(1, Math.floor(options.maxRecords ?? DEFAULT_MAX_RECORDS));
   const maxBytes = Math.max(1, Math.floor(options.maxBytes ?? DEFAULT_MAX_BYTES));
