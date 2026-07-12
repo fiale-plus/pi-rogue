@@ -17,6 +17,7 @@ import {
   type TrajectoryFeatures,
 } from "../packages/advisor/src/binary-gate-eval.js";
 import { extractBinaryGateFeatureCounts } from "../packages/advisor/src/binary-gate-features.js";
+import { assertDatasetGovernance, type BinaryDatasetManifest } from "./binary-dataset-manifest.js";
 
 const DEFAULT_INPUT = path.join(process.cwd(), "data", "routing", "binary-gate.jsonl");
 const DEFAULT_MODEL = path.join(process.cwd(), "data", "routing", "binary-gate-model.json");
@@ -64,11 +65,12 @@ function parseArgs(argv: string[]) {
     stackedLr: num("stacked-lr", 0.2),
     stackedL2: num("stacked-l2", 0.0005),
     minStackedRows: num("min-stacked-rows", 80),
+    allowWeakLabelResearch: args["allow-weak-label-research"] === true,
   };
 }
 
-interface BinaryRow { id: string; text: string; label: BinaryLabel; source: string; sourceLabel?: string; cwd?: string; weight?: number; trajectory?: TrajectoryFeatures; }
-interface Example { text: string; label: BinaryLabel; weight: number; source: string; trajectory?: TrajectoryFeatures; }
+interface BinaryRow { id: string; text: string; label: BinaryLabel; source: string; sourceLabel?: string; cwd?: string; weight?: number; trajectory?: TrajectoryFeatures; provenance: "reviewed" | "heuristic"; }
+interface Example { text: string; label: BinaryLabel; weight: number; source: string; trajectory?: TrajectoryFeatures; provenance: "reviewed" | "heuristic"; }
 interface StackedModelArtifact {
   trajectoryFeatures: string[];
   bias: number;
@@ -123,6 +125,7 @@ interface ModelArtifact {
     validationRows: number;
     testRows: number;
     rows: number;
+    weakLabelResearch: boolean;
   };
   calibration: Calibration;
   thresholds: { default: number; preflight?: number; review?: number; closeout?: number; };
@@ -131,6 +134,7 @@ interface ModelArtifact {
 
 interface Report {
   input: string;
+  provenance: { mode: BinaryDatasetManifest["mode"]; promotable: boolean; reviewed: number; heuristic: number; };
   rows: number;
   weightedRows: number;
   train: number;
@@ -522,13 +526,17 @@ function trainStackedModel(rows: DenseStackedExample[], validationRows: DenseSta
 
 function main() {
   const args = parseArgs(process.argv.slice(2));
+  const datasetManifest = assertDatasetGovernance(args.input, args.allowWeakLabelResearch);
   const rows = fs.readFileSync(args.input, "utf8").split(/\n+/).filter(Boolean).map((line) => JSON.parse(line) as BinaryRow);
-  const examples: Example[] = rows.map((r) => ({ text: r.text, label: r.label, weight: normalizeWeight(r.weight), source: r.source, trajectory: r.trajectory }));
-  // Three-way split: train fits logreg weights; validation fits calibration + threshold;
-  // test is untouched until final reporting. This avoids threshold selection on test.
-  const firstSplit = stratifiedSplit(examples, 0.7, 42);
+  const examples: Example[] = rows.map((r) => ({ text: r.text, label: r.label, weight: normalizeWeight(r.weight), source: r.source, trajectory: r.trajectory, provenance: r.provenance }));
+  // Weak labels may augment fitting, but validation/test promotion metrics use reviewed truth only.
+  const reviewedExamples = examples.filter((row) => row.provenance === "reviewed");
+  const heuristicExamples = examples.filter((row) => row.provenance === "heuristic");
+  const truthExamples = datasetManifest.promotable ? reviewedExamples : examples;
+  const trainingOnlyAugment = datasetManifest.promotable ? heuristicExamples : [];
+  const firstSplit = stratifiedSplit(truthExamples, 0.7, 42);
   const secondSplit = stratifiedSplit(firstSplit.test, 0.5, 4242);
-  const train = firstSplit.train;
+  const train = [...firstSplit.train, ...trainingOnlyAugment];
   const validation = secondSplit.train;
   const test = secondSplit.test;
 
@@ -674,6 +682,7 @@ function main() {
       validationRows: validation.length,
       testRows: test.length,
       rows: rows.length,
+      weakLabelResearch: !datasetManifest.promotable,
     },
     calibration,
     thresholds: {
@@ -694,6 +703,12 @@ function main() {
 
   const report: Report = {
     input: args.input,
+    provenance: {
+      mode: datasetManifest.mode,
+      promotable: datasetManifest.promotable,
+      reviewed: datasetManifest.counts.reviewed,
+      heuristic: datasetManifest.counts.heuristic,
+    },
     rows: rows.length,
     weightedRows,
     train: train.length,

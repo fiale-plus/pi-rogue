@@ -11,12 +11,14 @@ import {
   type Calibration,
 } from "../packages/advisor/src/binary-gate-eval.js";
 import { extractBinaryGateFeatureCounts } from "../packages/advisor/src/binary-gate-features.js";
+import { assertDatasetGovernance, type BinaryDatasetManifest } from "./binary-dataset-manifest.js";
 
 interface BinaryRow {
   id: string;
   text: string;
   label: BinaryLabel;
   source?: string;
+  provenance: "reviewed" | "heuristic";
 }
 
 interface ModelArtifact {
@@ -34,6 +36,7 @@ interface ModelArtifact {
 interface EvalResult {
   input: string;
   model: string;
+  provenance: { mode: BinaryDatasetManifest["mode"]; promotable: boolean; reviewed: number; heuristic: number };
   rows: number;
   counts: Record<BinaryLabel, number>;
   accuracy: number;
@@ -86,6 +89,7 @@ function parseArgs(argv: string[]) {
     topMisses: num("top-misses", 10),
     fnCost: num("fn-cost", 3),
     fpCost: num("fp-cost", 1),
+    allowWeakLabelResearch: args["allow-weak-label-research"] === true,
   };
 }
 
@@ -181,8 +185,10 @@ function buildConfusion(rows: BinaryRow[], preds: BinaryLabel[]) {
 
 function main() {
   const args = parseArgs(process.argv.slice(2));
+  const datasetManifest = assertDatasetGovernance(args.input, args.allowWeakLabelResearch);
 
-  const rows = readJsonl<BinaryRow>(args.input);
+  const allRows = readJsonl<BinaryRow>(args.input);
+  const rows = datasetManifest.promotable ? allRows.filter((row) => row.provenance === "reviewed") : allRows;
   const model = JSON.parse(fs.readFileSync(args.model, "utf8")) as ModelArtifact;
   if (!model.labels?.length || model.labels.length !== 2) {
     throw new Error("Model labels missing or unsupported (expected two classes).");
@@ -243,6 +249,12 @@ function main() {
   const report: EvalResult = {
     input: args.input,
     model: args.model,
+    provenance: {
+      mode: datasetManifest.mode,
+      promotable: datasetManifest.promotable,
+      reviewed: datasetManifest.counts.reviewed,
+      heuristic: datasetManifest.counts.heuristic,
+    },
     rows: rows.length,
     counts,
     accuracy: correct / rows.length,

@@ -14,10 +14,11 @@ import {
   type BinaryLabel,
 } from "../packages/advisor/src/binary-gate-eval.js";
 import { extractBinaryGateFeatureCounts } from "../packages/advisor/src/binary-gate-features.js";
+import { assertDatasetGovernance } from "./binary-dataset-manifest.js";
 
 const LABELS: BinaryLabel[] = ["continue", "escalate"];
 const LEGACY_V1_TRUST_THRESHOLD = 0.55;
-type Row = { text: string; label: BinaryLabel; source: string };
+type Row = { text: string; label: BinaryLabel; source: string; provenance: "reviewed" | "heuristic" };
 type SparseVec = { I: number[]; V: number[] };
 
 function shuffle<T>(items: T[], seed: number): T[] {
@@ -175,11 +176,22 @@ function summarize(name: string, probs: number[], labels: BinaryLabel[], thresho
 }
 
 function main() {
-  const input = process.argv[2] || "data/routing/binary-gate.jsonl";
-  const fnCost = Number(process.argv[3] || 3);
-  const fpCost = Number(process.argv[4] || 1);
+  const argv = process.argv.slice(2);
+  const weakFlagIndex = argv.indexOf("--allow-weak-label-research");
+  const allowWeakLabelResearch = weakFlagIndex >= 0 && argv[weakFlagIndex + 1] !== "false";
+  const positional = argv.filter((value, index) => value !== "--allow-weak-label-research" && !(index > 0 && argv[index - 1] === "--allow-weak-label-research" && value === "false"));
+  const input = positional[0] || "data/routing/binary-gate.jsonl";
+  const fnCost = Number(positional[1] || 3);
+  const fpCost = Number(positional[2] || 1);
+  const datasetManifest = assertDatasetGovernance(input, allowWeakLabelResearch);
+  console.log(`provenance: mode=${datasetManifest.mode} promotable=${datasetManifest.promotable} reviewed=${datasetManifest.counts.reviewed} heuristic=${datasetManifest.counts.heuristic}`);
   const rows = fs.readFileSync(input, "utf8").split(/\n+/).filter(Boolean).map((line) => JSON.parse(line) as Row);
-  const { train, validation, test } = threeWaySplit(rows);
+  const reviewedRows = datasetManifest.promotable ? rows.filter((row) => row.provenance === "reviewed") : rows;
+  const heuristicRows = datasetManifest.promotable ? rows.filter((row) => row.provenance === "heuristic") : [];
+  const reviewedSplit = threeWaySplit(reviewedRows);
+  const train = [...reviewedSplit.train, ...heuristicRows];
+  const validation = reviewedSplit.validation;
+  const test = reviewedSplit.test;
   const model = trainLogreg(train, validation, 6000, 2, 40);
 
   const validationLabels = validation.map((row) => row.label);

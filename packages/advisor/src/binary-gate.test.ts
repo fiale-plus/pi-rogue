@@ -25,6 +25,22 @@ describe("binary gate artifact status", () => {
     expect(status.error).toBeTruthy();
   });
 
+  it("rejects weak-label research models as non-promotable", () => {
+    const path = join(mkdtempSync(join(tmpdir(), "pi-rogue-gate-weak-")), "gate.json");
+    writeFileSync(path, JSON.stringify({
+      kind: "binary-logreg-v2",
+      labels: ["continue", "escalate"],
+      features: [],
+      idf: [],
+      bias: [0, 0],
+      weights: [[], []],
+      config: { weakLabelResearch: true },
+    }), "utf8");
+
+    const status = inspectBinaryGateArtifact(path, false);
+    expect(status).toMatchObject({ available: true, usable: false, source: "unsupported" });
+  });
+
   it("reports valid v2 artifacts as usable", () => {
     const path = join(mkdtempSync(join(tmpdir(), "pi-rogue-gate-valid-")), "gate.json");
     writeFileSync(path, JSON.stringify({

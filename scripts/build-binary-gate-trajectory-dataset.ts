@@ -4,6 +4,7 @@ import path from "node:path";
 import { hashText, type Label } from "./routing-heuristics.js";
 import { iterateCheckpoints } from "../packages/router/src/checkpoints.js";
 import { readPiSession } from "../packages/router/src/session-reader.js";
+import { assertDatasetGovernance, datasetSha256, manifestPathFor, type BinaryDatasetManifest } from "./binary-dataset-manifest.js";
 
 interface TrajectoryFeaturesJson {
   loopScore?: number;
@@ -41,6 +42,7 @@ interface LabelRow {
   sourceLabel?: Label;
   cwd?: string;
   weight?: number;
+  provenance: "reviewed" | "heuristic";
 }
 
 interface TrajectoryMatch {
@@ -78,6 +80,7 @@ function parseArgs(argv: string[]) {
     output: String(args.output || path.join(process.cwd(), "data", "routing", "binary-gate-trajectory.jsonl")),
     report: String(args.report || path.join(process.cwd(), "data", "routing", "binary-gate-trajectory-report.json")),
     limit: Number(args.limit || 0) || 0,
+    allowWeakLabelResearch: args["allow-weak-label-research"] === true,
   };
 }
 
@@ -206,6 +209,7 @@ function buildClaudeHistoryProxy(file: string): Map<string, TrajectoryMatch> {
 
 function main() {
   const args = parseArgs(process.argv.slice(2));
+  const sourceManifest = assertDatasetGovernance(args.labels, args.allowWeakLabelResearch);
   const labelRows = readJsonl<LabelRow>(args.labels);
   const sessionFiles = walkJsonlFiles(args.input);
   const trajectoryById = new Map<string, TrajectoryMatch>();
@@ -299,6 +303,8 @@ function main() {
 
   fs.mkdirSync(path.dirname(args.output), { recursive: true });
   fs.writeFileSync(args.output, enriched.map((row) => JSON.stringify(row)).join("\n") + "\n", "utf8");
+  const outputManifest: BinaryDatasetManifest = { ...sourceManifest, datasetSha256: datasetSha256(args.output) };
+  fs.writeFileSync(manifestPathFor(args.output), `${JSON.stringify(outputManifest, null, 2)}\n`, "utf8");
   fs.writeFileSync(args.report, `${JSON.stringify({
     labels: args.labels,
     input: args.input,
