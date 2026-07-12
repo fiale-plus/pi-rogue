@@ -6,6 +6,7 @@ coverage
 .DS_Store
 
 .pi/
+.pi-subagents/
 
 # Autoresearch cycles (generated)
 .autoresearch/
