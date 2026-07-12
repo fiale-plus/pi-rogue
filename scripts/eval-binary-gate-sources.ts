@@ -13,6 +13,7 @@ import {
   type Calibration,
 } from "../packages/advisor/src/binary-gate-eval.js";
 import { extractBinaryGateFeatureCounts } from "../packages/advisor/src/binary-gate-features.js";
+import { assertDatasetGovernance } from "./binary-dataset-manifest.js";
 
 const DEFAULT_INPUT = path.join(process.cwd(), "data", "routing", "binary-gate.jsonl");
 const DEFAULT_REPORT = path.join(process.cwd(), "data", "routing", "binary-source-eval-report.json");
@@ -25,6 +26,7 @@ interface BinaryRow {
   source: string;
   sourceLabel?: string;
   cwd?: string;
+  provenance: "reviewed" | "heuristic";
 }
 
 export interface Example {
@@ -97,6 +99,7 @@ function parseArgs(argv: string[]) {
     fnCost: num("fn-cost", 3),
     fpCost: num("fp-cost", 1),
     thresholdSteps: num("threshold-steps", 101),
+    allowWeakLabelResearch: args["allow-weak-label-research"] === true,
   };
 }
 
@@ -357,12 +360,17 @@ export function evaluateSourceHoldout(trainRows: Example[], testRows: Example[],
 
 function main() {
   const args = parseArgs(process.argv.slice(2));
-  const rows = readJsonl<BinaryRow>(args.input).map((row) => ({ text: row.text, label: row.label, source: row.source } satisfies Example));
+  const datasetManifest = assertDatasetGovernance(args.input, args.allowWeakLabelResearch);
+  const rawRows = readJsonl<BinaryRow>(args.input);
+  const rows = rawRows.map((row) => ({ text: row.text, label: row.label, source: row.source } satisfies Example));
+  const evaluationRows = datasetManifest.promotable
+    ? rawRows.filter((row) => row.provenance === "reviewed").map((row) => ({ text: row.text, label: row.label, source: row.source } satisfies Example))
+    : rows;
   const unsortedSourceCounts = counts(rows, (row) => row.source);
   const sourceCounts = Object.fromEntries(Object.keys(unsortedSourceCounts).sort().map((source) => [source, unsortedSourceCounts[source]]));
   const evaluations: EvalResult[] = [];
-  for (const source of Object.keys(sourceCounts).sort()) {
-    const test = rows.filter((row) => row.source === source);
+  for (const source of Object.keys(counts(evaluationRows, (row) => row.source)).sort()) {
+    const test = evaluationRows.filter((row) => row.source === source);
     const trainRows = rows.filter((row) => row.source !== source);
     if (test.length < 20 || trainRows.length < 20) continue;
     evaluations.push(evaluateSourceHoldout(trainRows, test, args, source));
@@ -370,6 +378,12 @@ function main() {
 
   const report = {
     input: args.input,
+    provenance: {
+      mode: datasetManifest.mode,
+      promotable: datasetManifest.promotable,
+      reviewed: datasetManifest.counts.reviewed,
+      heuristic: datasetManifest.counts.heuristic,
+    },
     rows: rows.length,
     sourceCounts,
     config: {

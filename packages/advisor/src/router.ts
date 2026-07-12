@@ -129,6 +129,7 @@ function ensureBinaryGateSeeded(): void {
 function isSupportedBinaryGateModel(value: unknown): value is BinaryGateModel {
   if (!value || typeof value !== "object") return false;
   const model = value as Partial<BinaryGateModel>;
+  if (model.config?.weakLabelResearch === true) return false;
   return (model.kind === "binary-logreg-v1" || model.kind === "binary-logreg-v2") &&
     Array.isArray(model.labels) &&
     Array.isArray(model.features) &&
