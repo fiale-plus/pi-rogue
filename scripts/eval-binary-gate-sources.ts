@@ -1,6 +1,7 @@
 #!/usr/bin/env tsx
 import fs from "node:fs";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import {
   applyCalibration,
   brierScore,
@@ -26,18 +27,19 @@ interface BinaryRow {
   cwd?: string;
 }
 
-interface Example {
+export interface Example {
   text: string;
   label: BinaryLabel;
   source: string;
 }
 
-interface EvalResult {
+export interface EvalResult {
   trainSources: string[];
   testSource: string;
   train: number;
   test: number;
   threshold: number;
+  thresholdSelection: { source: "training-validation" | "fixed-fallback"; fit: number; validation: number };
   testCounts: Record<BinaryLabel, number>;
   majority: { label: BinaryLabel; accuracy: number };
   logistic: {
@@ -63,7 +65,7 @@ interface TrainModel {
   bias: number[];
 }
 
-type Config = { maxFeatures: number; minDf: number; epochs: number; fnCost: number; fpCost: number; thresholdSteps: number; };
+export type Config = { maxFeatures: number; minDf: number; epochs: number; fnCost: number; fpCost: number; thresholdSteps: number; };
 type SparseVec = { I: number[]; V: number[] };
 
 function parseArgs(argv: string[]) {
@@ -111,6 +113,10 @@ function inc(m: Map<string, number>, k: string, b = 1): void {
   m.set(k, (m.get(k) || 0) + b);
 }
 
+function compareCodeUnits(a: string, b: string): number {
+  return a < b ? -1 : a > b ? 1 : 0;
+}
+
 function extractFeatures(text: string): Map<string, number> {
   return extractBinaryGateFeatureCounts(text);
 }
@@ -124,7 +130,7 @@ function buildFeatureSpace(rows: Example[], maxFeatures: number, minDf: number) 
   });
   const features = [...df.entries()]
     .filter(([, count]) => count >= minDf)
-    .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+    .sort((a, b) => b[1] - a[1] || compareCodeUnits(a[0], b[0]))
     .slice(0, maxFeatures)
     .map(([feature]) => feature);
   const index = new Map(features.map((feature, i) => [feature, i]));
@@ -240,32 +246,61 @@ function counts(rows: Example[], key: (row: Example) => string): Record<string, 
   }, {});
 }
 
-function evaluate(trainRows: Example[], testRows: Example[], cfg: Config, testSource: string): EvalResult {
-  const model = train(trainRows, cfg);
-  const trainLabels = trainRows.map((row) => row.label);
-  const trainLogits = trainRows.map((row) => {
-    const vec = vectorizeWith(extractFeatures(row.text), model.index, model.idf);
-    return escalateLogit(vec, model.weights, model.bias);
-  });
-  const calibration = fitPlattCalibration(trainLogits, trainLabels);
+function stableRowKey(row: Example): string {
+  return `${row.label}\u0000${row.source}\u0000${row.text}`;
+}
 
-  const testProbs = testRows.map((row) => {
-    const vec = vectorizeWith(extractFeatures(row.text), model.index, model.idf);
-    const logit = escalateLogit(vec, model.weights, model.bias);
-    return applyCalibration(logit, calibration);
-  });
-  const labels = testRows.map((row) => row.label);
-  const sweep = sweepThreshold(testProbs, labels, cfg.fnCost, cfg.fpCost, { steps: Math.trunc(cfg.thresholdSteps) });
-  const pred = testProbs.map((p) => (p >= sweep.threshold ? "escalate" : "continue") as BinaryLabel);
+export function splitThresholdValidation(rows: Example[]): { fit: Example[]; validation: Example[] } {
+  const fit: Example[] = [];
+  const validation: Example[] = [];
+  for (const label of LABELS) {
+    const group = rows.filter((row) => row.label === label).sort((a, b) => compareCodeUnits(stableRowKey(a), stableRowKey(b)));
+    const validationCount = group.length >= 2 ? Math.min(group.length - 1, Math.max(1, Math.floor(group.length * 0.2))) : 0;
+    validation.push(...group.slice(0, validationCount));
+    fit.push(...group.slice(validationCount));
+  }
+  return { fit, validation };
+}
 
-  const continueMetrics = metricsFor("continue", testRows, pred);
-  const escalateMetrics = metricsFor("escalate", testRows, pred);
+function probabilities(rows: Example[], model: TrainModel, calibration: Calibration): number[] {
+  return rows.map((row) => {
+    const vec = vectorizeWith(extractFeatures(row.text), model.index, model.idf);
+    return applyCalibration(escalateLogit(vec, model.weights, model.bias), calibration);
+  });
+}
+
+export function evaluateSourceHoldout(trainRows: Example[], testRows: Example[], cfg: Config, testSource: string): EvalResult {
+  const canonicalTrain = [...trainRows].sort((a, b) => compareCodeUnits(stableRowKey(a), stableRowKey(b)));
+  const canonicalTest = [...testRows].sort((a, b) => compareCodeUnits(stableRowKey(a), stableRowKey(b)));
+  const { fit, validation } = splitThresholdValidation(canonicalTrain);
+  const selectionRows = fit.length ? fit : trainRows;
+  const selectionModel = train(selectionRows, cfg);
+  const selectionLogits = selectionRows.map((row) => {
+    const vec = vectorizeWith(extractFeatures(row.text), selectionModel.index, selectionModel.idf);
+    return escalateLogit(vec, selectionModel.weights, selectionModel.bias);
+  });
+  const selectionCalibration = fitPlattCalibration(selectionLogits, selectionRows.map((row) => row.label));
+  const validationLabels = new Set(validation.map((row) => row.label));
+  const validationUsable = validationLabels.size === LABELS.length;
+  const threshold = validationUsable
+    ? sweepThreshold(probabilities(validation, selectionModel, selectionCalibration), validation.map((row) => row.label), cfg.fnCost, cfg.fpCost, { steps: Math.trunc(cfg.thresholdSteps) }).threshold
+    : 0.5;
+
+  // Keep the fitted model/calibration paired with the threshold selected for its probability scale.
+  const model = selectionModel;
+  const calibration = selectionCalibration;
+  const testProbs = probabilities(canonicalTest, model, calibration);
+  const labels = canonicalTest.map((row) => row.label);
+  const pred = testProbs.map((p) => (p >= threshold ? "escalate" : "continue") as BinaryLabel);
+
+  const continueMetrics = metricsFor("continue", canonicalTest, pred);
+  const escalateMetrics = metricsFor("escalate", canonicalTest, pred);
   const correct = pred.filter((p, i) => p === labels[i]).length;
   const confusion = LABELS.map((actual) => ({
     actual,
     predicted: LABELS.map((predictedLabel) => [
       predictedLabel,
-      testRows.filter((row, i) => row.label === actual && pred[i] === predictedLabel).length,
+      canonicalTest.filter((row, i) => row.label === actual && pred[i] === predictedLabel).length,
     ] as [BinaryLabel, number]),
   }));
 
@@ -285,16 +320,26 @@ function evaluate(trainRows: Example[], testRows: Example[], cfg: Config, testSo
   const brier = brierScore(testProbs, labels);
   const ece10 = expectedCalibrationError(testProbs, labels, 10);
   const cwl = costWeightedLoss(tp, fp, fn, tn, cfg.fnCost, cfg.fpCost);
-  const majority = counts(testRows, (row) => row.label);
+  const trainCounts = counts(canonicalTrain, (row) => row.label);
+  const majorityLabel: BinaryLabel = (trainCounts.escalate || 0) > (trainCounts.continue || 0) ? "escalate" : "continue";
+  const majorityCorrect = canonicalTest.filter((row) => row.label === majorityLabel).length;
 
   return {
-    trainSources: Array.from(new Set(trainRows.map((row) => row.source))).sort(),
+    trainSources: Array.from(new Set(canonicalTrain.map((row) => row.source))).sort(),
     testSource,
-    train: trainRows.length,
-    test: testRows.length,
-    threshold: sweep.threshold,
-    testCounts: counts(testRows, (row) => row.label),
-    majority: { label: (majority.escalate || 0) > (majority.continue || 0) ? "escalate" : "continue", accuracy: correct / testRows.length },
+    train: canonicalTrain.length,
+    test: canonicalTest.length,
+    threshold,
+    thresholdSelection: {
+      source: validationUsable ? "training-validation" : "fixed-fallback",
+      fit: selectionRows.length,
+      validation: validation.length,
+    },
+    testCounts: {
+      continue: canonicalTest.filter((row) => row.label === "continue").length,
+      escalate: canonicalTest.filter((row) => row.label === "escalate").length,
+    },
+    majority: { label: majorityLabel, accuracy: majorityCorrect / Math.max(1, canonicalTest.length) },
     logistic: {
       accuracy: correct / testRows.length,
       macroF1: (continueMetrics.f1 + escalateMetrics.f1) / 2,
@@ -305,7 +350,7 @@ function evaluate(trainRows: Example[], testRows: Example[], cfg: Config, testSo
       escalate: escalateMetrics,
       confusion,
       calibration,
-      threshold: sweep.threshold,
+      threshold,
     },
   };
 }
@@ -313,14 +358,14 @@ function evaluate(trainRows: Example[], testRows: Example[], cfg: Config, testSo
 function main() {
   const args = parseArgs(process.argv.slice(2));
   const rows = readJsonl<BinaryRow>(args.input).map((row) => ({ text: row.text, label: row.label, source: row.source } satisfies Example));
-  const sourceCounts = counts(rows, (row) => row.source);
+  const unsortedSourceCounts = counts(rows, (row) => row.source);
+  const sourceCounts = Object.fromEntries(Object.keys(unsortedSourceCounts).sort().map((source) => [source, unsortedSourceCounts[source]]));
   const evaluations: EvalResult[] = [];
   for (const source of Object.keys(sourceCounts).sort()) {
     const test = rows.filter((row) => row.source === source);
     const trainRows = rows.filter((row) => row.source !== source);
-    const labelCounts = counts(test, (row) => row.label);
-    if (test.length < 20 || Object.keys(labelCounts).length < 2 || trainRows.length < 20) continue;
-    evaluations.push(evaluate(trainRows, test, args, source));
+    if (test.length < 20 || trainRows.length < 20) continue;
+    evaluations.push(evaluateSourceHoldout(trainRows, test, args, source));
   }
 
   const report = {
@@ -348,4 +393,6 @@ function main() {
   console.log(`report: ${args.report}`);
 }
 
-try { main(); } catch (error) { console.error(error instanceof Error ? error.stack || error.message : String(error)); process.exitCode = 1; }
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  try { main(); } catch (error) { console.error(error instanceof Error ? error.stack || error.message : String(error)); process.exitCode = 1; }
+}
