@@ -1,7 +1,7 @@
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { decideRoute, readCheckpointJsonl } from "./decision.js";
-import { readRouteEvents, type RouteEvent } from "./ledger.js";
+import { observedUserOverrodeDecision, readRouteEvents, type RouteEvent } from "./ledger.js";
 import { readOutcomes, type RouterOutcome } from "./outcomes.js";
 import type { RouterCheckpoint, RouteAction } from "./types.js";
 import { readTeacherLabels, type TeacherLabel } from "./learning.js";
@@ -82,6 +82,9 @@ export function buildTrainingRows(options: {
     const canUseLabel = Boolean(teacherLabel && (options.includeLocalRuleLabels || teacherLabel.source !== "local-rule"));
     const routeAction = canUseLabel ? teacherLabel!.suggestedAction : null;
     const ruleAction = decideRoute(checkpoint).action;
+    const userOverrodeDecision = !outcome ? null
+      : outcome.evidence.source === "manual" ? outcome.userOverrodeDecision
+      : routeEvent ? observedUserOverrodeDecision(routeEvent.observed) : outcome.userOverrodeDecision;
     return {
       schema: ROUTER_TRAINING_ROW_SCHEMA,
       checkpointId: checkpoint.checkpointId,
@@ -113,7 +116,7 @@ export function buildTrainingRows(options: {
         taskStatus: outcome?.taskStatus ?? "unknown",
         testsPassedAfter: outcome?.testsPassedAfter ?? null,
         acceptedDiff: outcome?.acceptedDiff ?? null,
-        userOverrodeDecision: outcome?.userOverrodeDecision ?? null,
+        userOverrodeDecision,
         reworkTurns: outcome?.reworkTurns ?? null,
       },
       provenance: {

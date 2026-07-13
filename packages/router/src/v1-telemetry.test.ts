@@ -6,7 +6,7 @@ import { describe, expect, it } from "vitest";
 import { rebuildCheckpointsFromSession, writeSessionCheckpointsJsonl } from "./checkpoints.js";
 import { buildTrainingRows, writeTrainingRows } from "./dataset.js";
 import { decideRoute } from "./decision.js";
-import { buildRouteEvent } from "./ledger.js";
+import { buildRouteEvent, type RouteEvent } from "./ledger.js";
 import { readGitDiffStats } from "./git-features.js";
 import { generateTeacherPromptRequests } from "./learning.js";
 import { buildUnknownOutcome, enrichOutcome, inferOutcomes, writeEnrichedOutcomes, writeInferredOutcomes } from "./outcomes.js";
@@ -151,6 +151,70 @@ describe("router v1 outcome and feature telemetry", () => {
     });
     expect(buildUnknownOutcome(event, checkpoint({ features: { diffFilesChanged: 0, filesTouched: 1 } }))).toMatchObject({ finalFilesTouched: 1 });
     expect(JSON.stringify(outcome)).not.toContain("Error: boom");
+  });
+
+  it("keeps policy, blocked, and downgraded routing outcomes separate from explicit user overrides", () => {
+    const item = checkpoint();
+    const base = buildRouteEvent(item, decideRoute(item));
+    for (const [routingStatus, blockedBy] of [
+      ["policy_noop", "policy"],
+      ["blocked", "infra_auth"],
+      ["downgraded", undefined],
+    ] as const) {
+      const event = {
+        ...base,
+        observed: { followed: false, overriddenBy: "legacy routing reason", routingStatus, blockedBy },
+      } satisfies RouteEvent;
+      expect(buildUnknownOutcome(event, item)).toMatchObject({
+        userOverrodeDecision: false,
+        routeStatus: routingStatus,
+        evidence: { blockedBy },
+      });
+    }
+
+    const preStatusPolicyEvent = {
+      ...base,
+      observed: { followed: false, overriddenBy: "auto-model cooldown active" },
+    } satisfies RouteEvent;
+    expect(buildUnknownOutcome(preStatusPolicyEvent, item).userOverrodeDecision).toBe(false);
+
+    const explicitOverride = {
+      ...base,
+      observed: { followed: false, overriddenBy: "continue_current", userOverrodeDecision: true, routingStatus: "blocked" as const, blockedBy: "policy" as const },
+    } satisfies RouteEvent;
+    expect(buildUnknownOutcome(explicitOverride, item).userOverrodeDecision).toBe(true);
+  });
+
+  it("does not turn routing blocks into user overrides during enrichment", () => {
+    const item = checkpoint();
+    const base = buildRouteEvent(item, decideRoute(item));
+    const blocked = {
+      ...base,
+      observed: { followed: false, routingReason: "missing auth", routingStatus: "blocked" as const, blockedBy: "infra_auth" as const, userOverrodeDecision: false },
+    } satisfies RouteEvent;
+    const staleInferred = { ...buildUnknownOutcome(base, item), userOverrodeDecision: true };
+    expect(enrichOutcome(staleInferred, { checkpoint: item, event: blocked })).toMatchObject({
+      userOverrodeDecision: false,
+      routeStatus: "blocked",
+      evidence: { blockedBy: "infra_auth" },
+    });
+
+    const manual = { ...staleInferred, evidence: { ...staleInferred.evidence, source: "manual" as const } };
+    expect(enrichOutcome(manual, { checkpoint: item, event: blocked }).userOverrodeDecision).toBe(true);
+  });
+
+  it("exports uncontaminated override labels to training rows", () => {
+    const item = checkpoint();
+    const base = buildRouteEvent(item, decideRoute(item));
+    const policyNoop = {
+      ...base,
+      observed: { followed: false, routingReason: "cooldown", routingStatus: "policy_noop" as const, blockedBy: "policy" as const, userOverrodeDecision: false },
+    } satisfies RouteEvent;
+    const staleInferred = { ...buildUnknownOutcome(policyNoop, item), userOverrodeDecision: true };
+    expect(buildTrainingRows({ checkpoints: [item], routeEvents: [policyNoop], outcomes: [staleInferred] })[0].outcome.userOverrodeDecision).toBe(false);
+
+    const manualOutcome = { ...staleInferred, evidence: { ...staleInferred.evidence, source: "manual" as const } };
+    expect(buildTrainingRows({ checkpoints: [item], routeEvents: [policyNoop], outcomes: [manualOutcome] })[0].outcome.userOverrodeDecision).toBe(true);
   });
 
   it("enriches outcome skeletons from checkpoint and route-event evidence", () => {

@@ -464,7 +464,9 @@ describe("router extension", () => {
     expect(pi.selectedModels).toHaveLength(1);
     const events = readFileSync(routerEventsPath(ctx, sessionPath), "utf8").trim().split("\n").filter(Boolean).map((line) => JSON.parse(line));
     expect(events).toHaveLength(2);
-    expect(events.at(-1)?.observed.followed).toBe(false);
+    expect(events.at(-1)?.observed).toMatchObject({ followed: false, userOverrodeDecision: false, routingStatus: "policy_noop" });
+    expect(events.at(-1)?.observed.routingReason).toBeTruthy();
+    expect(events.at(-1)?.observed.overriddenBy).toBeUndefined();
   });
 
   it("auto_model applies only model switches for explicit target mismatches", async () => {
