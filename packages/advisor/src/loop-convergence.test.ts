@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { completeSimple } from "@earendil-works/pi-ai";
+import { completeSimple } from "@earendil-works/pi-ai/compat";
 import { advisorSessionStatePath, registerAdvisor } from "./extension.js";
 
 const testHome = vi.hoisted(() => `/tmp/pi-rogue-advisor-loop-convergence-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2)}`);
@@ -13,8 +13,8 @@ vi.mock("node:os", async () => {
   return { ...actual, homedir: () => testHome };
 });
 
-vi.mock("@earendil-works/pi-ai", async () => {
-  const actual = await vi.importActual<typeof import("@earendil-works/pi-ai")>("@earendil-works/pi-ai");
+vi.mock("@earendil-works/pi-ai/compat", async () => {
+  const actual = await vi.importActual<typeof import("@earendil-works/pi-ai/compat")>("@earendil-works/pi-ai/compat");
   return {
     ...actual,
     completeSimple: vi.fn(),

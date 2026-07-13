@@ -19,6 +19,8 @@ Direct installs of advisor/orchestration remain paused (marked private). Fusion 
 pi install npm:@fiale-plus/pi-rogue
 ```
 
+Requires `@earendil-works/pi-coding-agent >=0.80.6 <0.81.0` and Node.js `>=22.19.0`.
+
 For local monorepo dev:
 
 ```bash

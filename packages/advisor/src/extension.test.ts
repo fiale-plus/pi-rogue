@@ -2,7 +2,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import { completeSimple } from "@earendil-works/pi-ai";
+import { completeSimple } from "@earendil-works/pi-ai/compat";
 import {
   applyAdvisorBoardProfilePlan,
   applyPiRogueConfigurePlan,
@@ -28,8 +28,8 @@ import {
   type AdvisorConfig,
 } from "./extension.js";
 
-vi.mock("@earendil-works/pi-ai", async () => {
-  const actual = await vi.importActual<typeof import("@earendil-works/pi-ai")>("@earendil-works/pi-ai");
+vi.mock("@earendil-works/pi-ai/compat", async () => {
+  const actual = await vi.importActual<typeof import("@earendil-works/pi-ai/compat")>("@earendil-works/pi-ai/compat");
   return {
     ...actual,
     completeSimple: vi.fn(),

@@ -21,7 +21,7 @@
     ]
   },
   "peerDependencies": {
-    "@earendil-works/pi-coding-agent": "^0.74.0"
+    "@earendil-works/pi-coding-agent": ">=0.80.6 <0.81.0"
   },
   "publishConfig": {
     "access": "public"

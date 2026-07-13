@@ -11,7 +11,7 @@ import {
   type Model,
   type SimpleStreamOptions,
   type Usage,
-} from "@earendil-works/pi-ai";
+} from "@earendil-works/pi-ai/compat";
 import { createFileFusionTraceStore, runFusionCompletion, type FusionBrokerPublisher, type FusionCompleter } from "./runner.js";
 import { defaultFusionRecipeWritePath, loadFusionRecipes, parseModelRef, validateFusionRecipes } from "./recipe.js";
 import type { FusionRecipe, FusionRunResult } from "./types.js";

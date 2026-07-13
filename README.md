@@ -18,6 +18,8 @@ pi install npm:@fiale-plus/pi-rogue
 
 One public package. One install. Explicit commands only.
 
+Supported host: Pi `>=0.80.6 <0.81.0` on Node.js `>=22.19.0`.
+
 ## Why it exists
 
 Pi-Rogue is built for agent sessions that should compound instead of drift:
