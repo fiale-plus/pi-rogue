@@ -9,7 +9,7 @@ import { completeSimple, type ThinkingLevel } from "@earendil-works/pi-ai/compat
 import { Type } from "typebox";
 import { sessionKey as sharedSessionKey, sessionScopedDir } from "@fiale-plus/pi-core";
 import { appendText, featureDir, featureFile, readText, truncate, writeText, atomicWriteText } from "./internal.js";
-import { advisorArgumentCompletions, piRogueArgumentCompletions } from "./completions.js";
+import { ADVISOR_CANONICAL_CONTROL_LEAVES, advisorArgumentCompletions, piRogueArgumentCompletions } from "./completions.js";
 import {
   appendRouteLog,
   binaryGatePredict,
@@ -4042,7 +4042,7 @@ export function registerAdvisor(pi: ExtensionAPI): void {
           "  /cfg posture guarded          apply compact posture preset",
           "",
           "Subsystems:",
-          "  /pi-rogue-advisor status|gate|profile|mode|model|review|pause|unpause|checkins",
+          `  /pi-rogue-advisor ${ADVISOR_CANONICAL_CONTROL_LEAVES.join("|")}`,
           "  /pi-rogue-router status||mode|profile|print|models|profiles|cycle|configure",
           "  /pi-rogue-fusion status|reload|configure",
           "  /pi-rogue-orchestration status|goal|loop|autoresearch|lab",
@@ -4092,17 +4092,18 @@ export function registerAdvisor(pi: ExtensionAPI): void {
 
   // ── /pi-rogue-advisor command ──────────────────────────────────────────
   pi.registerCommand("pi-rogue-advisor", {
-    description: "Senior engineering advisor. Usage: /pi-rogue-advisor [|status|gate|profile|mode|model|review|pause|unpause|checkins|question]",
+    description: `Senior engineering advisor. Usage: /pi-rogue-advisor [|${ADVISOR_CANONICAL_CONTROL_LEAVES.join("|")}|question]`,
     getArgumentCompletions: (prefix: string) => advisorArgumentCompletions(prefix),
     handler: async (args, ctx) => {
       const rawArg = String(args ?? "").trim();
-      const a = rawArg.toLowerCase();
       const rawParts = rawArg ? rawArg.split(/\s+/) : [];
-      const [cmd = "", ...rest] = a ? a.split(/\s+/) : [];
+      const cmd = String(rawParts[0] ?? "").toLowerCase();
+      const rawRest = rawParts.slice(1);
+      const rest = rawRest.map((part) => part.toLowerCase());
       const cfg = loadConfig();
       const state = loadState(ctx);
 
-      if (!a || cmd === "status") {
+      if (!rawArg || cmd === "status") {
         const note = readText(advisorCurrentPath(ctx)).trim();
         const resolved = await resolveModel(ctx, cfg);
         const route = state.router.review ?? state.router.preflight;
@@ -4127,7 +4128,7 @@ export function registerAdvisor(pi: ExtensionAPI): void {
         return;
       }
 
-      if (cmd === "on" && cfg.mode === "off") {
+      if (cmd === "on") {
         const next = { ...cfg, mode: "auto" as const };
         saveConfig(next);
         setPiRogueStatus(ctx, next, state);
@@ -4197,7 +4198,7 @@ export function registerAdvisor(pi: ExtensionAPI): void {
         return;
       }
       if (cmd === "model") {
-        const v = rest.join("/").trim();
+        const v = rawRest.join(" ").trim();
         if (!v || !v.includes("/")) {
           const resolved = await resolveModel(ctx, cfg);
           ctx.ui.notify([
@@ -4213,7 +4214,7 @@ export function registerAdvisor(pi: ExtensionAPI): void {
         ctx.ui.notify(`Model set to ${v}. Remove field to auto-detect.`, "info");
         return;
       }
-      if (cmd === "settings") {
+      if (cmd === "settings" || cmd === "config") {
         const pause = advisorPauseRemaining(state, state.turns);
         ctx.ui.notify([
           "Advisor config (check-ins are orchestration-managed):",
@@ -4330,7 +4331,7 @@ export function registerAdvisor(pi: ExtensionAPI): void {
             return;
           }
           if (action === "ask") {
-            const roleId = rest[2];
+            const roleId = rawParts[3];
             const task = rawParts.slice(4).join(" ").trim();
             if (!roleId || !task) {
               ctx.ui.notify("Usage: /pi-rogue-advisor board specialist ask <role-id> <task>", "error");
@@ -4413,7 +4414,7 @@ export function registerAdvisor(pi: ExtensionAPI): void {
       }
 
       // Anything else: treat as a question to the advisor
-      const r = await askAdvisor(pi, ctx, a, "slash", true);
+      const r = await askAdvisor(pi, ctx, rawArg, "slash", true);
       if (r.error) {
         ctx.ui.notify(r.text, "warning");
         return;

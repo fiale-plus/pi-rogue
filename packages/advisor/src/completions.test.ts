@@ -1,12 +1,27 @@
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { advisorArgumentCompletions, piRogueArgumentCompletions } from "./completions.js";
+import { ADVISOR_CANONICAL_CONTROL_LEAVES, advisorArgumentCompletions, piRogueArgumentCompletions } from "./completions.js";
 
 describe("advisor completions", () => {
   it("offers top-level advisor continuations", () => {
     const values = advisorArgumentCompletions("")?.map((i) => i.value);
-    expect(values).toContain("profile");
-    expect(values).not.toEqual(expect.arrayContaining(["pause", "unpause"]));
-    expect(values).not.toContain("config");
+    expect(values).toEqual([...ADVISOR_CANONICAL_CONTROL_LEAVES]);
+  });
+
+  it("keeps canonical README, skill, UX, and AGENTS guidance aligned", () => {
+    const root = process.cwd();
+    const readme = readFileSync(join(root, "packages/advisor/README.md"), "utf8");
+    const skill = readFileSync(join(root, "packages/advisor/skills/advisor/SKILL.md"), "utf8");
+    const ux = readFileSync(join(root, "docs/pi-rogue-config-ux.md"), "utf8");
+    const agents = readFileSync(join(root, "AGENTS.md"), "utf8");
+    for (const leaf of ADVISOR_CANONICAL_CONTROL_LEAVES) {
+      expect(readme, `README: ${leaf}`).toContain(`/pi-rogue-advisor ${leaf}`);
+      expect(skill, `skill: ${leaf}`).toContain(`/pi-rogue-advisor ${leaf}`);
+      expect(ux, `UX matrix: ${leaf}`).toContain(`\`${leaf}\``);
+    }
+    expect(agents).toContain("/pi-rogue-advisor");
+    expect(agents).not.toMatch(/`\/advisor(?:\s|`)/);
   });
 
   it("offers nested review choices", () => {
