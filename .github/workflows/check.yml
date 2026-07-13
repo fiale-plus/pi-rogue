@@ -12,7 +12,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        node-version: [22]
+        node-version: ['22.19.0']
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -24,6 +24,8 @@ jobs:
         run: npm run check
       - name: Run tests
         run: npm test
+      - name: Verify packed minimum-runtime durability
+        run: npm run test:packed-min-node
       - name: Summary
         run: |
           echo "## CI Summary" >> $GITHUB_STEP_SUMMARY
