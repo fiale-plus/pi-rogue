@@ -20,9 +20,8 @@ jobs:
           node-version: ${{ matrix.node-version }}
           cache: npm
       - run: npm ci
-      - name: Type check
-        run: npx tsc --noEmit
-        continue-on-error: true
+      - name: Type and validation coverage checks
+        run: npm run check
       - name: Run tests
         run: npm test
       - name: Summary

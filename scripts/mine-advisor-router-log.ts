@@ -88,10 +88,9 @@ function readJsonl(file: string): RouterRow[] {
     .split(/\r?\n/)
     .map((line) => line.trim())
     .filter(Boolean)
-    .map((line) => {
-      try { return { ...(JSON.parse(line) as RouterRow), sourceFile: file }; } catch { return null; }
-    })
-    .filter((row): row is RouterRow => Boolean(row));
+    .flatMap((line): RouterRow[] => {
+      try { return [{ ...(JSON.parse(line) as RouterRow), sourceFile: file }]; } catch { return []; }
+    });
 }
 
 function squish(value: unknown): string {
