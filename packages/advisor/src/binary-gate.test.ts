@@ -2,7 +2,7 @@ import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { binaryGatePredict, inspectBinaryGateArtifact } from "./router.js";
+import { binaryGatePredict, heuristicRoute, inspectBinaryGateArtifact } from "./router.js";
 
 describe("binary gate artifact status", () => {
   it("reports a missing artifact without seeding arbitrary paths", () => {
@@ -39,6 +39,25 @@ describe("binary gate artifact status", () => {
 
     const status = inspectBinaryGateArtifact(path, false);
     expect(status).toMatchObject({ available: true, usable: false, source: "unsupported" });
+  });
+
+  it.each([
+    ["empty class arrays", { labels: ["continue", "escalate"], features: [], idf: [], bias: [], weights: [] }],
+    ["wrong label order", { labels: ["escalate", "continue"], features: [], idf: [], bias: [0, 0], weights: [[], []] }],
+    ["misaligned idf", { labels: ["continue", "escalate"], features: ["x"], idf: [], bias: [0, 0], weights: [[0], [0]] }],
+    ["misaligned weights", { labels: ["continue", "escalate"], features: ["x"], idf: [1], bias: [0, 0], weights: [[], [0]] }],
+    ["out-of-range threshold", { labels: ["continue", "escalate"], features: [], idf: [], bias: [0, 0], weights: [[], []], thresholds: { default: 1.1 } }],
+    ["malformed stacked schema", { labels: ["continue", "escalate"], features: [], idf: [], bias: [0, 0], weights: [[], []], stacked: { trajectoryFeatures: ["failed"], bias: 0, weights: [0, 0] } }],
+  ])("rejects %s artifacts", (_name, fields) => {
+    const path = join(mkdtempSync(join(tmpdir(), "pi-rogue-gate-invalid-")), "gate.json");
+    writeFileSync(path, JSON.stringify({ kind: "binary-logreg-v2", ...fields }), "utf8");
+    expect(inspectBinaryGateArtifact(path, false)).toMatchObject({ available: true, usable: false, source: "unsupported" });
+  });
+
+  it("rejects non-finite artifact coefficients", () => {
+    const path = join(mkdtempSync(join(tmpdir(), "pi-rogue-gate-nonfinite-")), "gate.json");
+    writeFileSync(path, '{"kind":"binary-logreg-v2","labels":["continue","escalate"],"features":[],"idf":[],"bias":[0,1e999],"weights":[[],[]]}', "utf8");
+    expect(inspectBinaryGateArtifact(path, false)).toMatchObject({ available: true, usable: false, source: "unsupported" });
   });
 
   it("reports valid v2 artifacts as usable", () => {
@@ -128,6 +147,7 @@ describe("binary gate model", () => {
 import { predictWithModel } from "./router.js";
 import type { BinaryGateModel, StackedGateModel } from "./router.js";
 import { trajectoryFeatureVector, TRAJECTORY_FEATURE_NAMES } from "./binary-gate-eval.js";
+import { applyPreflightGatePrediction, applyReviewGatePrediction } from "./extension.js";
 
 // A minimal v2 model with no features: scores are just `bias`, so the escalate
 // logit is bias[1]-bias[0]. Lets us assert calibration + threshold behavior directly.
@@ -146,7 +166,7 @@ function tinyModel(over: Partial<BinaryGateModel>): BinaryGateModel {
 describe("binary gate v2 calibrated predictions", () => {
   it("returns calibrated probability, threshold, and trusted source for a v2 model", () => {
     const model = tinyModel({ bias: [-2, 2] }); // escalate logit 4 -> p~0.98
-    const result = predictWithModel(model, "anything");
+    const result = predictWithModel(model, "anything")!;
     expect(result.source).toBe("model-v2");
     expect(result.trusted).toBe(true);
     expect(result.probability).toBeGreaterThan(0.9);
@@ -160,21 +180,48 @@ describe("binary gate v2 calibrated predictions", () => {
       bias: [-2, 2], // p~0.982
       thresholds: { default: 0.5, preflight: 0.99, review: 0.5 },
     });
-    expect(predictWithModel(model, "x", "preflight").decision).toBe("continue");
-    expect(predictWithModel(model, "x", "review").decision).toBe("escalate");
+    expect(predictWithModel(model, "x", "preflight")!.decision).toBe("continue");
+    expect(predictWithModel(model, "x", "review")!.decision).toBe("escalate");
   });
 
   it("applies Platt calibration to the escalate logit", () => {
     const model = tinyModel({ bias: [0, 0], calibration: { method: "platt", a: 1, b: -2 } });
     // logit 0 -> sigmoid(-2) ~ 0.12 -> continue at default threshold 0.5
-    const result = predictWithModel(model, "x");
+    const result = predictWithModel(model, "x")!;
     expect(result.probability).toBeCloseTo(0.1192, 2);
     expect(result.decision).toBe("continue");
   });
 
+  it("returns no prediction for malformed or non-finite models", () => {
+    expect(predictWithModel(tinyModel({ labels: ["escalate", "continue"] }), "x")).toBeNull();
+    expect(predictWithModel(tinyModel({ idf: [1] }), "x")).toBeNull();
+    expect(predictWithModel(tinyModel({ bias: [1e308, -1e308] }), "x")).toBeNull();
+    expect(predictWithModel(tinyModel({ thresholds: { default: Number.NaN } }), "x")).toBeNull();
+    expect(predictWithModel(tinyModel({ calibration: { method: "platt", a: Number.POSITIVE_INFINITY, b: 0 } }), "x")).toBeNull();
+  });
+
+  it("leaves production preflight and review routes heuristic for every rejected artifact class", () => {
+    const malformed = [
+      tinyModel({ bias: [], weights: [] }),
+      tinyModel({ features: ["x"], idf: [], weights: [[0], [0]] }),
+      tinyModel({ labels: ["escalate", "continue"] }),
+      tinyModel({ bias: [0, Number.NaN] }),
+      tinyModel({ thresholds: { default: 2 } }),
+      tinyModel({ stacked: { trajectoryFeatures: ["failed"], bias: 0, weights: [0, 0] } }),
+    ];
+    const preflight = heuristicRoute({ phase: "preflight", text: "fix typo" });
+    const review = heuristicRoute({ phase: "review", text: "review this bug" });
+    for (const model of malformed) {
+      const prediction = predictWithModel(model, "x", "preflight", { failed: true });
+      expect(prediction).toBeNull();
+      expect(applyPreflightGatePrediction(preflight, prediction)).toEqual(preflight);
+      expect(applyReviewGatePrediction(review, prediction)).toEqual(review);
+    }
+  });
+
   it("v1 assets keep the legacy trust gate (low confidence is not trusted)", () => {
     const model = tinyModel({ kind: "binary-logreg-v1", bias: [0, 0] }); // p=0.5, conf=0.5
-    const result = predictWithModel(model, "x");
+    const result = predictWithModel(model, "x")!;
     expect(result.source).toBe("model-v1-legacy");
     expect(result.trusted).toBe(false);
   });
@@ -194,7 +241,7 @@ describe("binary gate v4 stacked trajectory model", () => {
 
   it("falls back to text-only when no trajectory features are passed", () => {
     const model = tinyModel({ bias: [-2, 2], stacked: stackedModel({ bias: -10, weights: [0, 5, 0, 0, 0, 0, 0, 0, 0] }) });
-    const textOnly = predictWithModel(model, "x");
+    const textOnly = predictWithModel(model, "x")!;
     // Without trajectory, the stacked path is skipped, so probability stays ~0.98.
     expect(textOnly.probability).toBeGreaterThan(0.9);
     expect(textOnly.decision).toBe("escalate");
@@ -210,7 +257,7 @@ describe("binary gate v4 stacked trajectory model", () => {
         thresholds: { default: 0.01, preflight: 0.01, review: 0.01, closeout: 0.01 },
       }),
     });
-    const result = predictWithModel(model, "x", "review");
+    const result = predictWithModel(model, "x", "review")!;
     expect(result.threshold).toBe(0.99);
     expect(result.decision).toBe("continue");
   });
@@ -222,7 +269,7 @@ describe("binary gate v4 stacked trajectory model", () => {
       bias: [-2, 2],
       stacked: stackedModel({ bias: -8, weights: [0, 0, 0, 0, 0, 0, 0, 0, 0] }),
     });
-    const result = predictWithModel(model, "x", "review", { failed: false, fileChanged: true });
+    const result = predictWithModel(model, "x", "review", { failed: false, fileChanged: true })!;
     expect(result.probability).toBeLessThan(0.5);
     expect(result.decision).toBe("continue");
   });
@@ -233,20 +280,18 @@ describe("binary gate v4 stacked trajectory model", () => {
       bias: [2, -2],
       stacked: stackedModel({ bias: 0, weights: [0, 0, 0, 0, 0, 0, 5, 0, 0] }), // failed weight = 5
     });
-    const result = predictWithModel(model, "x", "review", { failed: true });
+    const result = predictWithModel(model, "x", "review", { failed: true })!;
     expect(result.probability).toBeGreaterThan(0.5);
     expect(result.decision).toBe("escalate");
   });
 
-  it("falls back to text-only when stacked weights are malformed", () => {
+  it("rejects the entire artifact when stacked weights are malformed", () => {
     const model = tinyModel({
       bias: [-2, 2],
       stacked: stackedModel({ bias: -8, weights: [1, 2, 3] }),
     });
-    const textOnly = predictWithModel(model, "x", "review");
-    const withTrajectory = predictWithModel(model, "x", "review", { failed: true, fileChanged: true });
-    expect(withTrajectory.probability).toBeCloseTo(textOnly.probability, 6);
-    expect(withTrajectory.decision).toBe(textOnly.decision);
+    expect(predictWithModel(model, "x", "review")).toBeNull();
+    expect(predictWithModel(model, "x", "review", { failed: true, fileChanged: true })).toBeNull();
   });
 
   it("trajectoryFeatureVector normalizes missing fields to neutral values", () => {

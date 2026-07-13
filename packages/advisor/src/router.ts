@@ -126,16 +126,79 @@ function ensureBinaryGateSeeded(): void {
   }
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value && typeof value === "object" && !Array.isArray(value));
+}
+
+function finiteNumbers(value: unknown, length?: number): value is number[] {
+  return Array.isArray(value) && (length === undefined || value.length === length) && value.every((item) => typeof item === "number" && Number.isFinite(item));
+}
+
+function validCalibration(value: unknown): boolean {
+  if (value === undefined) return true;
+  if (!isRecord(value)) return false;
+  const keys = Object.keys(value).sort();
+  if (value.method === "none") return keys.length === 1 && keys[0] === "method";
+  return value.method === "platt" && keys.join(",") === "a,b,method" && typeof value.a === "number" && Number.isFinite(value.a) && typeof value.b === "number" && Number.isFinite(value.b);
+}
+
+function validThresholds(value: unknown): value is GateThresholds {
+  if (!isRecord(value) || typeof value.default !== "number") return false;
+  const allowed = new Set(["default", "preflight", "review", "closeout"]);
+  return Object.entries(value).every(([key, threshold]) => allowed.has(key) && typeof threshold === "number" && Number.isFinite(threshold) && threshold >= 0 && threshold <= 1);
+}
+
+function validStackedMetricSplit(value: unknown): boolean {
+  if (!isRecord(value)) return false;
+  const expected = ["accuracy", "brier", "costWeightedLoss", "ece10", "feasible", "threshold"];
+  if (Object.keys(value).sort().join(",") !== expected.sort().join(",")) return false;
+  if (typeof value.feasible !== "boolean") return false;
+  for (const key of ["accuracy", "brier", "costWeightedLoss", "ece10", "threshold"] as const) {
+    if (typeof value[key] !== "number" || !Number.isFinite(value[key])) return false;
+  }
+  const metric = value as { accuracy: number; brier: number; costWeightedLoss: number; ece10: number; threshold: number };
+  return metric.accuracy >= 0 && metric.accuracy <= 1 && metric.brier >= 0 && metric.ece10 >= 0 && metric.threshold >= 0 && metric.threshold <= 1 && metric.costWeightedLoss >= 0;
+}
+
+function validStackedMetrics(value: unknown): boolean {
+  if (!isRecord(value) || !isRecord(value.coverage)) return false;
+  if (Object.keys(value).some((key) => !["coverage", "validation", "test"].includes(key))) return false;
+  const coverage = value.coverage as Record<string, unknown>;
+  if (Object.keys(coverage).sort().join(",") !== "test,train,validation") return false;
+  if (!["train", "validation", "test"].every((key) => typeof coverage[key] === "number" && Number.isFinite(coverage[key]) && (coverage[key] as number) >= 0 && (coverage[key] as number) <= 1)) return false;
+  return (value.validation === undefined || validStackedMetricSplit(value.validation)) && (value.test === undefined || validStackedMetricSplit(value.test));
+}
+
+function binaryGateModelError(value: unknown): string | null {
+  if (!isRecord(value)) return "artifact must be an object";
+  if (isRecord(value.config) && value.config.weakLabelResearch === true) return "weak-label research artifacts are non-promotable";
+  if (value.kind !== "binary-logreg-v1" && value.kind !== "binary-logreg-v2") return "unsupported artifact kind";
+  if (!Array.isArray(value.labels) || value.labels.length !== 2 || value.labels[0] !== "continue" || value.labels[1] !== "escalate") return "labels must be exactly [continue, escalate]";
+  if (!Array.isArray(value.features) || !value.features.every((feature) => typeof feature === "string" && feature.length > 0)) return "features must be non-empty strings";
+  if (new Set(value.features).size !== value.features.length) return "features must be unique and ordered";
+  const featureCount = value.features.length;
+  if (!finiteNumbers(value.idf, featureCount)) return "idf must contain one finite value per feature";
+  if (!finiteNumbers(value.bias, 2)) return "bias must contain two finite values";
+  if (!Array.isArray(value.weights) || value.weights.length !== 2 || !value.weights.every((row) => finiteNumbers(row, featureCount))) return "weights must contain two finite rows aligned to features";
+  if (!validCalibration(value.calibration)) return "calibration must be none or finite Platt coefficients";
+  if (value.thresholds !== undefined && !validThresholds(value.thresholds)) return "thresholds must include a bounded finite default and known phase keys";
+  if (value.stacked !== undefined) {
+    if (value.kind !== "binary-logreg-v2" || !isRecord(value.stacked)) return "stacked model requires a v2 object";
+    const stacked = value.stacked;
+    const stackedKeys = new Set(["trajectoryFeatures", "bias", "weights", "calibration", "thresholds", "metrics"]);
+    if (Object.keys(stacked).some((key) => !stackedKeys.has(key))) return "stacked model contains unknown fields";
+    if (!Array.isArray(stacked.trajectoryFeatures) || stacked.trajectoryFeatures.length !== TRAJECTORY_FEATURE_NAMES.length || !stacked.trajectoryFeatures.every((feature, index) => feature === TRAJECTORY_FEATURE_NAMES[index])) return "stacked trajectory feature order is invalid";
+    if (typeof stacked.bias !== "number" || !Number.isFinite(stacked.bias)) return "stacked bias must be finite";
+    if (!finiteNumbers(stacked.weights, 1 + TRAJECTORY_FEATURE_NAMES.length)) return "stacked weights must align to text and trajectory features";
+    if (!validCalibration(stacked.calibration)) return "stacked calibration must be none or finite Platt coefficients";
+    if (stacked.thresholds !== undefined && !validThresholds(stacked.thresholds)) return "stacked thresholds must be finite and bounded";
+    if (stacked.metrics !== undefined && !validStackedMetrics(stacked.metrics)) return "stacked metrics schema is invalid";
+  }
+  return null;
+}
+
 function isSupportedBinaryGateModel(value: unknown): value is BinaryGateModel {
-  if (!value || typeof value !== "object") return false;
-  const model = value as Partial<BinaryGateModel>;
-  if (model.config?.weakLabelResearch === true) return false;
-  return (model.kind === "binary-logreg-v1" || model.kind === "binary-logreg-v2") &&
-    Array.isArray(model.labels) &&
-    Array.isArray(model.features) &&
-    Array.isArray(model.idf) &&
-    Array.isArray(model.bias) &&
-    Array.isArray(model.weights);
+  return binaryGateModelError(value) === null;
 }
 
 export function binaryGateArtifactPath(): string {
@@ -145,20 +208,21 @@ export function binaryGateArtifactPath(): string {
 function inspectBinaryGateJson(path: string, source: BinaryGateArtifactStatus["source"]): BinaryGateArtifactStatus {
   try {
     const parsed = JSON.parse(readFileSync(path, "utf8")) as unknown;
-    if (!isSupportedBinaryGateModel(parsed)) {
-      const kind = parsed && typeof parsed === "object" ? String((parsed as { kind?: unknown }).kind ?? "unknown") : typeof parsed;
-      return { path, available: true, usable: false, source: "unsupported", error: `unsupported artifact kind/shape: ${kind}` };
+    const validationError = binaryGateModelError(parsed);
+    if (validationError) {
+      return { path, available: true, usable: false, source: "unsupported", error: validationError };
     }
+    const model = parsed as BinaryGateModel;
     return {
       path,
       available: true,
       usable: true,
       source,
-      kind: parsed.kind,
-      labels: parsed.labels.slice(0, 4),
-      features: parsed.features.length,
-      stacked: Boolean(parsed.stacked),
-      thresholds: parsed.thresholds,
+      kind: model.kind,
+      labels: model.labels.slice(0, 4),
+      features: model.features.length,
+      stacked: Boolean(model.stacked),
+      thresholds: model.thresholds,
     };
   } catch (error) {
     return {
@@ -234,7 +298,8 @@ function thresholdFor(model: BinaryGateModel, phase?: AdvisorPhase): number {
   return 0.5;
 }
 
-export function predictWithModel(model: BinaryGateModel, text: string, phase?: AdvisorPhase, trajectory?: TrajectoryFeatures): BinaryGatePrediction {
+export function predictWithModel(model: BinaryGateModel, text: string, phase?: AdvisorPhase, trajectory?: TrajectoryFeatures): BinaryGatePrediction | null {
+  if (!isSupportedBinaryGateModel(model)) return null;
   const vec = binaryGateFeatures(text, model);
   const scores = model.bias.slice();
   for (let c = 0; c < model.weights.length; c++) {
@@ -242,21 +307,21 @@ export function predictWithModel(model: BinaryGateModel, text: string, phase?: A
     for (let i = 0; i < vec.I.length; i++) score += w[vec.I[i]] * vec.V[i];
     scores[c] = score;
   }
+  if (!scores.every(Number.isFinite)) return null;
   // labels are ["continue","escalate"]; escalate is index 1.
   const escalateLogit = scores[1] - scores[0];
+  if (!Number.isFinite(escalateLogit)) return null;
   let probEscalate = applyCalibration(escalateLogit, model.calibration);
+  if (!Number.isFinite(probEscalate) || probEscalate < 0 || probEscalate > 1) return null;
   const stacked = model.stacked;
-  const stackedUsable = Boolean(
-    stacked && trajectory &&
-    stacked.weights.length === 1 + TRAJECTORY_FEATURE_NAMES.length &&
-    stacked.trajectoryFeatures.length === TRAJECTORY_FEATURE_NAMES.length &&
-    stacked.trajectoryFeatures.every((feature, index) => feature === TRAJECTORY_FEATURE_NAMES[index]),
-  );
+  const stackedUsable = Boolean(stacked && trajectory);
   if (stackedUsable && stacked) {
     const trajVec = trajectoryFeatureVector(trajectory);
     const input = [probEscalate, ...trajVec];
     const stackedLogit = stacked.bias + stacked.weights.reduce((acc, wj, j) => acc + wj * (input[j] ?? 0), 0);
+    if (!Number.isFinite(stackedLogit)) return null;
     probEscalate = applyCalibration(stackedLogit, stacked.calibration);
+    if (!Number.isFinite(probEscalate) || probEscalate < 0 || probEscalate > 1) return null;
   }
   const threshold = stackedUsable && stacked?.thresholds ? (stacked.thresholds[phase ?? "default"] ?? stacked.thresholds.default ?? thresholdFor(model, phase)) : thresholdFor(model, phase);
   const decision: "continue" | "escalate" = probEscalate >= threshold ? "escalate" : "continue";
