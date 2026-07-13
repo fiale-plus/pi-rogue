@@ -2,7 +2,9 @@ import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { homedir } from "node:os";
+import { completeSimple } from "@earendil-works/pi-ai/compat";
 import { advisorSessionStatePath, registerAdvisor } from "./extension.js";
+import { ADVISOR_CANONICAL_CONTROL_LEAVES } from "./completions.js";
 
 const testHome = vi.hoisted(() => `/tmp/pi-rogue-advisor-state-versioning-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2)}`);
 
@@ -11,14 +13,16 @@ vi.mock("node:os", async () => {
   return { ...actual, homedir: () => testHome };
 });
 
-vi.mock("@earendil-works/pi-ai", async () => {
-  const actual = await vi.importActual<typeof import("@earendil-works/pi-ai")>("@earendil-works/pi-ai");
+vi.mock("@earendil-works/pi-ai/compat", async () => {
+  const actual = await vi.importActual<typeof import("@earendil-works/pi-ai/compat")>("@earendil-works/pi-ai/compat");
   return { ...actual, completeSimple: vi.fn() };
 });
 
+const completeSimpleMock = vi.mocked(completeSimple);
+
 type Handler = (event: any, ctx: any) => any;
 type HandlerMap = Record<string, Handler[]>;
-type CommandMap = Record<string, { handler: (args: string, ctx: any) => any }>;
+type CommandMap = Record<string, { description?: string; handler: (args: string, ctx: any) => any }>;
 
 function makeHandlers() {
   const handlers: HandlerMap = {};
@@ -27,7 +31,7 @@ function makeHandlers() {
   const pi = {
     on: (event: string, handler: Handler) => { handlers[event] ??= []; handlers[event].push(handler); },
     registerMessageRenderer: () => undefined,
-    registerCommand: (name: string, command: { handler: (args: string, ctx: any) => any }) => { commands[name] = command; },
+    registerCommand: (name: string, command: CommandMap[string]) => { commands[name] = command; },
     registerTool: vi.fn(),
     sendMessage,
     sendUserMessage: () => undefined,
@@ -225,6 +229,57 @@ describe("state versioning and recovery", () => {
     expect(recovered.reviewControl.status).toBe("needed");
     expect(recovered.reviewControl.pending).toBe(true);
     expect(recovered.reviewControl.lastDecision).toBe("review");
+  });
+
+  it("advertises the exact canonical control leaves in runtime help", () => {
+    const setup = makeHandlers();
+    registerAdvisor(setup.pi);
+    expect(setup.commands["pi-rogue-advisor"].description).toContain(ADVISOR_CANONICAL_CONTROL_LEAVES.join("|"));
+  });
+
+  it.each(["CoNfIg", "SeTtInGs"])("keeps %s local and model-free", async (leaf) => {
+    const setup = makeHandlers();
+    registerAdvisor(setup.pi);
+    const ctx = mkCtx(`local-${leaf}`);
+    const notify = vi.fn();
+    ctx.ui.notify = notify;
+    completeSimpleMock.mockClear();
+
+    await setup.commands["pi-rogue-advisor"].handler(leaf, ctx);
+
+    expect(completeSimpleMock).not.toHaveBeenCalled();
+    expect(notify).toHaveBeenCalledTimes(1);
+    expect(String(notify.mock.calls[0]?.[0])).toContain("Advisor config");
+  });
+
+  it.each(["manual", "auto", "off"] as const)("converges %s to auto through case-insensitive ON", async (mode) => {
+    const setup = makeHandlers();
+    registerAdvisor(setup.pi);
+    const ctx = mkCtx(`on-${mode}`);
+    completeSimpleMock.mockClear();
+    writeFileSync(ADVISOR_CONFIG_PATH, JSON.stringify({ mode, review: "light", checkins: "off", checkinIntervalMinutes: 30 }), "utf8");
+
+    await setup.commands["pi-rogue-advisor"].handler("ON", ctx);
+
+    expect(completeSimpleMock).not.toHaveBeenCalled();
+    expect(JSON.parse(readFileSync(ADVISOR_CONFIG_PATH, "utf8")).mode).toBe("auto");
+  });
+
+  it("preserves mixed-case free-form questions after outer trimming", async () => {
+    const setup = makeHandlers();
+    registerAdvisor(setup.pi);
+    const ctx = mkCtx("mixed-case");
+    completeSimpleMock.mockReset();
+    completeSimpleMock.mockResolvedValue({ content: [{ type: "text", text: "answer" }] } as any);
+    const question = "Explain MyHTTPParser at /Tmp/MixedCase.ts";
+
+    await setup.commands["pi-rogue-advisor"].handler(`  ${question}  `, ctx);
+
+    expect(completeSimpleMock).toHaveBeenCalledTimes(1);
+    const request = completeSimpleMock.mock.calls[0]?.[1] as any;
+    expect(JSON.stringify(request?.messages)).toContain(question);
+    expect(JSON.stringify(request?.messages)).not.toContain(question.toLowerCase());
+    expect(setup.sendMessage).toHaveBeenCalled();
   });
 
   it("keeps mutable advisor state isolated by session", async () => {

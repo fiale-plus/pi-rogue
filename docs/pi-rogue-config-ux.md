@@ -58,14 +58,14 @@ Recommended docs language:
 | Surface | Canonical command | Small tree |
 | --- | --- | --- |
 | Management root | `/pi-rogue` | `status`, `help`, `doctor` |
-| Advisor | `/pi-rogue-advisor` | `status`, `on`, `off`, `mode`, `model`, `review`, `pause`, `unpause`, `checkins` |
+| Advisor | `/pi-rogue-advisor` | `status`, `settings`, `config`, `on`, `off`, `mode`, `review`, `model`, `gate`, `profile`, `checkins`, `pause`, `unpause`, `board` |
 | Router | `/pi-rogue-router` | `status`, `help`, `on`, `off`, `mode`, `profile`, `print`, `models`, `profiles`, `cycle`, `configure` |
 | Fusion | `/pi-rogue-fusion` | `status`, `reload`, `configure` |
 | Orchestration | `/pi-rogue-orchestration` | `status`, `help`, `goal`, `loop`, `autoresearch`, `lab` |
 
 `/pi-rogue` should stay a concise management root. Avoid nested subsystem paths
-such as `/pi-rogue router status` and avoid duplicate `config` leaves. Use
-`/pi-rogue status` for a safe read-only aggregate view. Umbrella enable/disable controls are intentionally not advertised until they manage every subsystem consistently.
+such as `/pi-rogue router status`. The advisor keeps one local settings display,
+with `config` as its documented alias. Use `/pi-rogue status` for a safe read-only aggregate view. Umbrella enable/disable controls are intentionally not advertised until they manage every subsystem consistently.
 
 ## Configuration home and precedence
 

@@ -33,8 +33,14 @@ function completionsForPrefix(prefix: string, topLevel: Array<[string, string?]>
   return complete(topLevel, q);
 }
 
+export const ADVISOR_CANONICAL_CONTROL_LEAVES = [
+  "status", "settings", "config", "on", "off", "mode", "review", "model", "gate", "profile", "checkins", "pause", "unpause", "board",
+] as const;
+
 const advisorTopLevel: Array<[string, string?]> = [
-  ["status", "show advisor status and configuration"],
+  ["status", "show advisor status and routing"],
+  ["settings", "show full local advisor configuration"],
+  ["config", "alias for settings"],
   ["on", "enable auto mode"],
   ["off", "disable advisor"],
   ["mode", "set auto/manual/off"],
@@ -43,6 +49,8 @@ const advisorTopLevel: Array<[string, string?]> = [
   ["gate", "inspect trained binary gate posture"],
   ["profile", "inspect or enable explicit advisor profiles"],
   ["checkins", "explain orchestration-managed check-ins"],
+  ["pause", "pause automatic advisor runs for N turns"],
+  ["unpause", "clear the automatic-run pause"],
   ["board", "inspect or configure Advisor Board shadow/head-of-board modes"],
 ];
 

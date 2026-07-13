@@ -76,7 +76,7 @@ Workspace-only lab helpers live under `packages/lab/`; they are not part of the 
 | Surface | Common commands |
 |---|---|
 | Pi-Rogue | `/pi-rogue status`, `/pi-rogue help`, `/pi-rogue doctor` |
-| Advisor | `/pi-rogue-advisor status`, `mode`, `model`, `review light\|strict\|off`, `<question>` |
+| Advisor | `/pi-rogue-advisor status`, `settings`/`config`, `on`/`off`, `mode`, `model`, `review light\|strict\|off`, `<question>` |
 | Router | `/pi-rogue-router status`, `mode observe`, `mode auto_model`, `profile <name>`, `models`, `configure` |
 | Fusion | `/pi-rogue-fusion status`, `configure`, `reload` |
 | Orchestration | `/pi-rogue-orchestration goal set/show/clear/list`, `/goal set/show/clear/list`, `/loop status/off/<interval> <instruction>`, `/autoresearch status/clear/<instruction>`, `/pi-rogue-orchestration lab status/clear/<instruction>` |

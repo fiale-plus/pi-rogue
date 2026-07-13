@@ -33,12 +33,19 @@ npm install --workspace packages/advisor
 | `/pi-rogue` | Show the Pi-Rogue cockpit + command pointers |
 | `/pi-rogue-advisor` | Show status (`/pi-rogue-advisor status`) and quick hint |
 | `/pi-rogue-advisor status` | Show mode, review policy, check-in status, model selection, counters |
+| `/pi-rogue-advisor settings` | Show full local configuration without a model call |
+| `/pi-rogue-advisor config` | Alias for local `settings` |
+| `/pi-rogue-advisor on` | Converge off/manual/auto to auto mode locally |
+| `/pi-rogue-advisor off` | Disable advisor locally |
 | `/pi-rogue-advisor mode auto\|manual\|off` | Change routing behavior |
 | `/pi-rogue-advisor review light\|strict\|off` | Change review strictness |
+| `/pi-rogue-advisor model <provider>/<model>` | Set explicit model override |
+| `/pi-rogue-advisor gate status` | Inspect the trained binary-gate artifact |
+| `/pi-rogue-advisor profile status\|budget-board\|off` | Inspect or control the explicit profile |
+| `/pi-rogue-advisor checkins` | Explain orchestration-managed check-ins |
 | `/pi-rogue-advisor pause <N>` | Pause advisor auto-runs for the next N turns |
 | `/pi-rogue-advisor unpause` | Resume advisor auto-runs immediately |
-| `/pi-rogue-advisor config` | Show current config |
-| `/pi-rogue-advisor model <provider>/<model>` | Set explicit model override |
+| `/pi-rogue-advisor board status` | Inspect Advisor Board controls and status |
 | `/pi-rogue-advisor <question>` | Get one-shot advisory response |
 
 ## Notes on defaults

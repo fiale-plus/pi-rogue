@@ -10,25 +10,30 @@ Use this skill for non-trivial decisions before/after significant edits.
 ## Quick start
 
 - `/pi-rogue` — open cockpit and command pointers
-- `/advisor status` — show current advisor settings and model route
-- `/advisor <question>` — ask immediate advice
+- `/pi-rogue-advisor status` — show current advisor settings and model route
+- `/pi-rogue-advisor <question>` — ask immediate advice
 - Check-ins are lifecycle-managed by orchestration, not by the advisor command surface
 
 ## Command surface
 
 | Command | What it does |
 |---|---|
-| `/advisor` | Show status + config summary |
-| `/advisor status` | Same as `/advisor` |
-| `/advisor on` | Enable auto mode |
-| `/advisor off` | Disable advisor |
-| `/advisor mode auto\|manual\|off` | Control when advisor auto-runs |
-| `/advisor review light\|strict\|off` | Set review threshold |
-| `/advisor config` | Dump full config |
-| `/advisor pause <N>` | Pause advisor auto-runs for the next N turns |
-| `/advisor unpause` | Resume advisor auto-runs immediately |
-| `/advisor model <provider/model>` | Pin model explicitly |
-| `/advisor <question>` | Run one advisory response |
+| `/pi-rogue-advisor` | Show status + route summary |
+| `/pi-rogue-advisor status` | Same as `/pi-rogue-advisor` |
+| `/pi-rogue-advisor settings` | Show full local config |
+| `/pi-rogue-advisor config` | Alias for local `settings` |
+| `/pi-rogue-advisor on` | Enable auto mode |
+| `/pi-rogue-advisor off` | Disable advisor |
+| `/pi-rogue-advisor mode auto\|manual\|off` | Control when advisor auto-runs |
+| `/pi-rogue-advisor review light\|strict\|off` | Set review threshold |
+| `/pi-rogue-advisor model <provider/model>` | Pin model explicitly |
+| `/pi-rogue-advisor gate status` | Inspect the trained gate |
+| `/pi-rogue-advisor profile status\|budget-board\|off` | Inspect/control the explicit profile |
+| `/pi-rogue-advisor checkins` | Explain orchestration-managed check-ins |
+| `/pi-rogue-advisor pause <N>` | Pause advisor auto-runs for the next N turns |
+| `/pi-rogue-advisor unpause` | Resume advisor auto-runs immediately |
+| `/pi-rogue-advisor board status` | Inspect Advisor Board controls |
+| `/pi-rogue-advisor <question>` | Run one advisory response |
 
 ## Routing and safety
 

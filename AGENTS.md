@@ -7,7 +7,7 @@ Use this file as the concise operating guidance for agent usage in this repo.
 - Keep scope narrow. Do not expand command surfaces unless requested.
 - Keep command names and behavior unchanged unless explicitly approved.
 - Prefer explicit `/` command surfaces and avoid implicit/background-only behavior.
-- Start with `/advisor` (or `/advisor status`) at session start to establish quick posture before orchestration actions.
+- Start with `/pi-rogue-advisor` (or `/pi-rogue-advisor status`) at session start to establish quick posture before orchestration actions.
 
 ## Safety / process
 
