@@ -3052,29 +3052,36 @@ export function parsePiRoguePosture(value: unknown): PiRoguePostureId | null {
   return String(value ?? "").trim().toLowerCase() === "guarded" ? "guarded" : null;
 }
 
-function strongAdvisorForGuarded(ctx: any, current: AdvisorConfig): string {
+async function strongAdvisorForGuarded(ctx: any, current: AdvisorConfig): Promise<string> {
   const preferred = SOTA_CHAIN.map((item) => `${item.provider}/${item.model}`);
-  if (current.model && preferred.includes(current.model)) return current.model;
-  const available = availableTextModels(ctx);
-  return firstPreferredDetected(ctx, available, preferred) ?? current.model ?? "openai-codex/gpt-5.5";
+  const ordered = [...(current.model && preferred.includes(current.model) ? [current.model] : []), ...preferred];
+  for (const ref of [...new Set(ordered)]) {
+    const [provider, ...modelParts] = ref.split("/");
+    const model = ctx.modelRegistry?.find?.(provider, modelParts.join("/"));
+    if (!model || !model.input?.includes?.("text")) continue;
+    try {
+      const auth = await ctx.modelRegistry?.getApiKeyAndHeaders?.(model);
+      if (auth?.ok && typeof auth.apiKey === "string" && auth.apiKey) return ref;
+    } catch {
+      // A broken provider must not prevent trying the next policy-approved strong model.
+    }
+  }
+  throw new Error("Guarded posture requires an authenticated strong advisor model. Configure credentials for openai-codex/gpt-5.5 or another supported strong model, then retry; no files were changed.");
 }
 
-export function buildPiRoguePosturePlan(ctx: any, postureValue: unknown): PiRoguePosturePlan {
+export async function buildPiRoguePosturePlan(ctx: any, postureValue: unknown, options: { advisorPath?: string } = {}): Promise<PiRoguePosturePlan> {
   const posture = parsePiRoguePosture(postureValue);
   if (!posture) throw new Error(`unknown posture: ${String(postureValue ?? "") || "(empty)"}. Supported: guarded`);
   const root = piRogueRootDir();
-  const current = loadConfig();
-  return {
-    posture,
-    root,
-    advisorModel: strongAdvisorForGuarded(ctx, current),
-    files: {
-      summary: join(root, "config.json"),
-      advisor: CONFIG_PATH,
-      router: join(root, "router", "config.json"),
-      contextBrokerConfig: join(root, "context-broker", "config.json"),
-    },
+  const files = {
+    summary: join(root, "config.json"),
+    advisor: options.advisorPath ?? CONFIG_PATH,
+    router: join(root, "router", "config.json"),
+    contextBrokerConfig: join(root, "context-broker", "config.json"),
   };
+  const current = normalizeAdvisorConfig(readJson<Partial<AdvisorConfig>>(files.advisor, {}));
+  const advisorModel = await strongAdvisorForGuarded(ctx, current);
+  return { posture, root, advisorModel, files };
 }
 
 function guardedRouterProfiles(advisorModel: string): Record<string, any> {
@@ -3167,8 +3174,8 @@ export function applyPiRoguePosturePlan(plan: PiRoguePosturePlan): PiRoguePostur
   return { posture: plan.posture, files: plan.files, advisor };
 }
 
-export function applyPiRoguePostureConfig(ctx: any, input: { posture?: unknown }): PiRoguePostureApplyResult {
-  return applyPiRoguePosturePlan(buildPiRoguePosturePlan(ctx, input?.posture));
+export async function applyPiRoguePostureConfig(ctx: any, input: { posture?: unknown }, options: { advisorPath?: string } = {}): Promise<PiRoguePostureApplyResult> {
+  return applyPiRoguePosturePlan(await buildPiRoguePosturePlan(ctx, input?.posture, options));
 }
 
 function piRoguePostureText(result: PiRoguePostureApplyResult): string {
@@ -3843,10 +3850,15 @@ export function registerAdvisor(pi: ExtensionAPI): void {
       if (!posture) {
         return { content: [{ type: "text", text: "Unsupported cfg posture. Usage: { \"posture\": \"guarded\" }" }], details: { error: "unsupported_posture" } };
       }
-      const result = applyPiRoguePostureConfig(ctx, { posture });
-      setPiRogueStatus(ctx, result.advisor, loadState(ctx));
-      onUpdate?.({ content: [{ type: "text", text: `Applied posture ${result.posture}` }], details: { posture: result.posture } });
-      return { content: [{ type: "text", text: piRoguePostureText(result) }], details: { posture: result.posture } };
+      try {
+        const result = await applyPiRoguePostureConfig(ctx, { posture });
+        setPiRogueStatus(ctx, result.advisor, loadState(ctx));
+        onUpdate?.({ content: [{ type: "text", text: `Applied posture ${result.posture}` }], details: { posture: result.posture } });
+        return { content: [{ type: "text", text: piRoguePostureText(result) }], details: { posture: result.posture } };
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        return { content: [{ type: "text", text: message }], details: { error: "guarded_posture_unavailable" } };
+      }
     },
   });
 
@@ -4069,7 +4081,7 @@ export function registerAdvisor(pi: ExtensionAPI): void {
         return;
       }
       try {
-        const result = applyPiRoguePostureConfig(ctx, { posture });
+        const result = await applyPiRoguePostureConfig(ctx, { posture });
         setPiRogueStatus(ctx, result.advisor, loadState(ctx));
         ctx.ui.notify(piRoguePostureText(result), "info");
       } catch (error) {

@@ -1,11 +1,12 @@
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { completeSimple } from "@earendil-works/pi-ai/compat";
 import {
   applyAdvisorBoardProfilePlan,
   applyPiRogueConfigurePlan,
+  applyPiRoguePostureConfig,
   applyPiRoguePosturePlan,
   budgetBoardEscalationPolicyText,
   buildAdvisorBoardProfilePlan,
@@ -624,6 +625,40 @@ describe("Pi-Rogue posture presets", () => {
     }
   }
 
+  async function withHomeAsync<T>(fn: (home: string) => Promise<T>): Promise<T> {
+    const oldHome = process.env.HOME;
+    const home = mkdtempSync(join(tmpdir(), "pi-rogue-posture-home-"));
+    process.env.HOME = home;
+    try {
+      return await fn(home);
+    } finally {
+      if (oldHome === undefined) delete process.env.HOME;
+      else process.env.HOME = oldHome;
+      rmSync(home, { recursive: true, force: true });
+    }
+  }
+
+  function postureOptions(home: string) {
+    return { advisorPath: join(home, ".pi", "agent", "pi-rogue", "advisor", "config.json") };
+  }
+
+  function postureCtx(models: Array<{ provider: string; id: string }>, authenticated: Set<string>, authErrors = new Set<string>()) {
+    const catalog = models.map((model) => ({ ...model, input: ["text"] }));
+    return {
+      modelRegistry: {
+        find(provider: string, id: string) {
+          return catalog.find((model) => model.provider === provider && model.id === id);
+        },
+        getAvailable() { return catalog; },
+        async getApiKeyAndHeaders(model: { provider: string; id: string }) {
+          const ref = `${model.provider}/${model.id}`;
+          if (authErrors.has(ref)) throw new Error("credential lookup failed");
+          return authenticated.has(ref) ? { ok: true, apiKey: `token-${ref}` } : { ok: false };
+        },
+      },
+    };
+  }
+
   it("parses slash and JSON posture inputs", () => {
     expect(parseCfgPostureArgs("posture guarded")).toBe("guarded");
     expect(parseCfgPostureArgs("guarded")).toBe("guarded");
@@ -820,10 +855,66 @@ describe("Pi-Rogue posture presets", () => {
     expect(contextConfig.contextLensesEnabled).toBe(false);
   }));
 
-  it("rejects unknown posture values before writing config", () => withHome((home) => {
-    const ctx = { modelRegistry: { getAvailable: () => [] } } as any;
+  it.each([
+    ["empty registry", [], new Set<string>()],
+    ["catalog-only unauthenticated model", [{ provider: "openai-codex", id: "gpt-5.5" }], new Set<string>()],
+    ["local-only model", [{ provider: "llamacpp", id: "qwen-local" }], new Set<string>(["llamacpp/qwen-local"])],
+  ])("rejects %s before writing any posture file", async (_name, models, authenticated) => withHomeAsync(async (home) => {
+    const root = join(home, ".pi", "agent", "pi-rogue");
+    await expect(applyPiRoguePostureConfig(postureCtx(models, authenticated), { posture: "guarded" }, postureOptions(home))).rejects.toThrow(/requires an authenticated strong advisor model.*no files were changed/i);
+    for (const path of [join(root, "config.json"), join(root, "advisor", "config.json"), join(root, "router", "config.json"), join(root, "context-broker", "config.json")]) {
+      expect(existsSync(path), path).toBe(false);
+    }
+  }));
 
-    expect(() => buildPiRoguePosturePlan(ctx, "wild")).toThrow(/unknown posture/);
+  it("preserves every existing posture file when authentication rejects", async () => withHomeAsync(async (home) => {
+    const root = join(home, ".pi", "agent", "pi-rogue");
+    const paths = [join(root, "config.json"), join(root, "advisor", "config.json"), join(root, "router", "config.json"), join(root, "context-broker", "config.json")];
+    const before = paths.map((path, index) => {
+      mkdirSync(dirname(path), { recursive: true });
+      const content = JSON.stringify({ marker: `before-${index}` });
+      writeFileSync(path, content, "utf8");
+      return content;
+    });
+
+    await expect(applyPiRoguePostureConfig(postureCtx([], new Set()), { posture: "guarded" }, postureOptions(home))).rejects.toThrow(/no files were changed/i);
+    expect(paths.map((path) => readFileSync(path, "utf8"))).toEqual(before);
+  }));
+
+  it("falls through unusable strong candidates and preserves a configured valid strong model", async () => withHomeAsync(async (home) => {
+    const models = [
+      { provider: "openai-codex", id: "gpt-5.5" },
+      { provider: "anthropic", id: "claude-opus-4-6" },
+    ];
+    const fallback = await buildPiRoguePosturePlan(postureCtx(models, new Set(["anthropic/claude-opus-4-6"]), new Set(["openai-codex/gpt-5.5"])), "guarded", postureOptions(home));
+    expect(fallback.advisorModel).toBe("anthropic/claude-opus-4-6");
+
+    const defaultPreferred = await buildPiRoguePosturePlan(postureCtx(models, new Set(["openai-codex/gpt-5.5", "anthropic/claude-opus-4-6"])), "guarded", postureOptions(home));
+    expect(defaultPreferred.advisorModel).toBe("openai-codex/gpt-5.5");
+
+    const advisorPath = join(home, ".pi", "agent", "pi-rogue", "advisor", "config.json");
+    mkdirSync(join(home, ".pi", "agent", "pi-rogue", "advisor"), { recursive: true });
+    writeFileSync(advisorPath, JSON.stringify({ model: "anthropic/claude-opus-4-6" }), "utf8");
+    const configured = await buildPiRoguePosturePlan(postureCtx(models, new Set(["openai-codex/gpt-5.5", "anthropic/claude-opus-4-6"])), "guarded", postureOptions(home));
+    expect(configured.advisorModel).toBe("anthropic/claude-opus-4-6");
+  }));
+
+  it("applies an authenticated guarded posture idempotently", async () => withHomeAsync(async (home) => {
+    const ctx = postureCtx([{ provider: "openai-codex", id: "gpt-5.5" }], new Set(["openai-codex/gpt-5.5"]));
+    const first = await applyPiRoguePostureConfig(ctx, { posture: "guarded" }, postureOptions(home));
+    const root = join(home, ".pi", "agent", "pi-rogue");
+    const paths = [join(root, "config.json"), join(root, "advisor", "config.json"), join(root, "router", "config.json"), join(root, "context-broker", "config.json")];
+    const firstFiles = paths.map((path) => readFileSync(path, "utf8"));
+    const second = await applyPiRoguePostureConfig(ctx, { posture: "guarded" }, postureOptions(home));
+    expect(second.advisor.model).toBe("openai-codex/gpt-5.5");
+    expect(second.posture).toBe(first.posture);
+    expect(paths.map((path) => readFileSync(path, "utf8"))).toEqual(firstFiles);
+  }));
+
+  it("rejects unknown posture values before writing config", async () => withHomeAsync(async (home) => {
+    const ctx = postureCtx([], new Set());
+
+    await expect(buildPiRoguePosturePlan(ctx, "wild", postureOptions(home))).rejects.toThrow(/unknown posture/);
     expect(existsSync(join(home, ".pi", "agent", "pi-rogue", "config.json"))).toBe(false);
   }));
 });
