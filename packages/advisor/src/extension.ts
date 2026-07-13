@@ -5,7 +5,7 @@ import { homedir } from "node:os";
 import { basename, join, resolve } from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Box, Text } from "@earendil-works/pi-tui";
-import { completeSimple, type ThinkingLevel } from "@earendil-works/pi-ai";
+import { completeSimple, type ThinkingLevel } from "@earendil-works/pi-ai/compat";
 import { Type } from "typebox";
 import { sessionKey as sharedSessionKey, sessionScopedDir } from "@fiale-plus/pi-core";
 import { appendText, featureDir, featureFile, readText, truncate, writeText, atomicWriteText } from "./internal.js";
