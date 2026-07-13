@@ -93,6 +93,18 @@ export async function handleResearchCommand(pi: ExtensionAPI, commandName: Resea
     return;
   }
 
+  const labIsActive = previous.kind === "autoresearch-lab" && currentLoop.enabled;
+  if (commandName === "autoresearch-lab" && !labIsActive) {
+    const confirmed = await ctx.ui?.confirm?.(
+      "Start parallel autoresearch lab?",
+      "Lab mode enables escalated, parallel research lanes and queues work immediately. Continue?",
+    );
+    if (confirmed !== true) {
+      ctx.ui.notify("Autoresearch lab activation cancelled; no goal, research, loop, or turn was changed.", "info");
+      return;
+    }
+  }
+
   const restartSameGoal = activeGoal(ctx) === goal;
   setGoal(ctx, goal, { restartDuplicate: restartSameGoal });
 
