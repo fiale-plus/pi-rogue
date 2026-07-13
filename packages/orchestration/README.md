@@ -8,7 +8,7 @@ Session orchestration for Pi-Rogue built around three primitives:
 
 1. `goal` — define and track what success looks like
 2. `loop` — periodic execution with explicit start/stop
-3. `autoresearch` / `autoresearch-lab` — goal+loop facades for iterative or parallelized optimization
+3. `autoresearch` / canonical `lab` — goal+loop facades for iterative or parallelized optimization
 
 ## Install
 
@@ -48,7 +48,8 @@ npm install --workspace packages/orchestration
 
 - `loop` supports minimum interval `1m`.
 - Active goals can be completed with the model-callable `goal_complete` tool, which requires a summary and verification evidence; `GOAL_DONE` / `GOAL_CONTINUE` sentinel loop checks are preserved for compatibility.
-- `autoresearch` and `lab` are thin facades over `/pi-rogue-orchestration goal + loop`.
+- `/autoresearch` and `/pi-rogue-orchestration lab` are thin facades over goal + loop.
+- Entering lab from an inactive state requires confirmation before any goal/research/loop write or queued turn; no `/autoresearch-lab` root is registered.
 - A goal or loop activation enables scheduled advisor check-ins; stopping or clearing the active goal/loop disables them again.
 - Check-ins are part of orchestration lifecycle, not a standalone advisor command. They use the advisor interval, higher/advanced advisor models first, and regular model fallback by default.
 - A bounded no-progress guard detects repeated assistant output or repeated planning-only turns during active orchestration, then nudges one concrete alternative action and eventually stops retry churn instead of stacking recovery prompts.

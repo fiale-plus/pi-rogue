@@ -21,15 +21,15 @@ Use this skill to run measurable, bounded workflow loops inside a Pi session.
 | `/autoresearch <instruction>` | Solo iterative research on top of `/goal + /loop` |
 | `/autoresearch status` | Show research counters and backing state |
 | `/autoresearch clear` | Clear research and stop backing loop |
-| `/autoresearch-lab <instruction>` | Parallel research mode (lab) |
-| `/autoresearch-lab status` | Show lab state |
-| `/autoresearch-lab clear` | Clear lab and stop backing loop |
+| `/pi-rogue-orchestration lab <instruction>` | Confirm and start parallel research mode |
+| `/pi-rogue-orchestration lab status` | Show lab state |
+| `/pi-rogue-orchestration lab clear` | Clear lab and stop backing loop |
 
 ## Behavior rules
 
 - `loop` is the primitive; `goal` is the execution intent.
 - Goal completion should use the `goal_complete` tool when available, with a summary and verification evidence; `GOAL_DONE` / `GOAL_CONTINUE` remain valid loop-check sentinels for compatibility.
-- `autoresearch` / `autoresearch-lab` are facades over goal+loop.
+- `/autoresearch` and `/pi-rogue-orchestration lab` are facades over goal+loop.
 - Goal or loop activation enables scheduled advisor check-ins; stopping or clearing either disables them.
 - Check-ins belong to orchestration lifecycle, not the advisor command surface, and use higher/advanced advisor models first, with regular model fallback enabled by default.
 - `autoresearch` enforces multi-cycle + evidence-aware completion.
@@ -39,7 +39,7 @@ Use this skill to run measurable, bounded workflow loops inside a Pi session.
 ## Safety and agentic flow
 
 - Auto-detect opportunities are proposals first, not silent launches.
-- `autoresearch-lab` requires explicit confirmation for escalation.
+- Every transition from inactive state into `/pi-rogue-orchestration lab` requires explicit confirmation before any state write or queued turn.
 - Commands remain distinct:
-  - `/autoresearch` = solo optimization
-  - `/autoresearch-lab` = parallel lab mode
+  - `/autoresearch` = supported solo-optimization alias
+  - `/pi-rogue-orchestration lab` = canonical parallel lab mode; no `/autoresearch-lab` root is registered

@@ -3,8 +3,9 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { setAdvisorCheckinDemand } from "./advisor-checkins.js";
 import { buildResearchGoal, buildResearchLoopInstruction } from "./autoresearch.js";
 import { registerOrchestration } from "./extension.js";
-import { formatResearchState, type ResearchState } from "./autoresearch-state.js";
-import { clearLoop } from "./loop.js";
+import { formatResearchState, readResearchState, type ResearchState } from "./autoresearch-state.js";
+import { activeGoal } from "./goal.js";
+import { clearLoop, readLoopState } from "./loop.js";
 
 vi.mock("./advisor-checkins.js", () => ({
   resetAdvisorSessionContext: vi.fn(),
@@ -13,10 +14,12 @@ vi.mock("./advisor-checkins.js", () => ({
 
 const setAdvisorCheckinDemandMock = vi.mocked(setAdvisorCheckinDemand);
 
-function fakeCtx(id = randomUUID()) {
+function fakeCtx(id = randomUUID(), confirmResult: boolean | (() => boolean) = true) {
   const notifications: string[] = [];
+  const confirmations: Array<{ title: string; message: string }> = [];
   return {
     notifications,
+    confirmations,
     isIdle: () => true,
     sessionManager: {
       getSessionFile: () => `/tmp/pi-rogue-autoresearch-test-${id}.jsonl`,
@@ -24,6 +27,10 @@ function fakeCtx(id = randomUUID()) {
     ui: {
       setStatus: () => undefined,
       notify: (message: string) => notifications.push(message),
+      confirm: async (title: string, message: string) => {
+        confirmations.push({ title, message });
+        return typeof confirmResult === "function" ? confirmResult() : confirmResult;
+      },
     },
   };
 }
@@ -82,6 +89,95 @@ describe("autoresearch status", () => {
     expect(loop).toContain("Advance the most useful lane comparison");
     expect(loop).toContain("integrate only safe improvements");
     expect(loop).toContain("Do not simplify or re-aim");
+  });
+
+  it("declines canonical lab activation without state changes or queued turns", async () => {
+    let handler: ((args: string, ctx: any) => Promise<void>) | undefined;
+    const sent: string[] = [];
+    const pi = {
+      registerCommand: (name: string, command: { handler: (args: string, ctx: any) => Promise<void> }) => {
+        if (name === "pi-rogue-orchestration") handler = command.handler;
+      },
+      sendUserMessage: (text: string) => sent.push(text),
+      on: () => undefined,
+    } as any;
+    const ctx = fakeCtx(undefined, false);
+    registerOrchestration(pi);
+
+    await handler?.("lab compare advisor lanes", ctx);
+
+    expect(ctx.confirmations).toHaveLength(1);
+    expect(ctx.confirmations[0].message).toMatch(/escalated.*parallel|parallel.*escalated/i);
+    expect(sent).toHaveLength(0);
+    expect(activeGoal(ctx)).toBe("");
+    expect(readLoopState(ctx).enabled).toBe(false);
+    expect(readResearchState(ctx).instruction).toBe("");
+    expect(ctx.notifications.at(-1)).toContain("no goal, research, loop, or turn was changed");
+  });
+
+  it("preserves an existing solo flow byte-for-byte when lab escalation is declined", async () => {
+    let handler: ((args: string, ctx: any) => Promise<void>) | undefined;
+    const sent: string[] = [];
+    const pi = {
+      registerCommand: (name: string, command: { handler: (args: string, ctx: any) => Promise<void> }) => {
+        if (name === "pi-rogue-orchestration") handler = command.handler;
+      },
+      sendUserMessage: (text: string) => sent.push(text),
+      on: () => undefined,
+    } as any;
+    const ctx = fakeCtx(undefined, false);
+    registerOrchestration(pi);
+    await handler?.("autoresearch improve solo baseline", ctx);
+    const before = { goal: activeGoal(ctx), loop: readLoopState(ctx), research: readResearchState(ctx), sent: [...sent] };
+
+    await handler?.("lab compare parallel lanes", ctx);
+
+    expect({ goal: activeGoal(ctx), loop: readLoopState(ctx), research: readResearchState(ctx), sent }).toEqual(before);
+    expect(ctx.confirmations).toHaveLength(1);
+  });
+
+  it("accepts canonical lab activation exactly once and reconfirms after clear", async () => {
+    let handler: ((args: string, ctx: any) => Promise<void>) | undefined;
+    const sent: string[] = [];
+    const pi = {
+      registerCommand: (name: string, command: { handler: (args: string, ctx: any) => Promise<void> }) => {
+        if (name === "pi-rogue-orchestration") handler = command.handler;
+      },
+      sendUserMessage: (text: string) => sent.push(text),
+      on: () => undefined,
+    } as any;
+    const ctx = fakeCtx();
+    registerOrchestration(pi);
+
+    await handler?.("lab compare advisor lanes", ctx);
+    await handler?.("lab compare advisor lanes", ctx);
+    expect(ctx.confirmations).toHaveLength(1);
+    expect(sent).toHaveLength(1);
+    expect(readResearchState(ctx).kind).toBe("autoresearch-lab");
+    expect(readLoopState(ctx).enabled).toBe(true);
+
+    await handler?.("lab clear", ctx);
+    await handler?.("lab compare advisor lanes", ctx);
+    expect(ctx.confirmations).toHaveLength(2);
+    expect(sent).toHaveLength(2);
+  });
+
+  it("keeps /autoresearch as the supported solo alias and does not register a lab root alias", async () => {
+    const commands = new Map<string, { handler: (args: string, ctx: any) => Promise<void> }>();
+    const sent: string[] = [];
+    const pi = {
+      registerCommand: (name: string, command: { handler: (args: string, ctx: any) => Promise<void> }) => commands.set(name, command),
+      sendUserMessage: (text: string) => sent.push(text),
+      on: () => undefined,
+    } as any;
+    const ctx = fakeCtx();
+    registerOrchestration(pi);
+
+    expect(commands.has("autoresearch")).toBe(true);
+    expect(commands.has("autoresearch-lab")).toBe(false);
+    await commands.get("autoresearch")?.handler("improve solo eval", ctx);
+    expect(ctx.confirmations).toHaveLength(0);
+    expect(sent).toHaveLength(1);
   });
 
   it("does not queue a duplicate cycle for the same active autoresearch instruction", async () => {
