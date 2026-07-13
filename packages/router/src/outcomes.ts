@@ -2,7 +2,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { hashText } from "./hash.js";
 import { readCheckpointJsonl } from "./decision.js";
-import { readRouteEvents, type RouteEvent } from "./ledger.js";
+import { observedUserOverrodeDecision, readRouteEvents, type RouteEvent } from "./ledger.js";
 import type { RouterCheckpoint, TaskStatus, TaskType } from "./types.js";
 
 export const ROUTER_OUTCOME_SCHEMA = "pi-router.outcome.v1" as const;
@@ -88,7 +88,7 @@ export function buildUnknownOutcome(event: RouteEvent, checkpoint?: RouterCheckp
     verifierImproved: null,
     acceptedDiff: null,
     userInterrupted: false,
-    userOverrodeDecision: Boolean(event.observed.overriddenBy),
+    userOverrodeDecision: observedUserOverrodeDecision(event.observed),
     routeStatus: event.observed.routingStatus,
     finalFilesTouched: checkpoint ? ((checkpoint.features.diffFilesChanged ?? 0) > 0 ? (checkpoint.features.diffFilesChanged ?? 0) : checkpoint.features.filesTouched) : 0,
     finalDiffLines: checkpoint?.features.diffLines ?? 0,
@@ -144,7 +144,7 @@ function checkpointForOutcome(outcome: RouterOutcome, event: RouteEvent | undefi
 }
 
 function inferredStatus(outcome: RouterOutcome, checkpoint?: RouterCheckpoint, event?: RouteEvent, testsPassed: boolean | null = outcome.testsPassedAfter): TaskStatus {
-  const stopWasFollowed = event?.decision.action === "stop_and_ask_user" && event.observed.followed === true && !event.observed.overriddenBy;
+  const stopWasFollowed = event?.decision.action === "stop_and_ask_user" && event.observed.followed === true && !observedUserOverrodeDecision(event.observed);
   if (stopWasFollowed || outcome.userInterrupted) return outcome.taskStatus === "unknown" ? "abandoned" : outcome.taskStatus;
   if (testsPassed === true && Math.max(outcome.finalDiffLines, checkpoint?.features.diffLines ?? 0, event?.metrics.diffLines ?? 0) > 0) return "success";
   if (testsPassed === true && outcome.taskStatus === "unknown") return "partial";
@@ -182,8 +182,10 @@ export function enrichOutcome(outcome: RouterOutcome, options: { checkpoint?: Ro
     testsPassedAfter,
     verifierImproved,
     acceptedDiff,
-    userInterrupted: outcome.userInterrupted || Boolean(event?.decision.action === "stop_and_ask_user" && event.observed.followed === true && !event.observed.overriddenBy),
-    userOverrodeDecision: outcome.userOverrodeDecision || Boolean(event?.observed.overriddenBy),
+    userInterrupted: outcome.userInterrupted || Boolean(event?.decision.action === "stop_and_ask_user" && event.observed.followed === true && !observedUserOverrodeDecision(event.observed)),
+    userOverrodeDecision: outcome.evidence.source === "manual"
+      ? outcome.userOverrodeDecision || Boolean(event && observedUserOverrodeDecision(event.observed))
+      : event ? observedUserOverrodeDecision(event.observed) : outcome.userOverrodeDecision,
     routeStatus: outcome.routeStatus ?? event?.observed.routingStatus,
     finalFilesTouched,
     finalDiffLines,

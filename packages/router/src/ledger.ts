@@ -24,7 +24,10 @@ export interface RouteEvent {
   runtime: RouteRuntimeFacts;
   observed: {
     followed: boolean | null;
+    /** @deprecated Legacy manual-override detail. Policy and infrastructure reasons use routingReason. */
     overriddenBy?: string;
+    userOverrodeDecision?: boolean;
+    routingReason?: string;
     routingStatus?: "applied" | "policy_noop" | "blocked" | "downgraded";
     blockedBy?: "policy" | "infra_auth";
   };
@@ -37,6 +40,12 @@ export interface RouteEvent {
     diffLines: number;
     diffFilesChanged: number;
   };
+}
+
+export function observedUserOverrodeDecision(observed: RouteEvent["observed"]): boolean {
+  // Legacy `overriddenBy` is intentionally not evidence of user intent: older auto-model
+  // policy skips wrote the same field before routingStatus/blockedBy existed.
+  return observed.userOverrodeDecision === true;
 }
 
 export function buildRouteEvent(checkpoint: RouterCheckpoint, decision: RouteDecision, recordedAt = new Date().toISOString()): RouteEvent {

@@ -430,7 +430,8 @@ export async function observeRouterTurn(ctx: any, pi?: Pick<ExtensionAPI, "setMo
       );
     } else if (plan.canApply) {
       event.observed.followed = false;
-      event.observed.overriddenBy = applySummary.reason;
+      event.observed.userOverrodeDecision = false;
+      event.observed.routingReason = applySummary.reason;
       event.observed.routingStatus = applySummary.status ?? (routingSummary.role === "worker" ? "downgraded" : "applied");
       event.observed.blockedBy = applySummary.blockedBy;
       ctx.ui?.notify?.(
@@ -439,7 +440,8 @@ export async function observeRouterTurn(ctx: any, pi?: Pick<ExtensionAPI, "setMo
       );
     } else if (summary.match === false) {
       event.observed.followed = false;
-      event.observed.overriddenBy = applySummary.reason;
+      event.observed.userOverrodeDecision = false;
+      event.observed.routingReason = applySummary.reason;
       event.observed.routingStatus = applySummary.status ?? "policy_noop";
       event.observed.blockedBy = applySummary.blockedBy;
       ctx.ui?.notify?.(
@@ -450,6 +452,8 @@ export async function observeRouterTurn(ctx: any, pi?: Pick<ExtensionAPI, "setMo
 
     if (applySummary.applied) {
       event.observed.followed = true;
+      event.observed.userOverrodeDecision = false;
+      event.observed.routingReason = applySummary.reason;
       event.observed.routingStatus = routingSummary.role === "worker" ? "downgraded" : "applied";
       event.observed.blockedBy = applySummary.blockedBy;
     }
