@@ -22,6 +22,7 @@ import {
   type AdvisorRouteDecision,
   type AdvisorRouteInput,
   type BinaryGateArtifactStatus,
+  type BinaryGatePrediction,
   type ReviewPolicy,
 } from "./router.js";
 import { type TrajectoryFeatures } from "./binary-gate-eval.js";
@@ -3558,21 +3559,7 @@ async function doReview(pi: ExtensionAPI, ctx: any, trigger: string, delta: stri
     }
 
     const gatePrediction = binaryGatePredict(reviewInput.text, phase, trajectory);
-    let reviewRoute = reviewHeuristic;
-    if (gatePrediction && gatePrediction.trusted && !reviewHeuristic.safety && !meta.failed) {
-      const gateContinues = gatePrediction.decision === "continue";
-      reviewRoute = {
-        ...reviewHeuristic,
-        label: gateContinues ? "abstain" : reviewHeuristic.label,
-        confidence: gatePrediction.confidence,
-        source: "model",
-        reason: gateContinues
-          ? "local gate predicts continue"
-          : "local gate predicts review",
-        review: gateContinues ? "off" as const : reviewHeuristic.review,
-        escalate: gateContinues ? false : reviewHeuristic.escalate,
-      };
-    }
+    const reviewRoute = applyReviewGatePrediction(reviewHeuristic, gatePrediction, Boolean(meta.failed));
     appendRouteLog(reviewRoute);
     state.router.review = reviewRoute;
     persistReviewState(state, true);
@@ -3789,6 +3776,34 @@ async function doReview(pi: ExtensionAPI, ctx: any, trigger: string, delta: stri
 
 // ── Extension entry point ──────────────────────────────────────────────────
 
+export function applyReviewGatePrediction(heuristic: AdvisorRouteDecision, prediction: BinaryGatePrediction | null, failed = false): AdvisorRouteDecision {
+  if (!prediction?.trusted || heuristic.safety || failed) return heuristic;
+  const gateContinues = prediction.decision === "continue";
+  return {
+    ...heuristic,
+    label: gateContinues ? "abstain" : heuristic.label,
+    confidence: prediction.confidence,
+    source: "model",
+    reason: gateContinues ? "local gate predicts continue" : "local gate predicts review",
+    review: gateContinues ? "off" : heuristic.review,
+    escalate: gateContinues ? false : heuristic.escalate,
+  };
+}
+
+export function applyPreflightGatePrediction(heuristic: AdvisorRouteDecision, prediction: BinaryGatePrediction | null): AdvisorRouteDecision {
+  if (!prediction?.trusted || heuristic.safety) return heuristic;
+  const label = prediction.decision === "continue" ? "continue" : "escalate_to_advisor";
+  return {
+    ...heuristic,
+    label,
+    confidence: prediction.confidence,
+    reason: prediction.decision === "continue" ? "local gate predicts continue" : "local gate predicts review",
+    source: "model",
+    preflight: label === "continue" ? "off" : "full",
+    escalate: label === "escalate_to_advisor",
+  };
+}
+
 export function registerAdvisor(pi: ExtensionAPI): void {
   const p = pi as any;
   if (p.__piRogueAdvisorRegistered) return;
@@ -3889,27 +3904,7 @@ export function registerAdvisor(pi: ExtensionAPI): void {
     });
     const gatePrediction = binaryGatePredict(routeInput.text, "preflight", trajectory);
     const heuristic = { ...heuristicRoute(routeInput), trajectory };
-    let route: AdvisorRouteDecision;
-    if (gatePrediction && gatePrediction.trusted) {
-      const binLabel = gatePrediction.decision === "continue" ? "continue" as const : "escalate_to_advisor" as const;
-      if (heuristic.safety) {
-        route = heuristic;
-      } else {
-        route = {
-          ...heuristic,
-          label: binLabel,
-          confidence: gatePrediction.confidence,
-          reason: gatePrediction.decision === "continue"
-            ? "local gate predicts continue"
-            : "local gate predicts review",
-          source: "model",
-          preflight: binLabel === "continue" ? "off" as const : "full" as const,
-          escalate: binLabel === "escalate_to_advisor",
-        };
-      }
-    } else {
-      route = heuristic;
-    }
+    const route = applyPreflightGatePrediction(heuristic, gatePrediction);
     appendRouteLog(route);
     state.router.preflight = route;
 
