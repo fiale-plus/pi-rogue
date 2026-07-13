@@ -9,6 +9,9 @@
   ],
   "private": true,
   "main": "./src/index.ts",
+  "scripts": {
+    "test": "cd ../../.. && vitest run packages/lab/guardrails/src/*.test.ts"
+  },
   "exports": {
     ".": "./src/index.ts"
   },

@@ -176,8 +176,8 @@ interface Report {
     enabled: boolean;
     rows: number;
     train: number;
-    validation: number;
-    test: number;
+    validationRows: number;
+    testRows: number;
     bestEpoch: number;
     textBaseline: {
       accuracy: number;
@@ -847,8 +847,8 @@ function main() {
       enabled: true,
       rows: stackedTrain.length + stackedValidation.length + stackedTest.length,
       train: stackedTrain.length,
-      validation: stackedValidation.length,
-      test: stackedTest.length,
+      validationRows: stackedValidation.length,
+      testRows: stackedTest.length,
       bestEpoch: stackedFit?.bestEpoch ?? 0,
       textBaseline: {
         accuracy: stackedBaselineTest.accuracy,

@@ -4,6 +4,7 @@ import path from "node:path";
 import { hashText, type Label } from "./routing-heuristics.js";
 import { iterateCheckpoints } from "../packages/router/src/checkpoints.js";
 import { readPiSession } from "../packages/router/src/session-reader.js";
+import { advisorPhaseForRouterPhase } from "./trajectory-phase.js";
 import { assertDatasetGovernance, datasetSha256, manifestPathFor, type BinaryDatasetManifest } from "./binary-dataset-manifest.js";
 
 interface TrajectoryFeaturesJson {
@@ -140,7 +141,7 @@ function trajectoryFromCheckpoint(checkpoint: ReturnType<typeof iterateCheckpoin
     diffLines: f.diffLines,
     contextTokensApprox: f.contextTokensApprox ?? undefined,
     turns: f.turnIndex,
-    phase: checkpoint.phase === "unknown" ? undefined : checkpoint.phase,
+    phase: advisorPhaseForRouterPhase(checkpoint.phase),
     failed: Boolean((checkpoint.recent.lastErrorHash ?? checkpoint.recent.lastErrorFingerprintHash) && f.sameErrorRepeatedCount > 0),
     fileChanged: Boolean(f.diffLines > 0 || f.diffFilesChanged > 0 || f.filesTouched > 0),
   };
