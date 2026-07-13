@@ -13,6 +13,7 @@
     "check:scripts": "tsc -p tsconfig.scripts.json --noEmit",
     "check:coverage": "tsx scripts/validate-validation-coverage.ts",
     "test": "vitest run",
+    "test:packed-min-node": "node scripts/test-packed-minimum-node.mjs",
     "routing:mine": "tsx scripts/mine-routing-examples.ts",
     "routing:queue": "tsx scripts/build-routing-label-queue.ts",
     "routing:autolabel": "tsx scripts/auto-label-routing-queue.ts",

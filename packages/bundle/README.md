@@ -19,7 +19,7 @@ Direct installs of advisor/orchestration remain paused (marked private). Fusion 
 pi install npm:@fiale-plus/pi-rogue
 ```
 
-Requires `@earendil-works/pi-coding-agent >=0.80.6 <0.81.0` and Node.js `>=22.19.0`.
+Requires `@earendil-works/pi-coding-agent >=0.80.6 <0.81.0` and Node.js `>=22.19.0`. The Node floor is required by the default durable context-broker backend, which uses built-in `node:sqlite`. Required Linux CI verifies the packed package at that exact minimum and reloads a SQLite artifact across fresh processes.
 
 For local monorepo dev:
 
