@@ -364,7 +364,7 @@ export function planAutoModelDowngrade(checkpoint: RouterCheckpoint, summary: Ro
 
 export async function observeRouterTurn(ctx: any, pi?: Pick<ExtensionAPI, "setModel">): Promise<RouterObserveSummary | null> {
   const config = loadRouterConfig(ctx);
-  if (!config.enabled || (config.print === "off" && config.mode === "observe")) return null;
+  if (!config.enabled) return null;
   const sessionPath = ctx?.sessionManager?.getSessionFile?.();
   if (!sessionPath) return null;
   const checkpoint = await latestCheckpointFromSession(String(sessionPath));
