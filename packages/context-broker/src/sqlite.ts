@@ -1,9 +1,8 @@
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { safeName } from "@fiale-plus/pi-core";
+import { ensureOwnerOnlyDirectory, safeName, tightenSqliteArtifacts } from "@fiale-plus/pi-core";
 import type {
   BoundedContextBroker,
   ContextArtifact,
@@ -49,7 +48,7 @@ function defaultSqlitePath(options: SqliteContextBrokerOptions): string {
 }
 
 function ensureParent(path: string): void {
-  mkdirSync(dirname(path), { recursive: true });
+  ensureOwnerOnlyDirectory(dirname(path));
 }
 
 function normalizeList(values: string[] | undefined): string[] {
@@ -232,12 +231,16 @@ function initialize(db: DatabaseSync): void {
 
 export function createSqliteContextBroker(options: SqliteContextBrokerOptions = {}): BoundedContextBroker {
   const dbPath = defaultSqlitePath(options);
-  if (dbPath !== ":memory:" && !existsSync(dirname(dbPath))) ensureParent(dbPath);
+  if (dbPath !== ":memory:") {
+    ensureParent(dbPath);
+    tightenSqliteArtifacts(dbPath);
+  }
   const db = new DatabaseSync(dbPath);
   const busyTimeoutMs = Math.max(0, Math.floor(options.busyTimeoutMs ?? DEFAULT_BUSY_TIMEOUT_MS));
   try {
     db.exec(`PRAGMA busy_timeout = ${busyTimeoutMs}`);
     initialize(db);
+    if (dbPath !== ":memory:") tightenSqliteArtifacts(dbPath);
   } catch (error) {
     try { db.close(); } catch { /* ignore close failure while preserving the initialization error */ }
     throw error;

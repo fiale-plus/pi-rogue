@@ -1,7 +1,7 @@
-import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, unlinkSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
-import { safeName } from "@fiale-plus/pi-core";
+import { ensureOwnerOnlyDirectory, safeName, secureWriteFile, tightenOwnerOnlyFile } from "@fiale-plus/pi-core";
 import type { BoundedContextBroker, ContextArtifact, ContextArtifactInput, ContextArtifactTier, ContextBrokerOptions, ContextBrokerStatus, ContextLookupQuery, ContextPurgeOptions } from "@fiale-plus/pi-core";
 import { createInMemoryContextBroker } from "./index.js";
 
@@ -23,7 +23,7 @@ function defaultStoreDir(): string {
 }
 
 function ensureDir(path: string): void {
-  mkdirSync(path, { recursive: true });
+  ensureOwnerOnlyDirectory(path);
 }
 
 function metadataFile(dir: string): string {
@@ -41,6 +41,7 @@ function stableSource(input: ContextArtifactInput): string | undefined {
 function readStoredRecords(dir: string): StoredRecord[] {
   const file = metadataFile(dir);
   if (!existsSync(file)) return [];
+  tightenOwnerOnlyFile(file);
   const recordsByHandle = new Map<string, StoredRecord>();
   for (const line of readFileSync(file, "utf8").split("\n")) {
     const trimmed = line.trim();
@@ -60,6 +61,7 @@ function readStoredRecords(dir: string): StoredRecord[] {
 function loadPayload(dir: string, sha256: string): string | undefined {
   const file = blobFile(dir, sha256);
   if (!existsSync(file)) return undefined;
+  tightenOwnerOnlyFile(file);
   return readFileSync(file, "utf8");
 }
 
@@ -70,7 +72,16 @@ function artifactBaseTier(artifact: ContextArtifact, fallback?: ContextArtifactT
 function persistRecord(dir: string, artifact: ContextArtifact, input: ContextArtifactInput): void {
   ensureDir(join(dir, "blobs"));
   const blob = blobFile(dir, artifact.sha256);
-  if (!existsSync(blob)) writeFileSync(blob, artifact.payload, "utf8");
+  if (!existsSync(blob)) {
+    try {
+      secureWriteFile(blob, artifact.payload, "exclusive");
+    } catch (error: any) {
+      if (error?.code !== "EEXIST") throw error;
+      tightenOwnerOnlyFile(blob);
+    }
+  } else {
+    tightenOwnerOnlyFile(blob);
+  }
   const record: StoredRecord = {
     version: STORE_VERSION,
     handle: artifact.handle,
@@ -92,7 +103,7 @@ function persistRecord(dir: string, artifact: ContextArtifact, input: ContextArt
     },
   };
   ensureDir(dirname(metadataFile(dir)));
-  appendFileSync(metadataFile(dir), `${JSON.stringify(record)}\n`, "utf8");
+  secureWriteFile(metadataFile(dir), `${JSON.stringify(record)}\n`, "append");
 }
 
 function persistArtifactSnapshot(dir: string, artifact: ContextArtifact): void {
@@ -125,6 +136,7 @@ function removeUnreferencedBlobs(dir: string, keptSha256: Set<string>): void {
 
 export function createFileContextBroker(options: FileContextBrokerOptions = {}): BoundedContextBroker {
   const dir = options.dir ?? process.env.PI_CONTEXT_BROKER_STORE_DIR ?? defaultStoreDir();
+  ensureDir(dir);
   ensureDir(join(dir, "blobs"));
   const broker = createInMemoryContextBroker(options);
   const persistedSources = new Map<string, string>();
@@ -170,7 +182,7 @@ export function createFileContextBroker(options: FileContextBrokerOptions = {}):
       const remaining = broker.lookup({ limit: Number.MAX_SAFE_INTEGER });
       persistedSources.clear();
       handleAliases.clear();
-      writeFileSync(metadataFile(dir), "", "utf8");
+      secureWriteFile(metadataFile(dir), "");
       const keptSha256 = new Set<string>();
       for (const artifact of remaining) {
         keptSha256.add(artifact.sha256);

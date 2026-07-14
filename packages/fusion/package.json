@@ -10,6 +10,9 @@
     "test": "cd ../.. && vitest run packages/fusion/src/*.test.ts"
   },
   "main": "./src/index.ts",
+  "dependencies": {
+    "@fiale-plus/pi-core": "^0.1.0"
+  },
   "exports": {
     ".": "./src/index.ts",
     "./extension": "./src/extension.ts"
