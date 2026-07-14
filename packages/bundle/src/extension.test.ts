@@ -1,5 +1,5 @@
-import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { execFileSync, spawnSync } from "node:child_process";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createInMemoryContextBroker } from "./context-broker.js";
@@ -79,6 +79,97 @@ describe("bundle extension defaults", () => {
 });
 
 describe("bundle publish metadata", () => {
+  it("enforces the committed canonical version and release-note policy", () => {
+    const dir = mkdtempSync(join(tmpdir(), "pi-rogue-release-policy-"));
+    const eventPath = join(dir, "event.json");
+    writeFileSync(eventPath, JSON.stringify({ release: { body: "## Summary\nReady.\n\n## Changes\nCanonical.\n\n## Validation\nGreen." } }));
+    const version = JSON.parse(readFileSync(join(process.cwd(), "packages", "bundle", "package.json"), "utf8")).version;
+    const script = join(process.cwd(), "scripts", "validate-release-policy.mjs");
+    execFileSync(process.execPath, [script], { env: { ...process.env, GITHUB_REF_NAME: `pi-rogue-${version}`, GITHUB_EVENT_PATH: eventPath } });
+    const rejected = spawnSync(process.execPath, [script], { env: { ...process.env, GITHUB_REF_NAME: "pi-rogue-9.9.9", GITHUB_EVENT_PATH: eventPath }, encoding: "utf8" });
+    expect(rejected.status).not.toBe(0);
+    expect(rejected.stderr).toContain("must exactly match committed canonical version");
+  });
+
+  it("treats already-correct exact legacy deprecations as success", () => {
+    const dir = mkdtempSync(join(tmpdir(), "pi-rogue-deprecation-policy-"));
+    const fakeNpm = join(dir, "npm");
+    writeFileSync(fakeNpm, `#!/usr/bin/env node
+const args = process.argv.slice(2);
+const messages = {
+  "@fiale-plus/pi-rogue-bundle": "Deprecated: replaced by @fiale-plus/pi-rogue. Install via \\"pi install npm:@fiale-plus/pi-rogue\\".",
+  "@fiale-plus/pi-rogue-advisor": "Deprecated: advisor/orchestration are bundled in @fiale-plus/pi-rogue. Install via \\"pi install npm:@fiale-plus/pi-rogue\\".",
+  "@fiale-plus/pi-rogue-orchestration": "Deprecated: advisor/orchestration are bundled in @fiale-plus/pi-rogue. Install via \\"pi install npm:@fiale-plus/pi-rogue\\".",
+  "@fiale-plus/pi-orchestration": "Deprecated: replaced by @fiale-plus/pi-rogue. Install via \\"pi install npm:@fiale-plus/pi-rogue\\"."
+};
+const spec = args[1] || "";
+const name = Object.keys(messages).find((candidate) => spec.startsWith(candidate));
+if (args[0] !== "view" || !name) process.exit(2);
+if (args[2] === "versions") console.log(JSON.stringify(["1.0.0"]));
+else if (args[2] === "deprecated") console.log(JSON.stringify(messages[name]));
+else process.exit(2);
+`);
+    chmodSync(fakeNpm, 0o755);
+    const result = spawnSync(process.execPath, [join(process.cwd(), "scripts", "deprecate-legacy-packages.mjs"), "--verify-only"], {
+      env: { ...process.env, NPM_CLI: fakeNpm },
+      encoding: "utf8",
+    });
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout).toContain("already have the exact deprecation message");
+  });
+
+  it("retries transient deprecation reads and writes, then verifies exact messages", () => {
+    const dir = mkdtempSync(join(tmpdir(), "pi-rogue-deprecation-retry-"));
+    const fakeNpm = join(dir, "npm");
+    const statePath = join(dir, "state.json");
+    writeFileSync(statePath, JSON.stringify({ versionReads: 0, writes: 0 }));
+    writeFileSync(fakeNpm, `#!/usr/bin/env node
+const fs = require("node:fs");
+const args = process.argv.slice(2);
+const state = JSON.parse(fs.readFileSync(process.env.FAKE_NPM_STATE, "utf8"));
+const messages = {
+  "@fiale-plus/pi-rogue-bundle": "Deprecated: replaced by @fiale-plus/pi-rogue. Install via \\"pi install npm:@fiale-plus/pi-rogue\\".",
+  "@fiale-plus/pi-rogue-advisor": "Deprecated: advisor/orchestration are bundled in @fiale-plus/pi-rogue. Install via \\"pi install npm:@fiale-plus/pi-rogue\\".",
+  "@fiale-plus/pi-rogue-orchestration": "Deprecated: advisor/orchestration are bundled in @fiale-plus/pi-rogue. Install via \\"pi install npm:@fiale-plus/pi-rogue\\".",
+  "@fiale-plus/pi-orchestration": "Deprecated: replaced by @fiale-plus/pi-rogue. Install via \\"pi install npm:@fiale-plus/pi-rogue\\"."
+};
+const spec = args[1] || "";
+const name = Object.keys(messages).find((candidate) => spec.startsWith(candidate));
+if (!name) process.exit(2);
+if (args[0] === "view" && args[2] === "versions") {
+  state.versionReads += 1; fs.writeFileSync(process.env.FAKE_NPM_STATE, JSON.stringify(state));
+  if (state.versionReads === 1) { console.error("transient read"); process.exit(1); }
+  console.log(JSON.stringify(["1.0.0"]));
+} else if (args[0] === "view" && args[2] === "deprecated") {
+  console.log(JSON.stringify(state.writes >= 2 ? messages[name] : "stale"));
+} else if (args[0] === "deprecate") {
+  state.writes += 1; fs.writeFileSync(process.env.FAKE_NPM_STATE, JSON.stringify(state));
+  if (state.writes === 1) { console.error("transient write"); process.exit(1); }
+} else process.exit(2);
+`);
+    chmodSync(fakeNpm, 0o755);
+    const result = spawnSync(process.execPath, [join(process.cwd(), "scripts", "deprecate-legacy-packages.mjs")], {
+      env: { ...process.env, NPM_CLI: fakeNpm, FAKE_NPM_STATE: statePath, DEPRECATION_RETRY_DELAY_MS: "0" },
+      encoding: "utf8",
+    });
+    expect(result.status, result.stderr).toBe(0);
+    expect(JSON.parse(readFileSync(statePath, "utf8"))).toMatchObject({ versionReads: 5, writes: 2 });
+    expect(result.stdout).toContain("exact deprecation verified");
+  });
+
+  it("fails after exhausted registry retries", () => {
+    const dir = mkdtempSync(join(tmpdir(), "pi-rogue-deprecation-exhausted-"));
+    const fakeNpm = join(dir, "npm");
+    writeFileSync(fakeNpm, "#!/usr/bin/env node\nconsole.error('registry unavailable'); process.exit(1);\n");
+    chmodSync(fakeNpm, 0o755);
+    const result = spawnSync(process.execPath, [join(process.cwd(), "scripts", "deprecate-legacy-packages.mjs")], {
+      env: { ...process.env, NPM_CLI: fakeNpm, DEPRECATION_RETRY_DELAY_MS: "0" },
+      encoding: "utf8",
+    });
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain("version discovery failed after 3 attempts");
+  });
+
   it("rewrites bundled internal leaves to local file specs for clean npm installs", () => {
     const dir = mkdtempSync(join(tmpdir(), "pi-rogue-bundle-prep-"));
     const bundle = join(dir, "bundle");

@@ -8,7 +8,7 @@ Legacy alias package `@fiale-plus/pi-rogue-bundle` is deprecated and redirects u
 
 ## Checklist
 
-- [ ] Version is bumped and committed (for `@fiale-plus/pi-rogue`; leaves keep dev-marker versions only)
+- [ ] Canonical version is bumped and committed in `packages/bundle/package.json` and `package-lock.json` (leaves keep dev-marker versions only)
 - [ ] Changelog is provisioned for this release
 - [ ] Release notes are drafted
 - [ ] CI is green on the release commit
@@ -47,12 +47,14 @@ Prefer the changelog entry to be done before the release is cut, not after.
 
 ## Release process notes
 
-- Cut a GitHub release with tag `pi-rogue-<semver>` (this triggers only the canonical publish workflow).
+- The committed `packages/bundle/package.json` version is the sole version authority. The release tag must exactly equal `pi-rogue-<committed-version>`; the workflow validates this and never rewrites package metadata.
+- Cut a GitHub release with that exact tag (this triggers only the canonical publish workflow).
+- Every release must have either a matching `CHANGELOG.md` heading or GitHub release notes with `Summary`, `Changes`, and `Validation` sections.
 - Canonical publish workflow:
+  - Validates the committed version/tag and release-note evidence.
   - Runs checks + tests.
-  - Syncs package version from the tag (local only).
   - Publishes `@fiale-plus/pi-rogue` with bundled dependencies for a true single-artefact install.
-- After publishing, deprecate legacy artefacts (`@fiale-plus/pi-rogue-bundle`, `@fiale-plus/pi-rogue-advisor`, `@fiale-plus/pi-rogue-orchestration`) so installs of those names warn users to migrate.
+- After publishing, deprecate legacy artefacts (`@fiale-plus/pi-rogue-bundle`, `@fiale-plus/pi-rogue-advisor`, `@fiale-plus/pi-rogue-orchestration`, and the older `@fiale-plus/pi-orchestration` compatibility track) so installs of those names warn users to migrate. Already-correct messages are success; transient writes are retried, every published version is verified against the exact expected message, and exhausted failures fail the workflow.
 - Post-release verification includes:
   - `npm view` confirms new version is visible for `@fiale-plus/pi-rogue`.
   - `npm info <legacy-pkg> deprecated` shows the migration message.
@@ -61,9 +63,10 @@ Prefer the changelog entry to be done before the release is cut, not after.
 Example legacy deprecation commands (run in the release workflow):
 
 ```bash
-npm deprecate "@fiale-plus/pi-rogue-bundle@*" "Deprecated: replaced by @fiale-plus/pi-rogue. Install via `pi install npm:@fiale-plus/pi-rogue`."
-npm deprecate "@fiale-plus/pi-rogue-advisor@*" "Deprecated: advisor/orchestration are now bundled in @fiale-plus/pi-rogue. Install via `pi install npm:@fiale-plus/pi-rogue`."
-npm deprecate "@fiale-plus/pi-rogue-orchestration@*" "Deprecated: orchestration is now bundled in @fiale-plus/pi-rogue. Install via `pi install npm:@fiale-plus/pi-rogue`."
+npm deprecate "@fiale-plus/pi-rogue-bundle@*" 'Deprecated: replaced by @fiale-plus/pi-rogue. Install via "pi install npm:@fiale-plus/pi-rogue".'
+npm deprecate "@fiale-plus/pi-rogue-advisor@*" 'Deprecated: advisor/orchestration are bundled in @fiale-plus/pi-rogue. Install via "pi install npm:@fiale-plus/pi-rogue".'
+npm deprecate "@fiale-plus/pi-rogue-orchestration@*" 'Deprecated: advisor/orchestration are bundled in @fiale-plus/pi-rogue. Install via "pi install npm:@fiale-plus/pi-rogue".'
+npm deprecate "@fiale-plus/pi-orchestration@*" 'Deprecated: replaced by @fiale-plus/pi-rogue. Install via "pi install npm:@fiale-plus/pi-rogue".'
 ```
 
 See also: `.github/ISSUE_TEMPLATE/release.md`, AGENTS.md (maintenance references), and the individual package READMEs.
