@@ -354,11 +354,18 @@ describe("router extension", () => {
 
     await commands.get("pi-rogue-router").handler("profile spark-smart", ctx);
     expect(loadRouterConfig(ctx).activeProfile).toBe("spark-smart");
+    expect(ctx.notifications.at(-1)?.text).toContain("router profile set: spark-smart");
+    expect(ctx.notifications.at(-1)?.text).toContain("debug_diagnose=");
+    await commands.get("pi-rogue-router").handler("profile", ctx);
+    expect(ctx.notifications.at(-1)?.text).toContain("router profile: spark-smart");
 
     await commands.get("pi-rogue-router").handler("mode auto_model", ctx);
     expect(loadRouterConfig(ctx).mode).toBe("auto_model");
     await commands.get("pi-rogue-router").handler("print all", ctx);
     expect(loadRouterConfig(ctx).print).toBe("all");
+    await commands.get("pi-rogue-router").handler("models", ctx);
+    expect(ctx.notifications.at(-1)?.text).toContain("router models: spark-smart");
+    expect(ctx.notifications.at(-1)?.text).toContain("worker:");
     await commands.get("pi-rogue-router").handler("help", ctx);
     expect(ctx.notifications.at(-1)?.text).toContain("router command tree:");
     await commands.get("pi-rogue-router").handler("off", ctx);
@@ -369,6 +376,15 @@ describe("router extension", () => {
 
     await shortcuts.get("ctrl+alt+p").handler(ctx);
     expect(loadRouterConfig(ctx).activeProfile).toBe("local-smart");
+    expect(ctx.notifications.at(-1)?.text).toContain("router profile cycled: local-smart");
+  });
+
+  it("documents user-root live paths separately from repo-local offline outputs", () => {
+    const readme = readFileSync(join(process.cwd(), "packages", "router", "README.md"), "utf8");
+    expect(readme).toContain("~/.pi/agent/pi-rogue/router/config.json");
+    expect(readme).toContain("~/.pi/agent/pi-rogue/router/sessions/<session-key>/state.json");
+    expect(readme).toContain("repo-local `.pi/router/*` experiment outputs");
+    expect(readme).not.toContain("Live config is repo-global at `.pi/router/config.json`");
   });
 
   it("formats observe-only mismatch summaries without changing models", () => {

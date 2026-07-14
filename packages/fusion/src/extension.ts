@@ -355,9 +355,11 @@ function configureFusion(args: string[], ctx: any): string {
 }
 
 function registerFusionProviderForContext(pi: ExtensionAPI, ctx: any, getCtx: () => any = () => ctx): { recipes: FusionRecipe[]; errors: string[]; path?: string } {
+  const p = pi as any;
   const loaded = loadFusionRecipes(String(ctx.cwd ?? process.cwd()));
   if (loaded.recipes.length === 0) {
     try { pi.unregisterProvider("fusion"); } catch {}
+    p.__piRogueFusionProviderActive = false;
     return loaded;
   }
 
@@ -393,14 +395,15 @@ function registerFusionProviderForContext(pi: ExtensionAPI, ctx: any, getCtx: ()
       maxTokens: recipe.max_completion_tokens ?? 4096,
     })),
   });
+  p.__piRogueFusionProviderActive = true;
   return loaded;
 }
 
-function statusText(ctx: any): string {
+function statusText(ctx: any, active: boolean): string {
   const loaded = loadFusionRecipes(cwdOf(ctx));
   const recipeLines = loaded.recipes.map((recipe) => `- fusion/${recipe.id}: model=${recipe.model} panel=${recipe.analysis_models.join(",")}`);
   return [
-    "fusion: active (recipes loaded; scoped aliases available)",
+    active ? "fusion: active (provider registered; scoped aliases available)" : "fusion: inactive (provider not registered in this session)",
     `recipes: ${loaded.path ?? "not found"}`,
     `configure path: ${recipePathFor(ctx)}`,
     `trace dir: ${traceDir(ctx)}`,
@@ -436,7 +439,7 @@ export function registerFusion(pi: ExtensionAPI): void {
         const loaded = registerFusionProviderForContext(pi, ctx);
         ctx.ui.notify([
           loaded.errors.length ? "fusion recipes failed" : `fusion provider loaded ${loaded.recipes.length} recipe(s)`,
-          statusText(ctx),
+          statusText(ctx, Boolean(p.__piRogueFusionProviderActive)),
         ].join("\n"), loaded.errors.length ? "error" : "info");
         return;
       }
@@ -445,18 +448,24 @@ export function registerFusion(pi: ExtensionAPI): void {
         return;
       }
       if (cmd === "status" || cmd === "show") {
-        ctx.ui.notify(statusText(ctx), "info");
+        ctx.ui.notify(statusText(ctx, Boolean(p.__piRogueFusionProviderActive)), "info");
         return;
       }
       if (cmd === "off") {
         try { pi.unregisterProvider("fusion"); } catch {}
+        p.__piRogueFusionProviderActive = false;
         ctx.ui.notify("fusion provider disabled", "info");
         return;
       }
       if (cmd === "on") {
         const loaded = registerFusionProviderForContext(pi, ctx, getRuntimeContext);
+        const active = Boolean(p.__piRogueFusionProviderActive);
         ctx.ui.notify(
-          loaded.errors.length ? `fusion load failed:\n${loaded.errors.join("\n")}` : `fusion provider re-enabled (loaded ${loaded.recipes.length} recipe(s))`,
+          loaded.errors.length
+            ? `fusion load failed:\n${loaded.errors.join("\n")}`
+            : active
+              ? `fusion provider re-enabled (loaded ${loaded.recipes.length} recipe(s))`
+              : "fusion provider remains inactive (no valid recipes found)",
           loaded.errors.length ? "error" : "info",
         );
         return;
