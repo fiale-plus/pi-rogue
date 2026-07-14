@@ -118,11 +118,11 @@ else process.exit(2);
     expect(result.stdout).toContain("already have the exact deprecation message");
   });
 
-  it("retries transient deprecation reads and writes, then verifies exact messages", () => {
+  it("uses fresh verification after a successful write followed by stale reads and E422", () => {
     const dir = mkdtempSync(join(tmpdir(), "pi-rogue-deprecation-retry-"));
     const fakeNpm = join(dir, "npm");
     const statePath = join(dir, "state.json");
-    writeFileSync(statePath, JSON.stringify({ versionReads: 0, writes: 0 }));
+    writeFileSync(statePath, JSON.stringify({ versionReads: 0, deprecatedReads: 0, writes: 0 }));
     writeFileSync(fakeNpm, `#!/usr/bin/env node
 const fs = require("node:fs");
 const args = process.argv.slice(2);
@@ -141,10 +141,11 @@ if (args[0] === "view" && args[2] === "versions") {
   if (state.versionReads === 1) { console.error("transient read"); process.exit(1); }
   console.log(JSON.stringify(["1.0.0"]));
 } else if (args[0] === "view" && args[2] === "deprecated") {
+  state.deprecatedReads += 1; fs.writeFileSync(process.env.FAKE_NPM_STATE, JSON.stringify(state));
   console.log(JSON.stringify(state.writes >= 2 ? messages[name] : "stale"));
 } else if (args[0] === "deprecate") {
   state.writes += 1; fs.writeFileSync(process.env.FAKE_NPM_STATE, JSON.stringify(state));
-  if (state.writes === 1) { console.error("transient write"); process.exit(1); }
+  if (state.writes === 2) { console.error("E422 after prior successful write"); process.exit(1); }
 } else process.exit(2);
 `);
     chmodSync(fakeNpm, 0o755);
@@ -153,8 +154,8 @@ if (args[0] === "view" && args[2] === "versions") {
       encoding: "utf8",
     });
     expect(result.status, result.stderr).toBe(0);
-    expect(JSON.parse(readFileSync(statePath, "utf8"))).toMatchObject({ versionReads: 5, writes: 2 });
-    expect(result.stdout).toContain("exact deprecation verified");
+    expect(JSON.parse(readFileSync(statePath, "utf8"))).toMatchObject({ versionReads: 5, deprecatedReads: 6, writes: 2 });
+    expect(result.stdout).toContain("exact deprecation verified for 1 version(s) after a non-fatal write response");
   });
 
   it("fails after exhausted registry retries", () => {

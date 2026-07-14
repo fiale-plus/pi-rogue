@@ -1,5 +1,7 @@
 #!/usr/bin/env node
 import { spawnSync } from "node:child_process";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 const LEGACY = [
   ["@fiale-plus/pi-rogue-bundle", "Deprecated: replaced by @fiale-plus/pi-rogue. Install via \"pi install npm:@fiale-plus/pi-rogue\"."],
@@ -10,6 +12,7 @@ const LEGACY = [
 const npm = process.env.NPM_CLI || "npm";
 const verifyOnly = process.argv.includes("--verify-only");
 const retryDelayMs = Number(process.env.DEPRECATION_RETRY_DELAY_MS || 2_000);
+let viewCount = 0;
 
 function npmOutput(args) {
   const result = spawnSync(npm, args, { encoding: "utf8", env: process.env });
@@ -18,7 +21,8 @@ function npmOutput(args) {
 }
 
 function jsonView(spec, field) {
-  const output = npmOutput(["view", spec, field, "--json", "--registry=https://registry.npmjs.org/", "--prefer-online"]);
+  const cache = join(process.env.RUNNER_TEMP || tmpdir(), `pi-rogue-deprecation-cache-${process.pid}-${viewCount++}`);
+  const output = npmOutput(["view", spec, field, "--json", "--registry=https://registry.npmjs.org/", "--prefer-online", `--cache=${cache}`]);
   return output ? JSON.parse(output) : undefined;
 }
 
@@ -62,17 +66,25 @@ for (const [name, message] of LEGACY) {
 
   let lastError;
   for (let attempt = 1; attempt <= 3; attempt += 1) {
+    let writeError;
     try {
       npmOutput(["deprecate", `${name}@*`, message, "--registry=https://registry.npmjs.org/"]);
+    } catch (error) {
+      writeError = error;
+    }
+
+    try {
       wrong = mismatches(name, versions, message);
       if (wrong.length === 0) {
-        console.log(`${name}: exact deprecation verified for ${versions.length} version(s)`);
+        console.log(`${name}: exact deprecation verified for ${versions.length} version(s)${writeError ? " after a non-fatal write response" : ""}`);
         lastError = undefined;
         break;
       }
-      lastError = new Error(`verification mismatch: ${JSON.stringify(wrong)}`);
-    } catch (error) {
-      lastError = error;
+      lastError = writeError || new Error(`verification mismatch: ${JSON.stringify(wrong)}`);
+    } catch (verificationError) {
+      lastError = writeError
+        ? new Error(`${writeError.message}; verification also failed: ${verificationError.message}`)
+        : verificationError;
     }
     if (attempt < 3) {
       console.error(`${name}: attempt ${attempt} failed; retrying: ${lastError.message}`);
