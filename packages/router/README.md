@@ -4,6 +4,8 @@ Local-only offline trajectory router experiments for Pi-Rogue.
 
 This package intentionally does **not** change live advisor or orchestration behavior. It reads existing Pi session JSONL files, derives compact checkpoints, and computes cheap progress/loop signals without copying raw transcript content into derived artifacts.
 
+The CLI examples below deliberately write repo-local `.pi/router/*` experiment outputs. Live extension state is separate and user-scoped under `~/.pi/agent/pi-rogue/router/`.
+
 ```bash
 npm run router:rebuild -- --session ~/.pi/agent/sessions/.../session.jsonl --output .pi/router/checkpoints.jsonl
 npm run router:rebuild -- --session-dir ~/.pi/agent/sessions/... --output .pi/router/checkpoints.jsonl
@@ -28,7 +30,7 @@ npm run router:shadow -- --checkpoint-file .pi/router/checkpoints.jsonl --ledger
 # /pi-rogue-router profile spark-smart
 # /pi-rogue-router print mismatch_only|all|off
 # ctrl+alt+p cycles router profiles (Ctrl-P is reserved by Pi model cycling).
-# Auto-model flip policy lives in `.pi/router/config.json` under `autoModel` and currently defaults to:
+# Auto-model flip policy lives in `~/.pi/agent/pi-rogue/router/config.json` under `autoModel` and currently defaults to:
 #   minConfidence: 0.7
 #   requiredConsecutiveMismatches: 2
 #   minCooldownSeconds: 30
@@ -40,7 +42,7 @@ npm run router:shadow -- --checkpoint-file .pi/router/checkpoints.jsonl --ledger
 
 Router v1 defaults to observe-only. It adds outcome skeletons, stronger diff/error fingerprints, teacher-label request export, binary gate dataset export, and subagent-aware telemetry schemas. It does not spawn agents/subagents or promote policies automatically. The explicit `auto_model` mode may only switch the active model for future turns.
 
-Live config is repo-global at `.pi/router/config.json`, while mutable live state and route ledgers are isolated per Pi session under `.pi/router/sessions/<session-key>/state.json` and `events.jsonl`. The default `mode` is `observe`; `auto_model` must be explicitly selected and does not alter agents, subagents, tools, or execution paths.
+Live config is user-global at `~/.pi/agent/pi-rogue/router/config.json`, while mutable live state and route ledgers are isolated per Pi session under `~/.pi/agent/pi-rogue/router/sessions/<session-key>/state.json` and `events.jsonl`. The default `mode` is `observe`; `auto_model` must be explicitly selected and does not alter agents, subagents, tools, or execution paths.
 
 - Diff telemetry stores counts and hashes from `git diff`, not raw patches. Offline rebuilds remain deterministic by default; use `--workspace-diff` only with one current live session/worktree snapshot.
 - `router:outcome-enrich` upgrades conservative outcome skeletons with checkpoint/event-derived verifier, rework, interruption, override, and accepted-diff signals.

@@ -193,18 +193,35 @@ describe("fusion extension", () => {
     }
   });
 
-  it("/pi-rogue-fusion off unregisters the fusion provider", async () => {
+  it("tracks active → off → inactive → on → active status in one session", async () => {
     const cwd = mkdtempSync(join(tmpdir(), "fusion-off-"));
+    const target = join(cwd, "recipes.json");
+    const previous = process.env.PI_ROGUE_FUSION_RECIPES;
     const notifications: Array<{ message: string; type?: string }> = [];
     try {
+      process.env.PI_ROGUE_FUSION_RECIPES = target;
+      writeFileSync(target, JSON.stringify({ recipes: [{ schema: "pi-rogue.fusion.recipe.v1", kind: "fusion", id: "status-test", model: "openai-codex/gpt-5.5", analysis_models: ["openai-codex/gpt-5.5"] }] }));
       const { pi, commands, providers } = createPiMock();
       registerFusion(pi);
-      // Provider registered at startup (even without recipes, it may or may not exist)
       const fusion = commands.get("pi-rogue-fusion");
+      expect(providers.has("fusion")).toBe(true);
+      await fusion.handler("status", createCtx(cwd, notifications));
+      expect(notifications.at(-1)?.message).toContain("fusion: active (provider registered");
+
       await fusion.handler("off", createCtx(cwd, notifications));
       expect(notifications.at(-1)?.message).toBe("fusion provider disabled");
       expect(providers.has("fusion")).toBe(false);
+      await fusion.handler("status", createCtx(cwd, notifications));
+      expect(notifications.at(-1)?.message).toContain("fusion: inactive (provider not registered in this session)");
+
+      await fusion.handler("on", createCtx(cwd, notifications));
+      expect(notifications.at(-1)?.message).toContain("fusion provider re-enabled");
+      expect(providers.has("fusion")).toBe(true);
+      await fusion.handler("status", createCtx(cwd, notifications));
+      expect(notifications.at(-1)?.message).toContain("fusion: active (provider registered");
     } finally {
+      if (previous === undefined) delete process.env.PI_ROGUE_FUSION_RECIPES;
+      else process.env.PI_ROGUE_FUSION_RECIPES = previous;
       rmSync(cwd, { recursive: true, force: true });
     }
   });
@@ -221,12 +238,21 @@ describe("fusion extension", () => {
       // Now turn it on again
       notifications.length = 0;
       await fusion.handler("on", createCtx(cwd, notifications));
-      expect(notifications.at(-1)?.message).toContain("fusion provider re-enabled");
-      // Without recipes, provider is unregistered
+      expect(notifications.at(-1)?.message).toContain("fusion provider remains inactive (no valid recipes found)");
       expect(providers.has("fusion")).toBe(false);
+      await fusion.handler("status", createCtx(cwd, notifications));
+      expect(notifications.at(-1)?.message).toContain("fusion: inactive");
     } finally {
       rmSync(cwd, { recursive: true, force: true });
     }
+  });
+
+  it("documents effective user-root recipe and trace paths", () => {
+    const readme = readFileSync(join(process.cwd(), "packages", "fusion", "README.md"), "utf8");
+    expect(readme).toContain("~/.pi/agent/pi-rogue/fusion/recipes.json");
+    expect(readme).toContain("$PI_ROGUE_FUSION_TRACE_DIR");
+    expect(readme).toContain("~/.pi/agent/pi-rogue/fusion/runs/*.json");
+    expect(readme).not.toContain("2. `.pi-rogue/fusion/recipes.json`");
   });
 
   it("wraps runner failures in the streamed error message", async () => {

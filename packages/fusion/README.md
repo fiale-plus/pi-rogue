@@ -35,12 +35,12 @@ After changing recipes, run `/pi-rogue-fusion reload` or restart Pi so `fusion/<
 
 ## Recipe file
 
-Pi-Rogue searches the first existing file from:
+Pi-Rogue uses this precedence:
 
-1. `$PI_ROGUE_FUSION_RECIPES`
-2. `.pi-rogue/fusion/recipes.json`
-3. `.pi/fusion/recipes.json`
-4. `~/.pi/agent/pi-rogue/fusion/recipes.json`
+1. `$PI_ROGUE_FUSION_RECIPES` when explicitly set
+2. `~/.pi/agent/pi-rogue/fusion/recipes.json`
+
+`/pi-rogue-fusion configure` writes to the same effective path. Repo-local `.pi/fusion/*` paths below are explicit benchmark outputs, not live runtime state.
 
 Shape:
 
@@ -75,7 +75,7 @@ fusion/local-self2
 - Panel calls are prompted as analysis-only/no-side-effect attempts: no tool calls, file edits, writes, command execution, or state mutation.
 - Judge JSON failure is non-fatal; synthesis falls back to panel-only context.
 - Recursive `fusion/*` member refs are rejected by recipe validation.
-- Full run traces are written to `.pi/fusion/runs/*.json` by default.
+- Full run traces are written to `$PI_ROGUE_FUSION_TRACE_DIR` when set, otherwise `~/.pi/agent/pi-rogue/fusion/runs/*.json`.
 - If the context broker is enabled, only a compact `fusion_result` artifact is published; raw panel outputs stay in the trace file.
 - Streaming is completion-first for now: the provider emits once Fusion completes rather than interleaving panel/judge streams.
 
