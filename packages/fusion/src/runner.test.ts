@@ -1,6 +1,9 @@
-import { describe, expect, it } from "vitest";
+import { spawnSync } from "node:child_process";
+import { join } from "node:path";
+import { pathToFileURL } from "node:url";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Context } from "@earendil-works/pi-ai";
-import { parseJudgeAnalysis, runFusionCompletion } from "./runner.js";
+import { disposableMergedSignal, parseJudgeAnalysis, runFusionCompletion } from "./runner.js";
 import type { FusionRecipe } from "./types.js";
 
 const context: Context = {
@@ -17,6 +20,76 @@ const recipe: FusionRecipe = {
 };
 
 describe("fusion runner", () => {
+  afterEach(() => vi.useRealTimers());
+
+  it("disposes timeout resources after success, throw, and retry attempts", async () => {
+    vi.useFakeTimers();
+    const signals: AbortSignal[] = [];
+    let panelAttempts = 0;
+    const timedRecipe: FusionRecipe = { ...recipe, analysis_models: ["panel/a"], min_panel_success: 1, timeout_ms: 10_000 };
+    const result = await runFusionCompletion(timedRecipe, context, {
+      completer: {
+        async complete(request) {
+          if (request.signal) signals.push(request.signal);
+          if (request.model === "panel/a" && panelAttempts++ === 0) throw new Error("context_length_exceeded");
+          if (request.model === "panel/a") return "Reviewed the implementation and found a concrete cleanup risk.";
+          if (request.context.systemPrompt?.includes("Return ONLY valid JSON")) return "not json";
+          return "Final answer";
+        },
+      },
+    });
+
+    expect(result.status).toBe("ok");
+    expect(panelAttempts).toBe(2);
+    expect(signals[0]).not.toBe(signals[1]);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("disposes the timer and parent listener on parent abort and timeout", () => {
+    vi.useFakeTimers();
+    const parent = new AbortController();
+    const remove = vi.spyOn(parent.signal, "removeEventListener");
+    const parentMerged = disposableMergedSignal(parent.signal, 5_000);
+    expect(vi.getTimerCount()).toBe(1);
+    parent.abort(new Error("parent stopped"));
+    expect(parentMerged.signal?.aborted).toBe(true);
+    expect(parentMerged.signal?.reason).toBe(parent.signal.reason);
+    expect(remove).toHaveBeenCalledWith("abort", expect.any(Function));
+    expect(vi.getTimerCount()).toBe(0);
+    parentMerged.dispose();
+
+    const timeoutParent = new AbortController();
+    const timeoutRemove = vi.spyOn(timeoutParent.signal, "removeEventListener");
+    const timed = disposableMergedSignal(timeoutParent.signal, 250);
+    vi.advanceTimersByTime(250);
+    expect(timed.signal?.aborted).toBe(true);
+    expect(String(timed.signal?.reason)).toContain("timeout after 250ms");
+    expect(timeoutRemove).toHaveBeenCalledWith("abort", expect.any(Function));
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("lets an instant completion process exit before the configured timeout", () => {
+    const runnerUrl = pathToFileURL(join(process.cwd(), "packages", "fusion", "src", "runner.ts")).href;
+    const program = `
+      import { runFusionCompletion } from ${JSON.stringify(runnerUrl)};
+      const recipe = { schema: "pi-rogue.fusion.recipe.v1", kind: "fusion", id: "exit-smoke", model: "judge/model", analysis_models: ["panel/a"], min_panel_success: 1, timeout_ms: 5000 };
+      const context = { messages: [{ role: "user", timestamp: Date.now(), content: "test" }] };
+      const completer = { async complete(request) {
+        if (request.model === "panel/a") return "Reviewed the implementation and found a concrete cleanup risk.";
+        if (request.context.systemPrompt?.includes("Return ONLY valid JSON")) return "not json";
+        return "Final answer";
+      } };
+      const result = await runFusionCompletion(recipe, context, { completer });
+      if (result.status !== "ok") process.exit(2);
+    `;
+    const child = spawnSync(process.execPath, ["--import", "tsx", "--input-type=module", "--eval", program], {
+      cwd: process.cwd(),
+      encoding: "utf8",
+      timeout: 3_000,
+    });
+    expect(child.status, `${child.error?.message ?? ""}\n${child.stderr}`).toBe(0);
+  });
+
   it("runs panel, judge, and synthesis", async () => {
     const calls: string[] = [];
     const panelSystemPrompts: string[] = [];
