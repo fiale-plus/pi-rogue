@@ -25,6 +25,17 @@ describe("review preflight", () => {
     expect(refs).toEqual(["progress.md"]);
   });
 
+  it("ignores plan and progress paths inside node_modules", () => {
+    const text = "Package docs: node_modules/pkg/docs/progress.md and /tmp/node_modules/pkg/plan.md";
+    expect(extractReviewArtifactHints(text)).toEqual([]);
+    expect(findMissingReviewArtifacts(process.cwd(), text)).toEqual([]);
+  });
+
+  it("ignores passive nested review-doc paths but keeps required ones", () => {
+    expect(extractReviewArtifactHints("Package docs: earendil-works/pi-coding-agent/docs/progress.md; source: packages/core/progress.md")).toEqual([]);
+    expect(extractReviewArtifactHints("Read packages/core/progress.md before review")).toEqual(["packages/core/progress.md"]);
+  });
+
   it("preserves and resolves home-relative review artifact hints", () => {
     cwd = mkdtempSync(join(tmpdir(), "advisor-review-preflight-"));
     homeArtifact = join(homedir(), `.pi-rogue-review-preflight-${process.pid}-${Date.now()}.json`);

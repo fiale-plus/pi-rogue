@@ -1,6 +1,7 @@
 import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { resolve } from "node:path";
+import { barePathLooksRequired, isNodeModulesPath } from "./artifact-reference-policy.js";
 
 const EXTENSIONS = "md|json|txt|yaml|yml|toml|ts|js|tsx|jsx";
 const HOME_REVIEW_ARTIFACT_RE = new RegExp(String.raw`(?<![A-Za-z0-9._/-])~/(?:[^\s\`'"<>),;:]+/)*[^\s\`'"<>),;:]+\.(?:${EXTENSIONS})`, "g");
@@ -38,7 +39,12 @@ export function extractReviewArtifactHints(text: string): string[] {
     ...collectMatches(HOME_REVIEW_ARTIFACT_RE, raw),
     ...collectMatches(ABSOLUTE_REVIEW_ARTIFACT_RE, raw),
   ];
-  return [...new Set(matches.map(normalizeArtifactRef).filter(Boolean))];
+  return [...new Set(matches.map(normalizeArtifactRef).filter((ref) => {
+    if (!ref || isNodeModulesPath(ref)) return false;
+    if (ref.startsWith("/") || ref.startsWith("~/") || ref.startsWith("./") || ref.startsWith("../")) return true;
+    if (!ref.includes("/")) return true;
+    return barePathLooksRequired(raw, ref);
+  }))];
 }
 
 export function findMissingReviewArtifacts(cwd: string, ...texts: string[]): string[] {

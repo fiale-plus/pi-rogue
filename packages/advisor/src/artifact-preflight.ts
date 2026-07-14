@@ -1,12 +1,13 @@
 import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { resolve } from "node:path";
+import { barePathLooksRequired, isNodeModulesPath } from "./artifact-reference-policy.js";
 
 const EXTENSIONS = "md|json|txt|yaml|yml|toml|ts|js|tsx|jsx";
 const HOME_ARTIFACT_RE = new RegExp(String.raw`(?<![A-Za-z0-9._/-])~/(?:[A-Za-z0-9._-]+/)*[A-Za-z0-9._-]+\.(?:${EXTENSIONS})(?![A-Za-z0-9._/-])`, "g");
 const ABSOLUTE_ARTIFACT_RE = new RegExp(String.raw`(?<![A-Za-z0-9._/~/-])/(?:[A-Za-z0-9._-]+/)*[A-Za-z0-9._-]+\.(?:${EXTENSIONS})(?![A-Za-z0-9._/-])`, "g");
 const QUOTED_RELATIVE_ARTIFACT_RE = new RegExp(String.raw`[\`'"]((?:\.{1,2}/)?[A-Za-z0-9._-]+(?:/[A-Za-z0-9._-]+)*\.(?:${EXTENSIONS}))[\`'"]`, "g");
-const RELATIVE_PATH_ARTIFACT_RE = new RegExp(String.raw`(?<![A-Za-z0-9._/-])((?:\.{1,2}/)?[A-Za-z0-9._-]+(?:/[A-Za-z0-9._-]+)+\.(?:${EXTENSIONS}))(?![A-Za-z0-9._/-])`, "g");
+const RELATIVE_PATH_ARTIFACT_RE = new RegExp(String.raw`(?<![A-Za-z0-9@._/-])((?:\.{1,2}/)?[A-Za-z0-9._-]+(?:/[A-Za-z0-9._-]+)+\.(?:${EXTENSIONS}))(?![A-Za-z0-9._/-])`, "g");
 const REVIEW_DOC_RE = /^(?:\.\/|\.\.\/)?(?:plan|progress)\.md$/i;
 
 function normalizeArtifactRef(ref: string): string {
@@ -23,24 +24,12 @@ function collectMatches(regex: RegExp, text: string, group = 0): string[] {
   return matches;
 }
 
-function escapeRegExp(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
-
-function bareRefLooksRequired(raw: string, ref: string): boolean {
-  const quoted = String.raw`[\`'\"]?${escapeRegExp(ref)}[\`'\"]?`;
-  const imperativeBeforeRef = new RegExp(String.raw`\b(?:read|open|review|check|inspect|see|use|load)\s+(?:the\s+)?${quoted}\b`, "i");
-  const artifactNounBeforeRef = new RegExp(String.raw`\b(?:artifact|file|path|bundle)\s*(?::\s+|at\s+|is\s+|=\s+|\s+)${quoted}\b`, "i");
-  return imperativeBeforeRef.test(raw) || artifactNounBeforeRef.test(raw);
-}
-
 function isPreflightArtifactRef(ref: string, raw: string): boolean {
-  if (!ref || /^[ab]\//.test(ref)) return false;
+  if (!ref || /^[ab]\//.test(ref) || isNodeModulesPath(ref)) return false;
   if (ref.startsWith("/") || ref.startsWith("~/") || ref.startsWith("./") || ref.startsWith("../")) return true;
-  if (ref.includes("/")) return true;
-  // Bare filenames are often prose-like in advisor summaries. Keep the
-  // longstanding closeout docs and explicitly requested bare files only.
-  return REVIEW_DOC_RE.test(ref) || bareRefLooksRequired(raw, ref);
+  // Ambiguous bare paths can be package-internal or incidental prose. Require
+  // an explicit read instruction while preserving longstanding closeout docs.
+  return REVIEW_DOC_RE.test(ref) || barePathLooksRequired(raw, ref);
 }
 
 function artifactAbsolutePath(cwd: string, ref: string): string {
