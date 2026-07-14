@@ -1,6 +1,6 @@
 {
   "name": "@fiale-plus/pi-rogue",
-  "version": "0.3.28",
+  "version": "0.3.29",
   "description": "Public Pi-Rogue package for bundled advisor, orchestration, and context broker logic.",
   "type": "module",
   "license": "MIT",
