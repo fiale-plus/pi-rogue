@@ -4,6 +4,7 @@ import { resetAdvisorSessionContext, setAdvisorCheckinDemand } from "./advisor-c
 import { endGoalCheck, hasGoalCheckPending } from "./goal-resolution.js";
 import { activeGoal, clearGoal, completeActiveGoal, handleGoalCommand, registerGoal, setGoal, startGoalProcessing } from "./goal.js";
 import { featureFile, readText, sessionFile, writeText } from "./internal.js";
+import { readResearchState, writeResearchState } from "./autoresearch-state.js";
 
 vi.mock("./advisor-checkins.js", () => ({
   resetAdvisorSessionContext: vi.fn(),
@@ -12,6 +13,20 @@ vi.mock("./advisor-checkins.js", () => ({
 
 const resetAdvisorSessionContextMock = vi.mocked(resetAdvisorSessionContext);
 const setAdvisorCheckinDemandMock = vi.mocked(setAdvisorCheckinDemand);
+
+function seedResearch(ctx: any, goal: string, cycles = 0, evidenceCycles = cycles): void {
+  writeResearchState(ctx, {
+    kind: "autoresearch",
+    instruction: "improve benchmark",
+    goal,
+    loopInstruction: "run one measured cycle",
+    interval: "5m",
+    cycles,
+    evidenceCycles,
+    recordedCycleIds: Array.from({ length: cycles }, (_, index) => `seed-${index}`),
+    updatedAt: "",
+  });
+}
 
 function fakeCtx(id = randomUUID(), idle = true) {
   return {
@@ -273,6 +288,88 @@ describe("goal processing", () => {
     expect(tool.name).toBe("goal_complete");
     expect(response.details.completed).toBe(true);
     expect(activeGoal(ctx)).toBe("");
+  });
+
+  it("holds goal_complete open until two independently delivered research cycles exist", async () => {
+    let tool: any;
+    const sent: string[] = [];
+    const handlers: Record<string, Array<(event: any, ctx: any) => Promise<void> | void>> = {};
+    const pi = {
+      on: (name: string, handler: (event: any, ctx: any) => Promise<void> | void) => {
+        handlers[name] = [...(handlers[name] ?? []), handler];
+      },
+      registerCommand: () => undefined,
+      registerTool: (definition: any) => { tool = definition; },
+      sendUserMessage: (text: string) => sent.push(text),
+    } as any;
+    const ctx = fakeCtx();
+    const goal = `research tool gate ${randomUUID()}`;
+    registerGoal(pi);
+    setGoal(ctx, goal);
+    seedResearch(ctx, goal);
+    startGoalProcessing(pi, ctx, goal);
+    const undelivered = await tool.execute("undelivered", { summary: "Candidate implemented.", verification: "npm test passed 42 tests." }, undefined, undefined, ctx);
+    expect(undelivered.details.completed).toBe(false);
+    expect(readResearchState(ctx)).toMatchObject({ cycles: 0, evidenceCycles: 0 });
+    await handlers.message_start?.[0]?.({ message: { role: "user", content: sent.at(-1) } }, ctx);
+
+    const first = await tool.execute("first", { summary: "Candidate implemented.", verification: "npm test passed 42 tests." }, undefined, undefined, ctx);
+    expect(first.details.completed).toBe(false);
+    expect(first.content[0].text).toMatch(/at least 2 distinct cycles/);
+    expect(activeGoal(ctx)).toBe(goal);
+    expect(readResearchState(ctx)).toMatchObject({ cycles: 1, evidenceCycles: 1 });
+    const repeatedSameCycle = await tool.execute("first-repeat", { summary: "Candidate implemented.", verification: "npm test passed 42 tests." }, undefined, undefined, ctx);
+    expect(repeatedSameCycle.details.completed).toBe(false);
+    expect(readResearchState(ctx)).toMatchObject({ cycles: 1, evidenceCycles: 1 });
+
+    endGoalCheck(ctx);
+    startGoalProcessing(pi, ctx, goal);
+    await handlers.message_start?.[0]?.({ message: { role: "user", content: sent.at(-1) } }, ctx);
+    const noEvidence = await tool.execute("second", { summary: "Added evaluation result handling.", verification: "Not verified: tests were not run." }, undefined, undefined, ctx);
+    expect(noEvidence.details.completed).toBe(false);
+    expect(noEvidence.content[0].text).toMatch(/evidence-backed results from at least 2 distinct cycles/);
+    expect(readResearchState(ctx)).toMatchObject({ cycles: 2, evidenceCycles: 1 });
+
+    endGoalCheck(ctx);
+    startGoalProcessing(pi, ctx, goal);
+    await handlers.message_start?.[0]?.({ message: { role: "user", content: sent.at(-1) } }, ctx);
+    const second = await tool.execute("third", { summary: "Candidate implemented.", verification: "npm test passed 42 tests." }, undefined, undefined, ctx);
+    expect(second.details.completed).toBe(true);
+    expect(activeGoal(ctx)).toBe("");
+  });
+
+  it("holds first-cycle GOAL_DONE open and accepts evidence on the second delivered cycle", async () => {
+    const handlers: Record<string, Array<(event: any, ctx: any) => Promise<void> | void>> = {};
+    const sent: string[] = [];
+    const notify = vi.fn();
+    const pi = {
+      on: (name: string, handler: (event: any, ctx: any) => Promise<void> | void) => {
+        handlers[name] = [...(handlers[name] ?? []), handler];
+      },
+      registerCommand: () => undefined,
+      registerTool: () => undefined,
+      sendUserMessage: (text: string) => sent.push(text),
+    } as any;
+    const ctx = fakeCtx();
+    ctx.ui.notify = notify;
+    const goal = `research sentinel gate ${randomUUID()}`;
+    registerGoal(pi);
+    setGoal(ctx, goal);
+    seedResearch(ctx, goal);
+
+    startGoalProcessing(pi, ctx, goal);
+    await handlers.agent_end?.[0]?.({ messages: [{ role: "user", content: sent[0] }, { role: "assistant", content: "GOAL_DONE: npm run check passed and 42 tests passed" }] }, ctx);
+    expect(activeGoal(ctx)).toBe(goal);
+    expect(readResearchState(ctx).cycles).toBe(1);
+    expect(notify).toHaveBeenCalledWith(expect.stringMatching(/Autoresearch continuing:.*at least 2 distinct cycles/), "info");
+
+    startGoalProcessing(pi, ctx, goal);
+    await handlers.agent_end?.[0]?.({ messages: [{ role: "user", content: sent[1] }, { role: "assistant", content: [{ type: "text", text: "GOAL_DONE: npm run check passed and 42 tests passed" }, { type: "text", text: "benchmark unavailable" }] }] }, ctx);
+    expect(activeGoal(ctx)).toBe("");
+    const completion = readText(featureFile("orchestration", "goal-completions.jsonl"))
+      .split("\n").filter(Boolean).map((line) => JSON.parse(line)).find((entry) => entry.goal === goal);
+    expect(completion.verification).toContain("npm run check passed and 42 tests passed\nbenchmark unavailable");
+    expect(completion.verification).not.toContain("see assistant message");
   });
 
   it("clears the active goal only when its delivered check returns GOAL_DONE", async () => {

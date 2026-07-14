@@ -14,6 +14,8 @@ export type ResearchState = {
   loopInstruction?: string;
   interval?: string;
   cycles?: number;
+  evidenceCycles?: number;
+  recordedCycleIds?: string[];
   lastResult?: "done" | "continue" | "unknown";
   updatedAt: string;
 };
@@ -26,6 +28,8 @@ export function defaultResearchState(kind: ResearchKind = "autoresearch"): Resea
     loopInstruction: "",
     interval: DEFAULT_RESEARCH_INTERVAL,
     cycles: 0,
+    evidenceCycles: 0,
+    recordedCycleIds: [],
     updatedAt: "",
   };
 }

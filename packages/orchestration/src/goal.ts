@@ -1,8 +1,9 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
-import { appendText, contentText, featureFile, readText, sessionFile, truncate, writeText } from "./internal.js";
+import { appendText, featureFile, readText, sessionFile, truncate, writeText } from "./internal.js";
 import { clearResearchStateForGoal, readResearchState, writeResearchState, type ResearchState } from "./autoresearch-state.js";
-import { beginGoalCheck, buildGoalCheckPrompt, consumeDeliveredGoalCheck, endGoalCheck, goalCheckResult, hasGoalCheckPending, invalidateGoalChecks } from "./goal-resolution.js";
+import { hasResearchCompletionEvidence, researchCompletionBlock } from "./autoresearch-completion.js";
+import { beginGoalCheck, buildGoalCheckPrompt, consumeDeliveredGoalCheck, currentDeliveredGoalCheck, endGoalCheck, goalCheckResult, hasGoalCheckPending, invalidateGoalChecks, markGoalCheckDelivered } from "./goal-resolution.js";
 import { clearLoop, triggerLoopTick } from "./loop.js";
 import { clearNoProgressRecovery } from "./novelty-guard.js";
 import { resetAdvisorSessionContext, setAdvisorCheckinDemand } from "./advisor-checkins.js";
@@ -108,10 +109,17 @@ export function completeActiveGoal(ctx: any, input: GoalCompletionInput): GoalCo
   if (!summary) return { completed: false, goal, reason: "Goal completion requires a summary." };
   if (!verification) return { completed: false, goal, reason: "Goal completion requires verification evidence or an explicit not-verified statement." };
 
-  appendText(COMPLETION_HISTORY_FILE, completionLine(goal, { ...input, summary, verification }));
+  let research = researchForGoal(ctx, goal);
+  if (research && input.source !== "sentinel") {
+    const request = currentDeliveredGoalCheck(ctx, goal);
+    if (request) research = recordResearchResult(ctx, research, "done", verification, request.requestId);
+  }
+  if (research) {
+    const holdReason = researchCompletionBlock(research, "done", verification);
+    if (holdReason) return { completed: false, goal, reason: holdReason };
+  }
 
-  const research = researchForGoal(ctx, goal);
-  if (research) recordResearchResult(ctx, research, "done");
+  appendText(COMPLETION_HISTORY_FILE, completionLine(goal, { ...input, summary, verification }));
 
   endGoalCheck(ctx);
   clearGoal(ctx);
@@ -140,10 +148,22 @@ export function setGoalStatus(ctx: any, goal: string | null): void {
   ctx.ui.setStatus("orchestration-goal", goal ? `🎯 ${truncate(goal, 60)}` : undefined);
 }
 
+function messageTextPreservingLines(content: unknown): string {
+  if (typeof content === "string") return content.trim();
+  if (Array.isArray(content)) return content.map((item) => messageTextPreservingLines(item)).filter(Boolean).join("\n").trim();
+  if (content && typeof content === "object") {
+    const block = content as Record<string, unknown>;
+    if (typeof block.text === "string") return block.text.trim();
+    if (block.content !== undefined) return messageTextPreservingLines(block.content);
+    if (block.message !== undefined) return messageTextPreservingLines(block.message);
+  }
+  return "";
+}
+
 function assistantText(event: any): string {
   const messages = Array.isArray(event?.messages) ? event.messages : [];
   const lastAssistant = [...messages].reverse().find((m: any) => m?.role === "assistant");
-  return contentText(lastAssistant?.content);
+  return messageTextPreservingLines(lastAssistant?.content);
 }
 
 function researchForGoal(ctx: any, goal: string): ResearchState | null {
@@ -152,10 +172,14 @@ function researchForGoal(ctx: any, goal: string): ResearchState | null {
   return state;
 }
 
-function recordResearchResult(ctx: any, state: ResearchState, result: "done" | "continue" | "unknown"): void {
-  writeResearchState(ctx, {
+function recordResearchResult(ctx: any, state: ResearchState, result: "done" | "continue" | "unknown", evidenceText: string, cycleId: string): ResearchState {
+  const recordedCycleIds = state.recordedCycleIds ?? [];
+  if (recordedCycleIds.includes(cycleId)) return state;
+  return writeResearchState(ctx, {
     ...state,
     cycles: (state.cycles ?? 0) + 1,
+    evidenceCycles: (state.evidenceCycles ?? 0) + (hasResearchCompletionEvidence(evidenceText) ? 1 : 0),
+    recordedCycleIds: [...recordedCycleIds, cycleId].slice(-32),
     lastResult: result,
   });
 }
@@ -201,26 +225,38 @@ export function registerGoal(pi: ExtensionAPI): void {
 
   pi.on("agent_end", async (event, ctx) => {
     const goal = activeGoal(ctx);
-    if (!goal || !consumeDeliveredGoalCheck(ctx, event, goal)) return;
+    if (!goal) return;
+    const request = consumeDeliveredGoalCheck(ctx, event, goal);
+    if (!request) return;
 
-    const result = goalCheckResult(assistantText(event));
+    const text = assistantText(event);
+    const result = goalCheckResult(text);
 
     const research = researchForGoal(ctx, goal);
-    if (research) recordResearchResult(ctx, research, result);
+    if (research) recordResearchResult(ctx, research, result, text, request.requestId);
 
     if (result === "done") {
-      const text = assistantText(event);
-      const summary = text.replace(/^GOAL_DONE:\s*/i, "").trim() || "Goal marked done by sentinel response.";
-      completeActiveGoal(ctx, {
-        summary: truncate(summary, 1200),
-        verification: "GOAL_DONE sentinel response; see assistant message for final state and evidence.",
+      const summary = text.replace(/^GOAL_DONE:\s*/i, "").trim();
+      const completion = completeActiveGoal(ctx, {
+        summary,
+        verification: summary,
         source: "sentinel",
       });
-      ctx.ui.notify(`🎯 Goal completed: ${truncate(goal, 160)}`, "info");
+      if (completion.completed) {
+        ctx.ui.notify(`🎯 Goal completed: ${truncate(goal, 160)}`, "info");
+      } else {
+        const prefix = research ? "🔎 Autoresearch continuing" : "🎯 Goal completion rejected";
+        ctx.ui.notify(`${prefix}: ${completion.reason || "completion criteria not met"}.`, "info");
+      }
     }
   });
 
+  pi.on("message_start", (event, ctx) => {
+    if (event?.message?.role === "user") markGoalCheckDelivered(ctx, messageTextPreservingLines(event.message.content));
+  });
+
   pi.on("before_agent_start", async (event, ctx) => {
+    markGoalCheckDelivered(ctx, event.prompt);
     const goal = activeGoal(ctx);
     setGoalStatus(ctx, goal || null);
     if (!goal) return { systemPrompt: event.systemPrompt };

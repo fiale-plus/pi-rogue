@@ -10,6 +10,7 @@ export type GoalCheckRequest = {
   generation: number;
   goalIdentity: string;
   goal: string;
+  delivered?: boolean;
 };
 
 function goalIdentity(goal: string): string {
@@ -45,6 +46,20 @@ function deliveredRequestMatches(event: any, pending: GoalCheckRequest): boolean
 
 export function hasGoalCheckPending(ctx: any): boolean {
   return goalChecks.has(sessionKey(ctx));
+}
+
+export function currentDeliveredGoalCheck(ctx: any, activeGoal: string): GoalCheckRequest | undefined {
+  const pending = goalChecks.get(sessionKey(ctx));
+  if (!pending?.delivered || pending.generation !== generationFor(ctx)) return undefined;
+  if (pending.goal !== activeGoal || pending.goalIdentity !== goalIdentity(activeGoal)) return undefined;
+  return pending;
+}
+
+export function markGoalCheckDelivered(ctx: any, prompt: unknown): GoalCheckRequest | undefined {
+  const pending = goalChecks.get(sessionKey(ctx));
+  if (!pending || String(prompt ?? "").split("\n", 1)[0]?.trim() !== requestMarker(pending)) return undefined;
+  pending.delivered = true;
+  return pending;
 }
 
 export function beginGoalCheck(ctx: any, goal: string): GoalCheckRequest {
