@@ -13,9 +13,12 @@ export async function registerDefaultContextBroker(pi: ExtensionAPI): Promise<vo
   const p = pi as any;
   try {
     const { registerContextBrokerBeta } = await import("@fiale-plus/pi-rogue-context-broker/extension");
+    const durableEnv = String(process.env.PI_CONTEXT_BROKER_DURABLE ?? "").trim().toLowerCase();
+    const durable = !DISABLED_VALUES.has(durableEnv);
+    const configuredStoreDir = String(process.env.PI_CONTEXT_BROKER_STORE_DIR ?? "").trim();
     await registerContextBrokerBeta(pi, {
-      durable: true,
-      storeDir: join(homedir(), ".pi", "agent", "pi-rogue", "context-broker"),
+      durable,
+      storeDir: configuredStoreDir || join(homedir(), ".pi", "agent", "pi-rogue", "context-broker"),
     });
   } catch (error) {
     p.__piRogueContextBrokerError = error;

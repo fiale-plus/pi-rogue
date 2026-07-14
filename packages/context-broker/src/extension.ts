@@ -624,6 +624,9 @@ export async function registerContextBrokerBeta(pi: ExtensionAPI, options: Conte
     briefBytes,
   };
   const durableBackend = String(process.env.PI_CONTEXT_BROKER_BACKEND ?? "sqlite").trim().toLowerCase();
+  const effectiveStoreDir = options.storeDir ?? process.env.PI_CONTEXT_BROKER_STORE_DIR ?? defaultDurableStoreDir();
+  let effectiveBackend = "memory";
+  let effectivePath = "none";
   let broker: BoundedContextBroker;
   let startupNotice: string | undefined;
   if (durable) {
@@ -635,6 +638,9 @@ export async function registerContextBrokerBeta(pi: ExtensionAPI, options: Conte
     );
     broker = durableResult.broker;
     startupNotice = durableResult.startupNotice;
+    const degradedToMemory = startupNotice?.toLowerCase().includes("continuing with in-memory");
+    effectiveBackend = degradedToMemory ? "memory(degraded)" : durableBackend === "jsonl" ? "jsonl" : "sqlite";
+    effectivePath = degradedToMemory ? "none" : durableBackend === "jsonl" ? effectiveStoreDir : sqliteStorePath(effectiveStoreDir);
   } else {
     broker = createInMemoryContextBroker(brokerOptions);
   }
@@ -1294,7 +1300,7 @@ export async function registerContextBrokerBeta(pi: ExtensionAPI, options: Conte
         routingTelemetry.statusCalls += 1;
         const status = broker.status();
         ctx.ui.notify(
-          `Context broker: enabled, session=${activeSessionId}, records=${status.records}/${status.maxRecords}, bytes=${status.bytes}/${status.maxBytes}, rewriteThresholdBytes=${rewriteThresholdBytes}(${rewriteThresholdSource}), globalCaps=records:${capText(status.globalMaxRecords)} bytes:${capText(status.globalMaxBytes)}, tiers=hot:${status.hotRecords}/${status.hotBytes} warm:${status.warmRecords}/${status.warmBytes} cold:${status.coldRecords}/${status.coldBytes}, pinned=${status.pinnedRecords}/${status.pinnedBytes} bytes`,
+          `Context broker: enabled, backend=${effectiveBackend}, path=${effectivePath}, session=${activeSessionId}, records=${status.records}/${status.maxRecords}, bytes=${status.bytes}/${status.maxBytes}, rewriteThresholdBytes=${rewriteThresholdBytes}(${rewriteThresholdSource}), globalCaps=records:${capText(status.globalMaxRecords)} bytes:${capText(status.globalMaxBytes)}, tiers=hot:${status.hotRecords}/${status.hotBytes} warm:${status.warmRecords}/${status.warmBytes} cold:${status.coldRecords}/${status.coldBytes}, pinned=${status.pinnedRecords}/${status.pinnedBytes} bytes`,
           "info",
         );
         ctx.ui.notify(formatRoutingTelemetry(), "info");
