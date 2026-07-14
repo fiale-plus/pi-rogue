@@ -26,7 +26,7 @@ function imperativeListContainsRef(raw: string, ref: string): boolean {
 
     const residue = clause
       .replace(ARTIFACT_TOKEN_RE, " ")
-      .replace(/\b(?:the|these|following|required|file|files|artifact|artifacts|path|paths|bundle|bundles|and|or|before|continuing|proceed|proceeding|review|first|then|next|please)\b/gi, " ")
+      .replace(/\b(?:the|these|following|required|both|all|file|files|artifact|artifacts|path|paths|bundle|bundles|and|or|before|continuing|proceed|proceeding|review|first|then|next|please)\b/gi, " ")
       .replace(/[\s,:()[\]`'"-]+/g, "");
     if (!residue) return true;
   }
@@ -35,7 +35,7 @@ function imperativeListContainsRef(raw: string, ref: string): boolean {
 
 function imperativeMultilineListContainsRef(raw: string, ref: string): boolean {
   const header = new RegExp(
-    String.raw`\b(?:${IMPERATIVE_VERBS})\b\s+(?:(?:the|these|following|required)\s+){0,4}(?:files?|artifacts?|paths?|bundles?)\s*:\s*\n`,
+    String.raw`\b(?:${IMPERATIVE_VERBS})\b\s+(?:(?:(?:the|these|following|required|both|all)\s+){0,4}(?:files?|artifacts?|paths?|bundles?)|the\s+following)\s*:\s*\n`,
     "gi",
   );
   const target = new RegExp(`${refPattern(ref)}(?![A-Za-z0-9._/-])`, "i");
@@ -52,6 +52,28 @@ function imperativeMultilineListContainsRef(raw: string, ref: string): boolean {
   return false;
 }
 
+function labeledListContainsRef(raw: string, ref: string): boolean {
+  const header = /\b(?:required\s+)?(?:files?|artifacts?|paths?|bundles?)\s*:[ \t]*/gi;
+  const target = new RegExp(`${refPattern(ref)}(?![A-Za-z0-9._/-])`, "i");
+  let match: RegExpExecArray | null;
+  while ((match = header.exec(raw)) !== null) {
+    const remainder = raw.slice(header.lastIndex, header.lastIndex + 500);
+    if (remainder.startsWith("\n")) {
+      const list: string[] = [];
+      for (const line of remainder.slice(1).split("\n")) {
+        if (!/^\s*(?:[-*]|\d+[.)])\s+/.test(line)) break;
+        list.push(line);
+      }
+      if (target.test(list.join("\n"))) return true;
+      continue;
+    }
+    const boundary = remainder.search(/(?:[!?](?=\s)|\.(?=\s)|[;\n])/);
+    const clause = boundary >= 0 ? remainder.slice(0, boundary) : remainder;
+    if (target.test(clause)) return true;
+  }
+  return false;
+}
+
 export function isNodeModulesPath(ref: string): boolean {
   return NODE_MODULES_PATH_RE.test(ref);
 }
@@ -63,7 +85,7 @@ export function barePathLooksRequired(raw: string, ref: string): boolean {
     "i",
   );
   const directImperative = new RegExp(
-    String.raw`\b(?:${IMPERATIVE_VERBS})\s+(?:the\s+)?${quoted}(?![A-Za-z0-9._/-])`,
+    String.raw`\b(?:${IMPERATIVE_VERBS})\s+(?:(?:the|both|all)\s+)?${quoted}(?![A-Za-z0-9._/-])`,
     "i",
   );
   const artifactLabel = new RegExp(
@@ -73,6 +95,7 @@ export function barePathLooksRequired(raw: string, ref: string): boolean {
   return structuredRead.test(raw)
     || directImperative.test(raw)
     || artifactLabel.test(raw)
+    || labeledListContainsRef(raw, ref)
     || imperativeListContainsRef(raw, ref)
     || imperativeMultilineListContainsRef(raw, ref);
 }

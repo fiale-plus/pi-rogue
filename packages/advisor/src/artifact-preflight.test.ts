@@ -47,10 +47,15 @@ describe("artifact preflight", () => {
   });
 
   it("extracts required paths from inline and multiline imperative lists", () => {
-    expect(extractArtifactReferences("Read docs/a.md and packages/core/b.ts before review")).toEqual(["docs/a.md", "packages/core/b.ts"]);
+    expect(extractArtifactReferences("Read both docs/a.md and packages/core/b.ts before review")).toEqual(["docs/a.md", "packages/core/b.ts"]);
 
-    const text = "Read these required files:\n1) docs/setup.md\n2. packages/core/src/index.ts\n- Read docs/extra.md";
+    const text = "Read the following:\n1) docs/setup.md\n2. packages/core/src/index.ts\n- Read docs/extra.md";
     expect(extractArtifactReferences(text)).toEqual(["docs/setup.md", "packages/core/src/index.ts", "docs/extra.md"]);
+  });
+
+  it("extracts inline and multiline required artifact labels", () => {
+    expect(extractArtifactReferences("Required artifacts: docs/plan.md and packages/core/progress.md")).toEqual(["docs/plan.md", "packages/core/progress.md"]);
+    expect(extractArtifactReferences("Required files:\n- docs/setup.md\n- packages/core/src/index.ts")).toEqual(["docs/setup.md", "packages/core/src/index.ts"]);
   });
 
   it("does not treat passive review headings as imperative lists", () => {
