@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createInMemoryContextBroker } from "./context-broker.js";
@@ -82,13 +82,16 @@ describe("bundle publish metadata", () => {
   it("rewrites bundled internal leaves to local file specs for clean npm installs", () => {
     const dir = mkdtempSync(join(tmpdir(), "pi-rogue-bundle-prep-"));
     const bundle = join(dir, "bundle");
-    mkdirSync(join(bundle, "node_modules", "@fiale-plus", "pi-core"), { recursive: true });
+    mkdirSync(join(bundle, "src"), { recursive: true });
+    mkdirSync(join(bundle, "node_modules", "@fiale-plus", "pi-core", "src"), { recursive: true });
     writeFileSync(join(bundle, "package.json"), JSON.stringify({
       name: "@fiale-plus/pi-rogue",
       version: "9.9.9",
       dependencies: { "@fiale-plus/pi-core": "^0.1.0", typebox: "^1.0.0" },
       bundledDependencies: ["@fiale-plus/pi-core"],
     }, null, 2));
+    writeFileSync(join(bundle, "src", "extension.test.ts"), "throw new Error('must not publish');\n");
+    writeFileSync(join(bundle, "node_modules", "@fiale-plus", "pi-core", "src", "index.spec.ts"), "throw new Error('must not publish');\n");
     writeFileSync(join(bundle, "node_modules", "@fiale-plus", "pi-core", "package.json"), JSON.stringify({
       name: "@fiale-plus/pi-core",
       version: "0.1.0",
@@ -107,6 +110,8 @@ describe("bundle publish metadata", () => {
     expect(leaf["x-pi-rogue-internal-name"]).toBe("@fiale-plus/pi-core");
     expect(leaf.dependencies).toEqual({ "@fiale-plus/pi-core": "npm:@fiale-plus/pi-rogue@9.9.9", typebox: "^1.0.0" });
     expect(leaf.private).toBeUndefined();
+    expect(existsSync(join(bundle, "src", "extension.test.ts"))).toBe(false);
+    expect(existsSync(join(bundle, "node_modules", "@fiale-plus", "pi-core", "src", "index.spec.ts"))).toBe(false);
   });
 });
 

@@ -29,10 +29,14 @@ npm install
 # then use workspace packages as needed (e.g. for testing changes to advisor/orch before a bundle release)
 ```
 
+## Supported package surface
+
+The published artifact is supported through Pi's TypeScript package loader. Its `.ts` entrypoints and export subpaths are intentionally not a generic plain-Node JavaScript/declaration contract. Pi extensions load from `pi.extensions`, and the bundled advisor/orchestration skills load from `pi.skills`; the publish workflow installs and loads the exact tarball through the supported Pi host before publishing it.
+
 ## Scope boundaries
 
 - The context-broker runtime is bundled and registered by default in the bundle.
-- Consumers can import the runtime through the bundle subpath: `@fiale-plus/pi-rogue/context-broker`.
+- Extensions running inside Pi's TypeScript loader can import the runtime through the bundle subpath: `@fiale-plus/pi-rogue/context-broker`.
 - Set `PI_CONTEXT_BROKER_ENABLED=false` before starting Pi to disable the `/pi-rogue-context` command surface and prompt-load rewriting.
 - Legacy `/context` command alias is not registered.
 - Optional durable broker storage can be enabled with `PI_CONTEXT_BROKER_DURABLE=true` or `PI_CONTEXT_BROKER_STORE_DIR=/path/to/store`; it defaults to SQLite/FTS and supports `PI_CONTEXT_BROKER_BACKEND=jsonl` for the legacy JSONL/blob backend.

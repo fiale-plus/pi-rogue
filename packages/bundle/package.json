@@ -11,6 +11,11 @@
   "keywords": [
     "pi-package"
   ],
+  "files": [
+    "src",
+    "README.md",
+    "LICENSE"
+  ],
   "scripts": {
     "test": "cd ../.. && vitest run packages/bundle/src/*.test.ts"
   },
