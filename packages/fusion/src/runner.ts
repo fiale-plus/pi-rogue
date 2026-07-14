@@ -307,8 +307,20 @@ function parseJsonObject(text: string): unknown | null {
   }
 }
 
-function stringArray(value: unknown): string[] {
-  return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string" && item.trim().length > 0) : [];
+function strictStringArray(value: unknown): string[] | null {
+  if (!Array.isArray(value) || !value.every((item) => typeof item === "string" && item.trim().length > 0)) return null;
+  return value.map((item) => item.trim());
+}
+
+function validatedSynthesisText(value: unknown): string {
+  const text = responseText(value).trim();
+  const unwrapped = text.replace(/^[<\[{]+|[>\]}]+$/g, "").trim();
+  const placeholderOnly = /^(?:n\/?a|tbd|todo|unknown|none)[.!]?$/i.test(unwrapped)
+    || /^(?:tbd|todo)\s*[:\-]\s*(?:write|fill|add|complete|replace|insert|provide|draft)\s+(?:the\s+)?(?:final\s+)?(?:answer|response|text|output)(?:\s+here)?[.!]?$/i.test(unwrapped)
+    || /^placeholder(?:\s+(?:answer|response|text|output))?(?:\s+goes\s+here)?[.!]?$/i.test(unwrapped)
+    || /^\{\{[^}]+\}\}$/.test(text);
+  if (!text || placeholderOnly) throw new Error("synthesis response was empty or placeholder-only");
+  return text;
 }
 
 function isLikelyIntentOnlyPanelText(content: string): boolean {
@@ -339,14 +351,22 @@ export function parseJudgeAnalysis(text: string): FusionJudgeAnalysis | null {
   const parsed = parseJsonObject(text);
   if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return null;
   const obj = parsed as Record<string, unknown>;
-  const confidence = obj.confidence === "low" || obj.confidence === "medium" || obj.confidence === "high" ? obj.confidence : "medium";
+  const consensus = strictStringArray(obj.consensus);
+  const contradictions = strictStringArray(obj.contradictions);
+  const partialCoverage = strictStringArray(obj.partial_coverage);
+  const uniqueInsights = strictStringArray(obj.unique_insights);
+  const blindSpots = strictStringArray(obj.blind_spots);
+  const confidence = obj.confidence === "low" || obj.confidence === "medium" || obj.confidence === "high" ? obj.confidence : null;
+  if (!consensus || !contradictions || !partialCoverage || !uniqueInsights || !blindSpots || !confidence) return null;
+  const unsupportedClaims = obj.unsupported_claims === undefined ? undefined : strictStringArray(obj.unsupported_claims);
+  if (obj.unsupported_claims !== undefined && !unsupportedClaims) return null;
   return {
-    consensus: stringArray(obj.consensus),
-    contradictions: stringArray(obj.contradictions),
-    partial_coverage: stringArray(obj.partial_coverage),
-    unique_insights: stringArray(obj.unique_insights),
-    blind_spots: stringArray(obj.blind_spots),
-    ...(Array.isArray(obj.unsupported_claims) ? { unsupported_claims: stringArray(obj.unsupported_claims) } : {}),
+    consensus,
+    contradictions,
+    partial_coverage: partialCoverage,
+    unique_insights: uniqueInsights,
+    blind_spots: blindSpots,
+    ...(unsupportedClaims ? { unsupported_claims: unsupportedClaims } : {}),
     confidence,
   };
 }
@@ -616,7 +636,7 @@ export async function runFusionCompletion(recipe: FusionRecipe, context: Context
     degraded = "judge_failed";
   } else {
     try {
-      final_text = responseText(await completeWithDisposableSignal(options.completer, {
+      final_text = validatedSynthesisText(await completeWithDisposableSignal(options.completer, {
         model: recipe.model,
         context: buildSynthesisContext(context, responses, failed_models, analysis),
         maxTokens: recipe.max_completion_tokens,
@@ -625,7 +645,7 @@ export async function runFusionCompletion(recipe: FusionRecipe, context: Context
         timeoutMs: recipe.timeout_ms,
       }, options.signal, recipe.timeout_ms));
     } catch (error) {
-      degraded = "synthesis_failed";
+      if (degraded !== "judge_failed") degraded = "synthesis_failed";
       final_text = [
         "Fusion synthesis failed; returning panel-only result.",
         error instanceof Error ? error.message : String(error),
