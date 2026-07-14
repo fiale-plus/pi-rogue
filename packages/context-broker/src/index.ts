@@ -128,7 +128,10 @@ function tierLine(artifact: ContextArtifact): string {
   return `- ${artifact.handle} tier=${artifact.tier} kind=${artifact.kind}${pin}${path}${tags} summary="${artifact.summary}"`;
 }
 
-export function createInMemoryContextBroker(options: ContextBrokerOptions = {}): BoundedContextBroker {
+export const CONTEXT_BROKER_PERSISTENCE_SNAPSHOT = Symbol("context-broker-persistence-snapshot");
+export const CONTEXT_BROKER_RESTORE_ARTIFACT = Symbol("context-broker-restore-artifact");
+
+export function createInMemoryContextBroker(options: ContextBrokerOptions = {}, internal: { autoPruneOnPublish?: boolean } = {}): BoundedContextBroker {
   const maxRecords = Math.max(1, Math.floor(options.maxRecords ?? DEFAULT_MAX_RECORDS));
   const maxBytes = Math.max(1, Math.floor(options.maxBytes ?? DEFAULT_MAX_BYTES));
   const globalMaxRecords = typeof options.globalMaxRecords === "number" && Number.isFinite(options.globalMaxRecords)
@@ -335,7 +338,7 @@ export function createInMemoryContextBroker(options: ContextBrokerOptions = {}):
     };
 
     artifacts = [artifact, ...artifacts];
-    prune(Date.now(), new Set([artifact.id]));
+    if (internal.autoPruneOnPublish !== false) prune(Date.now(), new Set([artifact.id]));
     return artifact;
   }
 
@@ -396,5 +399,17 @@ export function createInMemoryContextBroker(options: ContextBrokerOptions = {}):
     purge,
     status,
     renderBrief,
+    [CONTEXT_BROKER_PERSISTENCE_SNAPSHOT]: () => artifacts.map((artifact) => ({ ...artifact, tags: [...artifact.tags], paths: [...artifact.paths], parentIds: [...artifact.parentIds] })),
+    [CONTEXT_BROKER_RESTORE_ARTIFACT]: (input: ContextArtifactInput, identity: { id: string; handle: string; sequence: number }) => {
+      const restored = publish(input) as ContextArtifact & { sequence: number };
+      restored.id = identity.id;
+      restored.handle = identity.handle;
+      restored.sequence = identity.sequence;
+      sequence = Math.max(sequence, identity.sequence);
+      return restored;
+    },
+  } as BoundedContextBroker & {
+    [CONTEXT_BROKER_PERSISTENCE_SNAPSHOT](): ContextArtifact[];
+    [CONTEXT_BROKER_RESTORE_ARTIFACT](input: ContextArtifactInput, identity: { id: string; handle: string; sequence: number }): ContextArtifact;
   };
 }
