@@ -475,6 +475,86 @@ describe("fusion runner", () => {
     expect(result.error).toContain("panel/b");
   });
 
+  it.each([
+    ["empty object", {}],
+    ["missing field", { consensus: [], contradictions: [], partial_coverage: [], unique_insights: [], confidence: "high" }],
+    ["wrong array type", { consensus: "x", contradictions: [], partial_coverage: [], unique_insights: [], blind_spots: [], confidence: "high" }],
+    ["invalid confidence", { consensus: [], contradictions: [], partial_coverage: [], unique_insights: [], blind_spots: [], confidence: "certain" }],
+    ["empty array item", { consensus: [""], contradictions: [], partial_coverage: [], unique_insights: [], blind_spots: [], confidence: "low" }],
+  ])("rejects %s judge output", (_name, value) => {
+    expect(parseJudgeAnalysis(JSON.stringify(value))).toBeNull();
+  });
+
+  it("accepts complete judge output with unknown extra fields", () => {
+    const value = { consensus: [], contradictions: [], partial_coverage: [], unique_insights: [], blind_spots: [], confidence: "medium", future_field: true };
+    expect(parseJudgeAnalysis(JSON.stringify(value))).toMatchObject({ confidence: "medium", consensus: [] });
+  });
+
+  it("uses judge_failed for structurally incomplete judge output", async () => {
+    const result = await runFusionCompletion({ ...recipe, analysis_models: ["panel/a"], min_panel_success: 1 }, context, {
+      completer: {
+        async complete(request) {
+          if (request.model === "panel/a") return "Found a concrete migration risk in authentication handling.";
+          if (request.context.systemPrompt?.includes("Return ONLY valid JSON")) return "{}";
+          return "Substantive final answer";
+        },
+      },
+    });
+    expect(result.status).toBe("ok");
+    expect(result.degraded).toBe("judge_failed");
+    expect(result.judge_error).toContain("not parseable JSON");
+    expect(result.final_text).toBe("Substantive final answer");
+  });
+
+  it.each(["", "   ", "N/A", "TBD", "TODO", "TODO: write final answer", "UNKNOWN", "NONE", "[placeholder]", "<placeholder>", "placeholder response goes here", "{{answer}}"])("falls back for empty or placeholder synthesis %j", async (synthesis) => {
+    const result = await runFusionCompletion({ ...recipe, analysis_models: ["panel/a"], min_panel_success: 1 }, context, {
+      completer: {
+        async complete(request) {
+          if (request.model === "panel/a") return "Found a concrete migration risk in authentication handling.";
+          if (request.context.systemPrompt?.includes("Return ONLY valid JSON")) {
+            return JSON.stringify({ consensus: [], contradictions: [], partial_coverage: [], unique_insights: [], blind_spots: [], confidence: "medium" });
+          }
+          return synthesis;
+        },
+      },
+    });
+    expect(result.status).toBe("ok");
+    expect(result.degraded).toBe("synthesis_failed");
+    expect(result.final_text).toContain("Fusion synthesis failed; returning panel-only result.");
+    expect(result.final_text).toContain("panel/a");
+  });
+
+  it.each(["None: no changes are required.", "N/A: this option does not apply because the feature is disabled.", "TODO: write unit tests for the parser.", "Placeholder values should be escaped."])("accepts substantive synthesis beginning with a sentinel word: %s", async (synthesis) => {
+    const result = await runFusionCompletion({ ...recipe, analysis_models: ["panel/a"], min_panel_success: 1 }, context, {
+      completer: {
+        async complete(request) {
+          if (request.model === "panel/a") return "Found a concrete migration risk in authentication handling.";
+          if (request.context.systemPrompt?.includes("Return ONLY valid JSON")) {
+            return JSON.stringify({ consensus: [], contradictions: [], partial_coverage: [], unique_insights: [], blind_spots: [], confidence: "medium" });
+          }
+          return synthesis;
+        },
+      },
+    });
+    expect(result.degraded).toBeUndefined();
+    expect(result.final_text).toBe(synthesis);
+  });
+
+  it("preserves judge_failed when malformed judge output is followed by failed synthesis", async () => {
+    const result = await runFusionCompletion({ ...recipe, analysis_models: ["panel/a"], min_panel_success: 1 }, context, {
+      completer: {
+        async complete(request) {
+          if (request.model === "panel/a") return "Found a concrete migration risk in authentication handling.";
+          if (request.context.systemPrompt?.includes("Return ONLY valid JSON")) return "{}";
+          return "TODO: write final answer";
+        },
+      },
+    });
+    expect(result.degraded).toBe("judge_failed");
+    expect(result.judge_error).toContain("not parseable JSON");
+    expect(result.final_text).toContain("Fusion synthesis failed; returning panel-only result.");
+  });
+
   it("parses judge JSON with fenced repair", () => {
     const analysis = parseJudgeAnalysis("```json\n{\"consensus\":[\"x\"],\"contradictions\":[],\"partial_coverage\":[],\"unique_insights\":[],\"blind_spots\":[],\"confidence\":\"high\"}\n```");
     expect(analysis?.confidence).toBe("high");
