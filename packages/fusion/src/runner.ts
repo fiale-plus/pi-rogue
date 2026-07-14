@@ -441,15 +441,54 @@ function compactSummary(result: FusionRunResult): string {
   return parts.join(" | ").slice(0, 1_000);
 }
 
-function mergedSignal(parent: AbortSignal | undefined, timeoutMs: number | undefined): AbortSignal | undefined {
-  if (!timeoutMs || timeoutMs <= 0) return parent;
+export interface DisposableFusionSignal {
+  signal: AbortSignal | undefined;
+  dispose(): void;
+}
+
+export function disposableMergedSignal(parent: AbortSignal | undefined, timeoutMs: number | undefined): DisposableFusionSignal {
+  if (!timeoutMs || timeoutMs <= 0) return { signal: parent, dispose() {} };
+
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(new Error(`timeout after ${timeoutMs}ms`)), timeoutMs);
-  const abort = () => controller.abort(parent?.reason);
-  if (parent?.aborted) abort();
-  else parent?.addEventListener("abort", abort, { once: true });
-  controller.signal.addEventListener("abort", () => clearTimeout(timeout), { once: true });
-  return controller.signal;
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  let disposed = false;
+  const dispose = () => {
+    if (disposed) return;
+    disposed = true;
+    if (timeout !== undefined) clearTimeout(timeout);
+    timeout = undefined;
+    parent?.removeEventListener("abort", abortFromParent);
+  };
+  const abortFromParent = () => {
+    controller.abort(parent?.reason);
+    dispose();
+  };
+
+  if (parent?.aborted) {
+    controller.abort(parent.reason);
+    disposed = true;
+  } else {
+    parent?.addEventListener("abort", abortFromParent, { once: true });
+    timeout = setTimeout(() => {
+      controller.abort(new Error(`timeout after ${timeoutMs}ms`));
+      dispose();
+    }, timeoutMs);
+  }
+  return { signal: controller.signal, dispose };
+}
+
+async function completeWithDisposableSignal(
+  completer: FusionCompleter,
+  request: FusionCompletionRequest,
+  parent: AbortSignal | undefined,
+  timeoutMs: number | undefined,
+): Promise<string> {
+  const merged = disposableMergedSignal(parent, timeoutMs);
+  try {
+    return await completer.complete({ ...request, signal: merged.signal });
+  } finally {
+    merged.dispose();
+  }
 }
 
 export async function runFusionCompletion(recipe: FusionRecipe, context: Context, options: RunFusionOptions): Promise<FusionRunResult> {
@@ -473,15 +512,15 @@ export async function runFusionCompletion(recipe: FusionRecipe, context: Context
 
     for (const budget of panelBudgets) {
       try {
-        const content = responseText(await options.completer.complete({
+        const timeoutMs = recipe.per_model_timeout_ms ?? recipe.timeout_ms;
+        const content = responseText(await completeWithDisposableSignal(options.completer, {
           model,
           context: panelPrompt(context, budget),
           maxTokens: recipe.max_completion_tokens,
           temperature: recipe.temperature,
           reasoning: recipe.reasoning?.effort,
-          timeoutMs: recipe.per_model_timeout_ms ?? recipe.timeout_ms,
-          signal: mergedSignal(options.signal, recipe.per_model_timeout_ms ?? recipe.timeout_ms),
-        }));
+          timeoutMs,
+        }, options.signal, timeoutMs));
         if (!content) throw new Error("empty panel response");
         return { model, content, wall_ms: Math.round(performance.now() - started) };
       } catch (error) {
@@ -549,14 +588,13 @@ export async function runFusionCompletion(recipe: FusionRecipe, context: Context
   let degraded: FusionRunResult["degraded"] = failed_models.length > 0 ? "panel_partial" : undefined;
   let judgeUsageLimit = false;
   try {
-    const judgeText = await options.completer.complete({
+    const judgeText = await completeWithDisposableSignal(options.completer, {
       model: recipe.model,
       context: buildJudgeContext(context, responses, failed_models),
       maxTokens: Math.min(recipe.max_completion_tokens ?? 1500, 4000),
       reasoning: recipe.reasoning?.effort,
       timeoutMs: recipe.timeout_ms,
-      signal: mergedSignal(options.signal, recipe.timeout_ms),
-    });
+    }, options.signal, recipe.timeout_ms);
     judge_raw = judgeText;
     analysis = parseJudgeAnalysis(judgeText) ?? undefined;
     if (!analysis) {
@@ -578,15 +616,14 @@ export async function runFusionCompletion(recipe: FusionRecipe, context: Context
     degraded = "judge_failed";
   } else {
     try {
-      final_text = responseText(await options.completer.complete({
+      final_text = responseText(await completeWithDisposableSignal(options.completer, {
         model: recipe.model,
         context: buildSynthesisContext(context, responses, failed_models, analysis),
         maxTokens: recipe.max_completion_tokens,
         temperature: recipe.temperature,
         reasoning: recipe.reasoning?.effort,
         timeoutMs: recipe.timeout_ms,
-        signal: mergedSignal(options.signal, recipe.timeout_ms),
-      }));
+      }, options.signal, recipe.timeout_ms));
     } catch (error) {
       degraded = "synthesis_failed";
       final_text = [
