@@ -28,13 +28,8 @@ jobs:
           npm run check
           npm test
 
-      - name: Sync canonical package version from release tag
-        working-directory: packages/bundle
-        run: |
-          RAW_TAG="${GITHUB_REF_NAME#pi-rogue-}"
-          VERSION="${RAW_TAG#v}"
-          npm version "$VERSION" --no-git-tag-version --allow-same-version
-          echo "Synced packages/bundle/package.json to $VERSION"
+      - name: Validate committed version and release-note policy
+        run: node scripts/validate-release-policy.mjs
 
       - name: Vendor bundled package sources for single-artefact release (leaf releases paused)
         working-directory: packages/bundle
@@ -107,22 +102,7 @@ jobs:
           VERSION="$(node -p "require('./packages/bundle/package.json').version")"
           node scripts/smoke-canonical-package.mjs "$PKG@$VERSION"
 
-      - name: Deprecate legacy packages
-        run: |
-          set -e
-
-          deprecate_with_retry() {
-            local pkg="$1"
-            local msg="$2"
-            if ! npm deprecate "$pkg" "$msg"; then
-              echo "Warning: npm deprecate failed for ${pkg} (continuing)"
-              return 0
-            fi
-          }
-
-          deprecate_with_retry "@fiale-plus/pi-rogue-bundle@*" "Deprecated: replaced by @fiale-plus/pi-rogue. Install with \"pi install npm:@fiale-plus/pi-rogue\"."
-          deprecate_with_retry "@fiale-plus/pi-rogue-advisor@*" "Deprecated: advisor/orchestration are bundled in @fiale-plus/pi-rogue. Use that package."
-          deprecate_with_retry "@fiale-plus/pi-rogue-orchestration@*" "Deprecated: advisor/orchestration are bundled in @fiale-plus/pi-rogue. Use that package."
-          deprecate_with_retry "@fiale-plus/pi-orchestration@*" "Deprecated: replaced by @fiale-plus/pi-rogue. Install via \"pi install npm:@fiale-plus/pi-rogue\"."
+      - name: Deprecate and verify legacy packages
+        run: node scripts/deprecate-legacy-packages.mjs
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

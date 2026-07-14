@@ -6,7 +6,7 @@ labels: release
 
 ## Release checklist
 
-- [ ] Version is bumped and committed
+- [ ] Canonical version is bumped and committed in `packages/bundle/package.json` and `package-lock.json`; planned tag matches exactly
 - [ ] Changelog is provisioned for this release
 - [ ] Release notes are drafted using the standard sections below
 - [ ] CI is green on the release commit
@@ -41,6 +41,7 @@ Advisor, orchestration, and legacy bundle releases are paused (or deprecated tra
 
 ## Naming policy
 
+- `packages/bundle/package.json` is the sole version authority; workflow validation rejects tag drift.
 - Tag format: `pi-rogue-<semver>`
 - Release title: `<semver>`
 - Use the package prefix in the tag, not in the title.
