@@ -210,6 +210,28 @@ describe("router config profiles", () => {
     expect(routerArgumentCompletions("print ")?.map((item) => item.value)).toEqual(["print mismatch_only", "print all", "print off"]);
   });
 
+  it.each([
+    { print: "off" as const, model: "gpt-5.3-codex-spark", notifications: 0 },
+    { print: "all" as const, model: "gpt-5.5", notifications: 1 },
+    { print: "mismatch_only" as const, model: "gpt-5.5", notifications: 0 },
+    { print: "mismatch_only" as const, model: "gpt-5.3-codex-spark", notifications: 1 },
+  ])("keeps observation semantics with print=$print and model=$model", async ({ print, model, notifications }) => {
+    const cwd = mkdtempSync(join(tmpdir(), "pi-router-print-"));
+    const session = writeSessionFixture(cwd, `${print}-${model}.jsonl`);
+    appendAutoModelTurn(session, model);
+    const ctx = { ...ctxMock(session), cwd };
+    saveRouterConfig(ctx, { ...loadRouterConfig(ctx), enabled: true, mode: "observe", print });
+
+    const first = await observeRouterTurn(ctx);
+    const duplicate = await observeRouterTurn(ctx);
+
+    expect(first).not.toBeNull();
+    expect(duplicate).toBeNull();
+    expect(loadRouterState(ctx, session).lastObservedCheckpointId).toBe(first?.checkpointId);
+    expect(readFileSync(routerEventsPath(ctx, session), "utf8").trim().split("\n")).toHaveLength(1);
+    expect(ctx.notifications).toHaveLength(notifications);
+  });
+
   it("keeps config repo-global while state and live events are session-scoped", async () => {
     const cwd = mkdtempSync(join(tmpdir(), "pi-router-sessions-"));
     const firstSession = writeSessionFixture(cwd, "session-a.jsonl");
