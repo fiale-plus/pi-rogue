@@ -32,6 +32,12 @@ A read-only inspection on 2026-07-14 found:
 
 This matters because M3 Pro memory bandwidth and GPU capacity are below an M3 Max. M3 Max throughput claims should not be projected onto this machine.
 
+### Applicability to an M3 Max with the same 36 GB memory
+
+If the intended target is a different **M3 Max 36 GB** Mac, the storage and capacity guidance in this report is a conservative starting point because unified-memory capacity is still 36 GB. The same weight files, runtime overhead, KV cache, context length, other applications, and macOS memory pressure still determine whether a configuration fits without sustained swap.
+
+Throughput, time-to-first-token, thermals, and the best speculative depth do **not** transfer from this host. M3 Max has different memory bandwidth and GPU/CPU resources. This report contains no candidate throughput measurement that should be relabeled as an M3 Max result; all local process and memory observations are explicitly from the M3 Pro host. Run the same pinned benchmark manifest on the M3 Max before using speed or latency to choose a default.
+
 ## Existing services: capable but not ready for a safe bake-off
 
 A live `llama-server` was healthy on `127.0.0.1:8004` and exposed:
