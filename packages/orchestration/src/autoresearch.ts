@@ -16,6 +16,7 @@ export function buildResearchGoal(kind: ResearchKind, instruction: string): stri
       `Autoresearch lab: ${instruction}`,
       "Define source objective, hypotheses, lane split, measurement method, baseline, artifacts, and stop condition.",
       "Run independent lanes where useful; evaluate evidence before integration; preserve the user objective unless explicitly changed.",
+      "Complete at least two measured cycles before declaring done, with explicit check, evaluation, benchmark, or metric results.",
       "Finish with convergent findings, rejected hypotheses, limitations, checks, and follow-up seeds.",
     ].join("\n");
   }
@@ -24,6 +25,7 @@ export function buildResearchGoal(kind: ResearchKind, instruction: string): stri
     `Autoresearch: ${instruction}`,
     "Define hypothesis/objective, measurable target, baseline, eval/check command, durable artifact/log, and stop condition.",
     "Iterate: inspect evidence, make one high-leverage change, run the relevant check/eval, record result, choose next hypothesis.",
+    "Complete at least two measured cycles before declaring done, with explicit check, evaluation, benchmark, or metric results.",
     "Preserve the user objective unless explicitly changed; stop only when materially improved and summarized with evidence.",
   ].join("\n");
 }
@@ -35,6 +37,7 @@ export function buildResearchLoopInstruction(kind: ResearchKind, instruction: st
       `User instruction: ${instruction}`,
       "Confirm/update source objective, hypotheses, lane split, measurement method, baseline, artifacts, and stop condition.",
       "Advance the most useful lane comparison, evaluate evidence, integrate only safe improvements, run checks, and record the next hypothesis.",
+      "Do not declare completion before two measured cycles and explicit result evidence.",
       "Do not simplify or re-aim the objective unless the user explicitly asks.",
     ].join("\n");
   }
@@ -44,6 +47,7 @@ export function buildResearchLoopInstruction(kind: ResearchKind, instruction: st
     `User instruction: ${instruction}`,
     "Confirm/update hypothesis, measurable target, baseline, eval/check command, artifact/log, and stop condition.",
     "Inspect evidence, take one concrete high-leverage step, run the relevant check/eval when possible, record result, and choose the next hypothesis.",
+    "Do not declare completion before two measured cycles and explicit result evidence.",
     "Do not simplify or re-aim the objective unless the user explicitly asks.",
   ].join("\n");
 }
@@ -116,6 +120,8 @@ export async function handleResearchCommand(pi: ExtensionAPI, commandName: Resea
     loopInstruction,
     interval: DEFAULT_RESEARCH_INTERVAL,
     cycles: 0,
+    evidenceCycles: 0,
+    recordedCycleIds: [],
     updatedAt: "",
   });
   const loop = startLoop(pi, ctx, DEFAULT_RESEARCH_INTERVAL, loopInstruction, { triggerNow: true });

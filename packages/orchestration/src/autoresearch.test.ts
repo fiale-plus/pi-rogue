@@ -71,10 +71,12 @@ describe("autoresearch status", () => {
     expect(goal).toContain("eval/check command");
     expect(goal).toContain("durable artifact/log");
     expect(goal).toContain("Preserve the user objective");
+    expect(goal).toContain("at least two measured cycles");
     expect(goal).toContain("summarized with evidence");
     expect(loop).toContain("Confirm/update hypothesis");
     expect(loop).toContain("take one concrete high-leverage step");
     expect(loop).toContain("record result");
+    expect(loop).toContain("Do not declare completion before two measured cycles");
     expect(loop).toContain("Do not simplify or re-aim");
   });
 
@@ -85,6 +87,7 @@ describe("autoresearch status", () => {
     expect(goal).toContain("source objective");
     expect(goal).toContain("lane split");
     expect(goal).toContain("evaluate evidence before integration");
+    expect(goal).toContain("at least two measured cycles");
     expect(goal).toContain("convergent findings");
     expect(loop).toContain("Advance the most useful lane comparison");
     expect(loop).toContain("integrate only safe improvements");
