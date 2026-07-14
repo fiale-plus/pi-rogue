@@ -3368,13 +3368,22 @@ export async function resolveModelCandidates(ctx: any, config: AdvisorConfig, op
   const seen = new Set<string>();
   const add = async (found: any, label: string, fallback = false) => {
     if (!found) return;
-    const key = String(found.id || label);
+    const key = piRogueModelId(found) ?? label;
     if (seen.has(key)) return;
-    const auth = await ctx.modelRegistry?.getApiKeyAndHeaders(found);
-    if (auth?.ok && auth.apiKey) {
-      seen.add(key);
-      candidates.push({ model: found, auth, label, fallback });
+    seen.add(key);
+    let auth: any;
+    try {
+      auth = await ctx.modelRegistry?.getApiKeyAndHeaders(found);
+    } catch (error) {
+      if (error instanceof Error && error.name === "AbortError") throw error;
+      appendAdvisorDiagnostic("model_auth_resolution_failed", {
+        model: key,
+        provider: String(found.provider || "unknown"),
+        category: "auth_lookup_error",
+      });
+      return;
     }
+    if (auth?.ok && auth.apiKey) candidates.push({ model: found, auth, label, fallback });
   };
 
   // Try configured higher/advanced advisor model first.

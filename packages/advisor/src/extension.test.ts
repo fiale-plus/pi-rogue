@@ -22,6 +22,7 @@ import {
   normalizeAdvisorConfig,
   parseCfgPostureArgs,
   parseReviewPayload,
+  resolveModelCandidates,
   sanitizeAdvisorText,
   shouldRunCheckin,
   consumeTaskScopedFollowUp,
@@ -101,6 +102,101 @@ describe("AdvisorConfig", () => {
     expect(parsed.checkinIntervalMinutes).toBe(30);
     expect(parsed.model).toBe("claude-opus-4-6");
     expect(parsed.profile).toBe("budget-board");
+  });
+});
+
+describe("advisor model authentication fallback", () => {
+  it("continues when the first candidate auth lookup throws and the second succeeds", async () => {
+    const first = { provider: "openai-codex", id: "gpt-5.5", input: ["text"] };
+    const second = { provider: "anthropic", id: "claude-opus-4-6", input: ["text"] };
+    const attempted: string[] = [];
+    const ctx = {
+      modelRegistry: {
+        find: (provider: string, id: string) => provider === first.provider && id === first.id ? first : provider === second.provider && id === second.id ? second : undefined,
+        getAvailable: () => [],
+        getApiKeyAndHeaders: async (model: typeof first) => {
+          attempted.push(`${model.provider}/${model.id}`);
+          if (model === first) throw new Error("credential lookup failed");
+          return { ok: true, apiKey: "second-token" };
+        },
+      },
+    };
+
+    const resolved = await resolveModelCandidates(ctx, normalizeAdvisorConfig({}), { allowRegularFallback: false });
+    expect(attempted).toEqual(["openai-codex/gpt-5.5", "anthropic/claude-opus-4-6"]);
+    expect(resolved.map((entry) => entry.model)).toEqual([second]);
+  });
+
+  it("does not let a failed provider suppress a same-id model from another provider", async () => {
+    const first = { provider: "provider-a", id: "shared-model", input: ["text"] };
+    const second = { provider: "provider-b", id: "shared-model", input: ["text"] };
+    const ctx = {
+      modelRegistry: {
+        find: (provider: string, id: string) => provider === "provider-a" && id === "shared-model" ? first : undefined,
+        getAvailable: () => [second],
+        getApiKeyAndHeaders: async (model: typeof first) => {
+          if (model === first) throw new Error("provider A auth failed");
+          return { ok: true, apiKey: "provider-b-token" };
+        },
+      },
+    };
+
+    const resolved = await resolveModelCandidates(ctx, normalizeAdvisorConfig({ model: "provider-a/shared-model" }));
+    expect(resolved.map((entry) => entry.model)).toEqual([second]);
+  });
+
+  it("attempts every distinct candidate, returns none, and records only sanitized auth diagnostics", async () => {
+    const diagnosticsDir = mkdtempSync(join(tmpdir(), "pi-rogue-advisor-auth-"));
+    const diagnosticsPath = join(diagnosticsDir, "diagnostics.jsonl");
+    const previous = process.env.PI_ROGUE_ADVISOR_DIAGNOSTICS_PATH;
+    const models = [
+      { provider: "openai-codex", id: "gpt-5.5", input: ["text"] },
+      { provider: "anthropic", id: "claude-opus-4-6", input: ["text"] },
+    ];
+    const attempted: string[] = [];
+    try {
+      process.env.PI_ROGUE_ADVISOR_DIAGNOSTICS_PATH = diagnosticsPath;
+      const ctx = {
+        modelRegistry: {
+          find: (provider: string, id: string) => models.find((model) => model.provider === provider && model.id === id),
+          getAvailable: () => models,
+          getApiKeyAndHeaders: async (model: (typeof models)[number]) => {
+            attempted.push(`${model.provider}/${model.id}`);
+            throw new Error("secret=sk-sensitive-token-value");
+          },
+        },
+      };
+
+      await expect(resolveModelCandidates(ctx, normalizeAdvisorConfig({}))).resolves.toEqual([]);
+      expect(attempted).toEqual(["openai-codex/gpt-5.5", "anthropic/claude-opus-4-6"]);
+      const diagnostics = readFileSync(diagnosticsPath, "utf8");
+      expect(diagnostics.match(/model_auth_resolution_failed/g)).toHaveLength(2);
+      expect(diagnostics).toContain('"category":"auth_lookup_error"');
+      expect(diagnostics).toContain("gpt-5.5");
+      expect(diagnostics).toContain("claude-opus-4-6");
+      expect(diagnostics).not.toContain("sensitive-token-value");
+      expect(diagnostics).not.toContain("secret=");
+    } finally {
+      if (previous === undefined) delete process.env.PI_ROGUE_ADVISOR_DIAGNOSTICS_PATH;
+      else process.env.PI_ROGUE_ADVISOR_DIAGNOSTICS_PATH = previous;
+      rmSync(diagnosticsDir, { recursive: true, force: true });
+    }
+  });
+
+  it("preserves cancellation instead of falling through", async () => {
+    const aborted = Object.assign(new Error("cancelled"), { name: "AbortError" });
+    const second = { provider: "anthropic", id: "claude-opus-4-6", input: ["text"] };
+    const getApiKeyAndHeaders = vi.fn(async () => { throw aborted; });
+    const ctx = {
+      modelRegistry: {
+        find: (provider: string, id: string) => provider === "openai-codex" && id === "gpt-5.5" ? { provider, id, input: ["text"] } : second,
+        getAvailable: () => [],
+        getApiKeyAndHeaders,
+      },
+    };
+
+    await expect(resolveModelCandidates(ctx, normalizeAdvisorConfig({}), { allowRegularFallback: false })).rejects.toBe(aborted);
+    expect(getApiKeyAndHeaders).toHaveBeenCalledTimes(1);
   });
 });
 
