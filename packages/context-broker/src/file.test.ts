@@ -156,14 +156,14 @@ describe("file context broker durable pruning", () => {
   it("persists TTL pruning through a same-directory atomic snapshot", () => {
     const dir = mkdtempSync(join(tmpdir(), "ctx-file-prune-ttl-"));
     const now = Date.now();
-    const broker = createFileContextBroker({ dir, defaultTtlMs: 10 });
-    const expired = broker.publish(input("expired synthetic payload", now - 100));
+    const broker = createFileContextBroker({ dir, defaultTtlMs: 10_000 });
+    const expired = broker.publish(input("expired synthetic payload", now - 20_000));
     const retained = broker.publish(input("retained synthetic payload", now));
 
     broker.prune(now + 1);
 
     expect(readFileSync(join(dir, "metadata.jsonl"), "utf8").trim().split("\n").filter(Boolean)).toHaveLength(1);
-    const restarted = createFileContextBroker({ dir, defaultTtlMs: 10 });
+    const restarted = createFileContextBroker({ dir, defaultTtlMs: 10_000 });
     expect(restarted.lookup({ handle: expired.handle })).toEqual([]);
     expect(restarted.lookup({ handle: retained.handle })).toHaveLength(1);
     expect(readdirSync(dir).some((name) => name.startsWith("metadata.jsonl.tmp-"))).toBe(false);
