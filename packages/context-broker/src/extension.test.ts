@@ -1203,14 +1203,16 @@ maxRecords: 1,
         .mockImplementationOnce(() => { throw new Error("file is not a database"); })
         .mockImplementationOnce(() => { throw new Error("still broken after quarantine"); });
 
-      const { pi, handlers } = createPiMock();
+      const { pi, handlers, commands } = createPiMock();
       await registerContextBrokerBeta(pi, { durable: true, storeDir: dir });
       const { ctx, notifications } = createCtx();
 
       await runHandlers(handlers, "session_start", { type: "session_start" }, ctx);
+      await commands.get("pi-rogue-context").handler("status", ctx);
 
       expect(notifications[0]?.type).toBe("warning");
       expect(notifications[0]?.message).toContain("in-memory broker");
+      expect(notifications.some((item) => item.message.includes("backend=memory(degraded), path=none"))).toBe(true);
       expect(readdirSync(dir).some((entry) => entry.includes("artifacts.sqlite.recovered-") || entry.includes("artifacts.sqlite-wal.recovered-") || entry.includes("artifacts.sqlite-shm.recovered-"))).toBe(true);
       expect(existsSync(join(dir, "artifacts.sqlite"))).toBe(false);
     } finally {

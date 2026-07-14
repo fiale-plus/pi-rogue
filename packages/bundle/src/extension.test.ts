@@ -68,6 +68,56 @@ describe("bundle extension defaults", () => {
     expect(["advisor", "router", "fusion"].some((name) => commands.has(name))).toBe(false);
   });
 
+  it("honors canonical durability, store, and backend environment precedence", async () => {
+    const envNames = ["HOME", "PI_CONTEXT_BROKER_DURABLE", "PI_CONTEXT_BROKER_STORE_DIR", "PI_CONTEXT_BROKER_BACKEND"] as const;
+    const saved = Object.fromEntries(envNames.map((name) => [name, process.env[name]]));
+    const root = mkdtempSync(join(tmpdir(), "pi-rogue-bundle-context-env-"));
+    const statusFor = async () => {
+      const { pi, commands } = createPiMock();
+      await registerBundle(pi);
+      const notices: string[] = [];
+      await commands.get("pi-rogue-context").handler("status", {
+        cwd: root,
+        sessionManager: { getSessionFile: () => join(root, "session.jsonl"), getBranch: () => [] },
+        ui: { notify(message: string) { notices.push(message); } },
+      });
+      return notices[0] ?? "";
+    };
+    try {
+      process.env.HOME = join(root, "home-default");
+      delete process.env.PI_CONTEXT_BROKER_DURABLE;
+      delete process.env.PI_CONTEXT_BROKER_STORE_DIR;
+      delete process.env.PI_CONTEXT_BROKER_BACKEND;
+      expect(await statusFor()).toContain("backend=sqlite");
+      expect(existsSync(join(process.env.HOME, ".pi", "agent", "pi-rogue", "context-broker", "artifacts.sqlite"))).toBe(true);
+
+      const memoryDir = join(root, "memory-must-not-write");
+      process.env.PI_CONTEXT_BROKER_DURABLE = "false";
+      process.env.PI_CONTEXT_BROKER_STORE_DIR = memoryDir;
+      expect(await statusFor()).toContain("backend=memory, path=none");
+      expect(existsSync(memoryDir)).toBe(false);
+
+      const sqliteDir = join(root, "custom-sqlite");
+      process.env.PI_CONTEXT_BROKER_DURABLE = "true";
+      process.env.PI_CONTEXT_BROKER_STORE_DIR = sqliteDir;
+      delete process.env.PI_CONTEXT_BROKER_BACKEND;
+      expect(await statusFor()).toContain(`backend=sqlite, path=${join(sqliteDir, "artifacts.sqlite")}`);
+      expect(existsSync(join(sqliteDir, "artifacts.sqlite"))).toBe(true);
+
+      const jsonlDir = join(root, "custom-jsonl");
+      process.env.PI_CONTEXT_BROKER_STORE_DIR = jsonlDir;
+      process.env.PI_CONTEXT_BROKER_BACKEND = "jsonl";
+      expect(await statusFor()).toContain(`backend=jsonl, path=${jsonlDir}`);
+      expect(existsSync(join(jsonlDir, "blobs"))).toBe(true);
+    } finally {
+      for (const name of envNames) {
+        const value = saved[name];
+        if (value === undefined) delete process.env[name];
+        else process.env[name] = value;
+      }
+    }
+  });
+
   it("keeps an explicit env kill switch for context broker rollout", async () => {
     process.env.PI_CONTEXT_BROKER_ENABLED = "false";
     const { pi, commands } = createPiMock();

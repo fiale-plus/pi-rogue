@@ -39,7 +39,7 @@ The published artifact is supported through Pi's TypeScript package loader. Its 
 - Extensions running inside Pi's TypeScript loader can import the runtime through the bundle subpath: `@fiale-plus/pi-rogue/context-broker`.
 - Set `PI_CONTEXT_BROKER_ENABLED=false` before starting Pi to disable the `/pi-rogue-context` command surface and prompt-load rewriting.
 - Legacy `/context` command alias is not registered.
-- Optional durable broker storage can be enabled with `PI_CONTEXT_BROKER_DURABLE=true` or `PI_CONTEXT_BROKER_STORE_DIR=/path/to/store`; it defaults to SQLite/FTS and supports `PI_CONTEXT_BROKER_BACKEND=jsonl` for the legacy JSONL/blob backend.
+- The canonical bundle defaults to durable SQLite/FTS storage under `~/.pi/agent/pi-rogue/context-broker`. Environment precedence is explicit: `PI_CONTEXT_BROKER_ENABLED=false` disables registration; `PI_CONTEXT_BROKER_DURABLE=false` selects memory even when a store path is set; otherwise `PI_CONTEXT_BROKER_STORE_DIR` replaces the default path and `PI_CONTEXT_BROKER_BACKEND=jsonl` selects the JSONL/blob backend. `/pi-rogue-context status` reports the effective backend and path.
 
 ## Command surface
 
