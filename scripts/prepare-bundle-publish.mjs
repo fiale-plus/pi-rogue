@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 
 const bundleDir = resolve(process.argv[2] || process.cwd());
@@ -12,6 +12,21 @@ if (!Array.isArray(bundled) || bundled.length === 0) {
 }
 
 const internal = new Set(bundled);
+
+function removeTestSources(dir) {
+  if (!existsSync(dir)) return;
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    const path = join(dir, entry.name);
+    if (entry.isDirectory()) {
+      if (entry.name === "__tests__") rmSync(path, { recursive: true, force: true });
+      else removeTestSources(path);
+    } else if (/\.(?:test|spec)\.[cm]?[jt]sx?$/.test(entry.name)) {
+      rmSync(path, { force: true });
+    }
+  }
+}
+
+removeTestSources(join(bundleDir, "src"));
 const aliasSpec = `npm:${pkg.name}@${pkg.version}`;
 const deps = { ...(pkg.dependencies || {}) };
 for (const name of bundled) {
@@ -33,6 +48,7 @@ for (const name of bundled) {
     }
   }
   writeFileSync(leafPkgPath, `${JSON.stringify(leaf, null, 2)}\n`);
+  removeTestSources(join(bundleDir, "node_modules", ...name.split("/")));
 }
 
 pkg.dependencies = deps;

@@ -51,9 +51,20 @@ jobs:
           node ../../scripts/prepare-bundle-publish.mjs .
           echo "Vendored local (git-at-tag) core, advisor, context-broker, fusion, orchestration, and router into bundle for bundling as single artefact"
 
-      - name: Publish canonical package
+      - name: Pack and smoke-test the exact canonical artifact
+        id: candidate
         working-directory: packages/bundle
-        run: npm publish . --provenance --access public
+        run: |
+          set -euo pipefail
+          PACK_DIR="$RUNNER_TEMP/pi-rogue-pack"
+          mkdir -p "$PACK_DIR"
+          npm pack --json --pack-destination "$PACK_DIR" > "$RUNNER_TEMP/pi-rogue-pack.json"
+          TARBALL="$(node -e 'const fs=require("fs"); const path=require("path"); const rows=JSON.parse(fs.readFileSync(process.argv[1], "utf8")); process.stdout.write(path.resolve(process.argv[2], rows[0].filename));' "$RUNNER_TEMP/pi-rogue-pack.json" "$PACK_DIR")"
+          node ../../scripts/smoke-canonical-package.mjs "$TARBALL"
+          echo "tarball=$TARBALL" >> "$GITHUB_OUTPUT"
+
+      - name: Publish exact smoke-tested canonical artifact
+        run: npm publish "${{ steps.candidate.outputs.tarball }}" --provenance --access public
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
@@ -89,6 +100,12 @@ jobs:
 
           echo "Timed out waiting for $PKG@$VERSION to appear on npm"
           exit 1
+
+      - name: Fresh-cache registry install and Pi-host smoke
+        run: |
+          PKG="$(node -p "require('./packages/bundle/package.json').name")"
+          VERSION="$(node -p "require('./packages/bundle/package.json').version")"
+          node scripts/smoke-canonical-package.mjs "$PKG@$VERSION"
 
       - name: Deprecate legacy packages
         run: |
