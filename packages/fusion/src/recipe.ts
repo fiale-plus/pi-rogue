@@ -1,6 +1,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
+import { ensureOwnerOnlyDirectory, tightenOwnerOnlyFile } from "@fiale-plus/pi-core";
 import type { FusionRecipe, ParsedModelRef } from "./types.js";
 
 const MAX_PANEL_MODELS = 8;
@@ -192,6 +193,8 @@ export function loadFusionRecipes(cwd: string, env: NodeJS.ProcessEnv = process.
   const first = paths.find((path) => existsSync(path));
   if (!first) return { recipes: [], errors: [] };
   try {
+    ensureOwnerOnlyDirectory(dirname(first));
+    tightenOwnerOnlyFile(first);
     const parsed = JSON.parse(readFileSync(first, "utf8")) as unknown;
     const result = validateFusionRecipes(parsed);
     return result.ok ? { recipes: result.recipes, path: first, errors: [] } : { recipes: [], path: first, errors: result.errors };

@@ -1,5 +1,5 @@
-import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { ensureOwnerOnlyDirectory, secureWriteFile } from "@fiale-plus/pi-core";
 import { performance } from "node:perf_hooks";
 import { randomUUID } from "node:crypto";
 import type { Context, ThinkingLevel } from "@earendil-works/pi-ai";
@@ -657,9 +657,9 @@ export async function runFusionCompletion(recipe: FusionRecipe, context: Context
 export function createFileFusionTraceStore(dir: string): FusionTraceStore {
   return {
     write(result: FusionRunResult): string | undefined {
-      mkdirSync(dir, { recursive: true });
+      ensureOwnerOnlyDirectory(dir);
       const path = join(dir, `${result.run_id}.json`);
-      writeFileSync(path, `${JSON.stringify(result, null, 2)}\n`);
+      secureWriteFile(path, `${JSON.stringify(result, null, 2)}\n`);
       return path;
     },
   };

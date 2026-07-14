@@ -1,11 +1,12 @@
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import type { AgentToolResult } from "@earendil-works/pi-coding-agent";
 import type { AutocompleteItem } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import type { ExtensionAPI, ExtensionContext, ToolResultEvent } from "@earendil-works/pi-coding-agent";
+import { secureWriteFile, tightenOwnerOnlyFile } from "@fiale-plus/pi-core";
 import type { BoundedContextBroker, ContextArtifact } from "@fiale-plus/pi-core";
 import { createFileContextBroker } from "./file.js";
 import { createInMemoryContextBroker } from "./index.js";
@@ -70,7 +71,9 @@ function quarantineSqliteArtifacts(dbPath: string): string[] {
     if (!existsSync(candidate)) continue;
     const backupPath = `${candidate}.recovered-${stamp}`;
     try {
+      tightenOwnerOnlyFile(candidate);
       renameSync(candidate, backupPath);
+      tightenOwnerOnlyFile(backupPath);
       backups.push(backupPath);
     } catch (error) {
       console.warn("Context broker SQLite recovery could not move aside file", candidate, error);
@@ -151,8 +154,7 @@ function saveConfiguredRewriteThresholdBytes(ctx: Pick<ExtensionContext, "cwd"> 
     ...existing,
     rewriteThresholdBytes: value,
   };
-  mkdirSync(dirname(path), { recursive: true });
-  writeFileSync(path, `${JSON.stringify(next, null, 2)}\n`);
+  secureWriteFile(path, `${JSON.stringify(next, null, 2)}\n`);
   return path;
 }
 
@@ -163,8 +165,7 @@ function saveConfiguredContextLensesEnabled(ctx: Pick<ExtensionContext, "cwd"> |
     ...existing,
     contextLensesEnabled: value,
   };
-  mkdirSync(dirname(path), { recursive: true });
-  writeFileSync(path, `${JSON.stringify(next, null, 2)}\n`);
+  secureWriteFile(path, `${JSON.stringify(next, null, 2)}\n`);
   return path;
 }
 

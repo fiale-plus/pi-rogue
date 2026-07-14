@@ -1,6 +1,7 @@
 import { homedir } from "node:os";
-import { dirname, join, resolve } from "node:path";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { join, resolve } from "node:path";
+import { existsSync, readFileSync } from "node:fs";
+import { secureWriteFile } from "@fiale-plus/pi-core";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import {
   completeSimple,
@@ -212,8 +213,7 @@ function readRecipesForEdit(path: string): { recipes: FusionRecipe[]; errors: st
 }
 
 function writeRecipes(path: string, recipes: FusionRecipe[]): void {
-  mkdirSync(dirname(path), { recursive: true });
-  writeFileSync(path, `${JSON.stringify({ recipes }, null, 2)}\n`, "utf8");
+  secureWriteFile(path, `${JSON.stringify({ recipes }, null, 2)}\n`);
 }
 
 function parseConfigureFlags(parts: string[]): { values: string[]; maxTokens?: number; timeoutMs?: number; perModelTimeoutMs?: number; temperature?: number; errors: string[] } {

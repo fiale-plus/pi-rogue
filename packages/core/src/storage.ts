@@ -1,8 +1,9 @@
-import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { dirname } from "node:path";
+import { ensureOwnerOnlyDirectory, secureWriteFile } from "./secure-fs.js";
 
 export function ensureParent(filePath: string): string {
-  mkdirSync(dirname(filePath), { recursive: true });
+  ensureOwnerOnlyDirectory(dirname(filePath));
   return filePath;
 }
 
@@ -16,12 +17,12 @@ export function readText(filePath: string, fallback = ""): string {
 
 export function writeText(filePath: string, text: string): void {
   ensureParent(filePath);
-  writeFileSync(filePath, text, "utf8");
+  secureWriteFile(filePath, text);
 }
 
 export function appendText(filePath: string, text: string): void {
   ensureParent(filePath);
-  appendFileSync(filePath, text, "utf8");
+  secureWriteFile(filePath, text, "append");
 }
 
 export function readJson<T>(filePath: string, fallback: T): T {

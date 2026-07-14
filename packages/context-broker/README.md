@@ -33,7 +33,9 @@ When active, the bundle registers:
 
 The command includes autocomplete for subcommands and known artifact handles. Exact handle lookup returns clipped payload text; text search returns a smaller clipped excerpt, and truncation is marked explicitly. Exact-handle misses and text/filter misses use distinct messages, and `/pi-rogue-context status` reports exact/text miss counters.
 
-Optional durability is available with `PI_CONTEXT_BROKER_DURABLE=true` or `PI_CONTEXT_BROKER_STORE_DIR=/path/to/store`. Durable mode now defaults to SQLite (`artifacts.sqlite`) with an FTS index for text lookup, so exact handles, tier, and pin state survive restarts without replay reconstruction. Set `PI_CONTEXT_BROKER_BACKEND=jsonl` to use the legacy JSONL/blob backend. Durable mode applies default global retention caps when env caps are not set: 2,048 records and 256 MiB across sessions.
+Optional durability is available with `PI_CONTEXT_BROKER_DURABLE=true` or `PI_CONTEXT_BROKER_STORE_DIR=/path/to/store`. Durable state directories are created/tightened to owner-only `0700`, and SQLite, sidecar, JSONL metadata, blob, recovery, and shared-state files are created/tightened to `0600` independent of umask. Custom paths must be owned by the current user and must not themselves be symbolic links; insecure pre-existing owner-owned modes are tightened, while links, non-regular targets, and foreign-owned targets are rejected. Do not point multiple OS users at one store directory.
+
+Durable mode now defaults to SQLite (`artifacts.sqlite`) with an FTS index for text lookup, so exact handles, tier, and pin state survive restarts without replay reconstruction. Set `PI_CONTEXT_BROKER_BACKEND=jsonl` to use the legacy JSONL/blob backend. Durable mode applies default global retention caps when env caps are not set: 2,048 records and 256 MiB across sessions.
 
 - `PI_CONTEXT_BROKER_REWRITE_THRESHOLD_BYTES` controls when large `toolResult` / `bashExecution` payloads are rewritten in-context. The default is `8192` bytes; minimum is `2048` bytes.
 - `PI_CONTEXT_BROKER_HOT_TO_WARM_MS` controls unpinned artifact cooling from hot to warm. The default is 2 hours.

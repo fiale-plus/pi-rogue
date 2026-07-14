@@ -123,6 +123,8 @@ The parallel runner writes raw answers and run metadata under `.pi/fusion/benchm
 npm run fusion:bench -- --report
 ```
 
+Fusion recipe state and run traces are created/tightened as owner-only directories (`0700`) and files (`0600`) independent of umask. Custom trace/config paths must be current-user-owned directories rather than symbolic links; do not share one writable trace directory across OS users.
+
 Do not infer Fusion quality from one cherry-picked prompt. Look for repeated wins on hard prompts, acceptable latency, and fewer missed risks/unsupported claims than the baseline.
 
 ## Future: agentic panels with pi-agents + pi-intercom
