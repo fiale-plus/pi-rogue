@@ -1,5 +1,30 @@
 # Changelog
 
+## 0.3.29
+
+### Summary
+
+This release hardens Pi-Rogue's supported Pi/Node runtime, persistence and routing safety, validation coverage, command semantics, and autoresearch completion lifecycle. It also makes the canonical npm artifact reproducible and smoke-tested before and after publication.
+
+### Changes
+
+- Move the supported host contract to Pi `>=0.80.6 <0.81.0` and Node.js `>=22.19.0`, including exact-minimum packed SQLite durability coverage.
+- Harden context-broker session identity, startup/runtime locking, corruption handling, and cross-process persistence.
+- Make root recursive tests and resolved TypeScript script coverage authoritative in required CI.
+- Separate explicit user routing overrides from policy metadata and prevent weak-label datasets from becoming promotable evaluation truth.
+- Validate binary-gate artifacts, strong-model posture configuration, command dispatch, plain-loop backlog behavior, and advisor check-in demand.
+- Require explicit confirmation before autoresearch lab activation and require two distinct delivered, evidence-backed cycles before research completion.
+- Define the canonical package as a Pi-loader artifact, allowlist its contents, include the MIT license, remove test sources, and pack/smoke/publish the exact same tarball.
+- Enforce committed canonical version authority, release-note evidence, exact legacy deprecation messages, bounded retries, and post-write verification.
+
+### Validation
+
+- Required CI on Node.js `22.19.0` for every merged change.
+- Full workspace TypeScript checks and recursive Vitest suite.
+- Exact canonical tarball install/load smoke through Pi `0.80.6`.
+- SQLite artifact persistence and reload across fresh processes at the minimum supported runtime.
+- Independent reviewer and Codex review loops for the included audit fixes.
+
 ## 0.3.8
 
 ### Summary
