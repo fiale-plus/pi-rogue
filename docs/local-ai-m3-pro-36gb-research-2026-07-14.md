@@ -330,6 +330,22 @@ Rank by:
 - [MLX-LM Gemma 4 parser fix #1150](https://github.com/ml-explore/mlx-lm/pull/1150)
 - [MLX-VLM DiffusionGemma marker bug #1351](https://github.com/Blaizzy/mlx-vlm/issues/1351) and [merged fix #1477](https://github.com/Blaizzy/mlx-vlm/pull/1477)
 
+## Deliverable validation
+
+The research artifacts were validated independently of model execution:
+
+- the Markdown report is readable and the CSV parses as 8 rows with 14 required fields;
+- all candidate/service model names and pinned revisions resolve through the Hugging Face API;
+- expanded-tree or exact-GGUF byte counts match every CSV row;
+- licenses match Hub metadata;
+- MLX 0.32.0, MLX-LM 0.31.3, MLX-VLM 0.6.4, and MLX-OptiQ 0.3.3 resolve on PyPI;
+- the published MLX-VLM 0.6.4 wheel contains Cohere2-MoE/North, Gemma 4, DiffusionGemma, and the Cohere/Gemma tool parsers cited by the report;
+- source URL checks and `git diff --check` pass;
+- fresh factual/practical reviewers and Codex reported no remaining blocker or major findings;
+- GitHub Actions `check (22.19.0)` passes for PR #323.
+
+The initial local `npm run check` and `npm test` attempts did not test this documentation change: the isolated worktree intentionally had no `node_modules`, so `tsc` and `vitest` were not found. A temporary attempt to reuse another worktree's `node_modules` resolved stale workspace symlinks from that other checkout and failed on unrelated module/export mismatches. No dependency installation was performed. The clean GitHub Actions job installs the pinned lockfile dependencies and is the authoritative repository check; it passes. This PR changes no executable code.
+
 ## Confidence and limits
 
 - **High confidence:** machine inventory, running-server state, complete Hub-tree byte totals, published runtime support, issue/PR status observed on 2026-07-14.
