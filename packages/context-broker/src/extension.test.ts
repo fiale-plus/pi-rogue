@@ -160,7 +160,7 @@ briefBytes: 1200,
       content: [{ type: "text", text: "keep payload" }],
       isError: false,
     }, ctx);
-    const keepCompletion = commands.get("pi-rogue-context").getArgumentCompletions("pin ")?.find((item: any) => String(item.description).includes("echo keep"));
+    const keepCompletion = commands.get("pi-rogue-context").getArgumentCompletions("pin ", ctx)?.find((item: any) => String(item.description).includes("echo keep"));
     const keepHandle = keepCompletion?.value.replace(/^pin /, "");
     expect(keepHandle).toBeTruthy();
     await commands.get("pi-rogue-context").handler(`pin ${keepHandle}`, ctx);
@@ -229,7 +229,7 @@ lookupBytes: 80, searchBytes: 50,
       isError: false,
     }, ctx);
 
-    const lookupCompletion = commands.get("pi-rogue-context").getArgumentCompletions("lookup ")?.[0];
+    const lookupCompletion = commands.get("pi-rogue-context").getArgumentCompletions("lookup ", ctx)?.[0];
     expect(lookupCompletion.value).toMatch(/^lookup ctx:\/\//);
 
     await commands.get("pi-rogue-context").handler(lookupCompletion.value, ctx);
@@ -258,7 +258,7 @@ lookupBytes: 80, searchBytes: 50,
       isError: false,
     }, ctx);
 
-    const exportCompletion = commands.get("pi-rogue-context").getArgumentCompletions("export ")?.[0];
+    const exportCompletion = commands.get("pi-rogue-context").getArgumentCompletions("export ", ctx)?.[0];
     expect(exportCompletion.value.startsWith("export ctx://")).toBe(true);
     const exportHandle = exportCompletion.value.replace(/^export /, "");
 
@@ -290,7 +290,7 @@ lookupBytes: 80, searchBytes: 50,
       isError: false,
     }, ctx);
 
-    const lookupCompletion = commands.get("pi-rogue-context").getArgumentCompletions("lookup ")?.[0];
+    const lookupCompletion = commands.get("pi-rogue-context").getArgumentCompletions("lookup ", ctx)?.[0];
     expect(lookupCompletion?.value.startsWith("lookup ctx://")).toBe(true);
     const lookupHandle = lookupCompletion?.value.replace(/^lookup /, "");
 
@@ -317,7 +317,7 @@ lookupBytes: 80, searchBytes: 50,
       isError: false,
     }, ctx);
 
-    const lookupCompletion = commands.get("pi-rogue-context").getArgumentCompletions("lookup ")?.[0];
+    const lookupCompletion = commands.get("pi-rogue-context").getArgumentCompletions("lookup ", ctx)?.[0];
     const lookupHandle = lookupCompletion?.value.replace(/^lookup /, "");
 
     await commands.get("pi-rogue-context").handler(`lookup ${lookupHandle}`, ctx);
@@ -343,7 +343,7 @@ lookupBytes: 80, searchBytes: 50,
       isError: false,
     }, ctx);
 
-    const lookupCompletion = commands.get("pi-rogue-context").getArgumentCompletions("lookup ")?.[0];
+    const lookupCompletion = commands.get("pi-rogue-context").getArgumentCompletions("lookup ", ctx)?.[0];
     const lookupHandle = lookupCompletion?.value.replace(/^lookup /, "");
 
     await commands.get("pi-rogue-context").handler(`lookup ${lookupHandle}`, ctx);
@@ -393,7 +393,7 @@ lookupBytes: 80, searchBytes: 50,
       isError: false,
     }, ctx);
 
-    const completion = commands.get("pi-rogue-context").getArgumentCompletions("lookup ")?.[0];
+    const completion = commands.get("pi-rogue-context").getArgumentCompletions("lookup ", ctx)?.[0];
     await commands.get("pi-rogue-context").handler(completion?.value ?? "", ctx);
 
     const message = notifications.at(-1)?.message ?? "";
@@ -418,7 +418,7 @@ lookupBytes: 500,
       content: [{ type: "text", text: "exact evidence payload" }],
       isError: false,
     }, ctx);
-    const handle = commands.get("pi-rogue-context").getArgumentCompletions("lookup ")?.[0].value.replace(/^lookup /, "");
+    const handle = commands.get("pi-rogue-context").getArgumentCompletions("lookup ", ctx)?.[0].value.replace(/^lookup /, "");
     const result = await tools.get("context_lookup").execute("lookup-call", { handle }, undefined, undefined, ctx);
 
     expect(result.content[0].text).toContain(handle);
@@ -461,7 +461,7 @@ lookupBytes: 500,
       isError: false,
     }, ctx);
 
-    const handle = commands.get("pi-rogue-context").getArgumentCompletions("lookup ")?.[0].value.replace(/^lookup /, "");
+    const handle = commands.get("pi-rogue-context").getArgumentCompletions("lookup ", ctx)?.[0].value.replace(/^lookup /, "");
     const toolResult = await tools.get("context_lookup").execute("lookup-call", { handle }, undefined, undefined, ctx);
     await commands.get("pi-rogue-context").handler(`lookup ${handle}`, ctx);
     await commands.get("pi-rogue-context").handler(`pin ${handle}`, ctx);
@@ -508,7 +508,7 @@ lookupBytes: 500,
       content: [{ type: "text", text: "CURRENT_LOOKUP_EVIDENCE_" + "x".repeat(120) }],
       isError: false,
     }, ctx);
-    const handle = commands.get("pi-rogue-context").getArgumentCompletions("lookup ")?.[0].value.replace(/^lookup /, "");
+    const handle = commands.get("pi-rogue-context").getArgumentCompletions("lookup ", ctx)?.[0].value.replace(/^lookup /, "");
     const lookupResult = await tools.get("context_lookup").execute("lookup-current", { handle }, undefined, undefined, ctx);
 
     const contextResult = await handlers.get("context")?.[0]({
@@ -534,7 +534,7 @@ lookupBytes: 500,
       content: [{ type: "text", text: "source evidence payload" }],
       isError: false,
     }, ctx);
-    const handle = commands.get("pi-rogue-context").getArgumentCompletions("lookup ")?.[0].value.replace(/^lookup /, "");
+    const handle = commands.get("pi-rogue-context").getArgumentCompletions("lookup ", ctx)?.[0].value.replace(/^lookup /, "");
     const lookupResult = await tools.get("context_lookup").execute("lookup-call", { handle }, undefined, undefined, ctx);
 
     await runHandlers(handlers, "tool_result", {
@@ -833,7 +833,7 @@ lookupBytes: 500,
     }, ctx);
 
     const text = result.messages[1].content[0].text;
-    const handle = commands.get("pi-rogue-context").getArgumentCompletions("lookup ")?.[0]?.value.replace(/^lookup /, "");
+    const handle = commands.get("pi-rogue-context").getArgumentCompletions("lookup ", ctx)?.[0]?.value.replace(/^lookup /, "");
     expect(text).toContain("Log/error lens");
     expect(text).toContain("source=cat /var/log/app.log");
     expect(text).toContain("Lens view (max 4096 bytes):");
@@ -972,7 +972,7 @@ maxRecords: 1,
       isError: false,
     }, ctx);
 
-    const lookupCompletion = commands.get("pi-rogue-context").getArgumentCompletions("lookup ")?.[0];
+    const lookupCompletion = commands.get("pi-rogue-context").getArgumentCompletions("lookup ", ctx)?.[0];
     await commands.get("pi-rogue-context").handler(lookupCompletion.value, ctx);
 
     expect(notifications.at(-1)?.message).not.toContain("abc123456789");
@@ -1034,14 +1034,14 @@ maxRecords: 1,
         isError: false,
         timestamp: 100,
       }, ctx);
-      const handle = first.commands.get("pi-rogue-context").getArgumentCompletions("lookup ")?.[0].value.replace(/^lookup /, "");
+      const handle = first.commands.get("pi-rogue-context").getArgumentCompletions("lookup ", ctx)?.[0].value.replace(/^lookup /, "");
       await first.commands.get("pi-rogue-context").handler(`pin ${handle}`, ctx);
 
       const second = createPiMock();
       const secondRun = createCtx();
       await registerContextBrokerBeta(second.pi, { durable: true, storeDir: dir });
       await runHandlers(second.handlers, "session_start", { type: "session_start" }, secondRun.ctx);
-      const secondHandle = second.commands.get("pi-rogue-context").getArgumentCompletions("lookup ")?.[0].value.replace(/^lookup /, "");
+      const secondHandle = second.commands.get("pi-rogue-context").getArgumentCompletions("lookup ", secondRun.ctx)?.[0].value.replace(/^lookup /, "");
       await second.commands.get("pi-rogue-context").handler(`lookup ${handle}`, secondRun.ctx);
       await second.commands.get("pi-rogue-context").handler("brief", secondRun.ctx);
       await second.commands.get("pi-rogue-context").handler("status", secondRun.ctx);
@@ -1129,7 +1129,7 @@ maxRecords: 1,
         lockDb.close();
       }
 
-      expect((pi as any).__piRogueContextBroker.lookup({ text: "payload preserved" })).toHaveLength(1);
+      expect((pi as any).__piRogueContextBroker.lookup({ text: "payload preserved" }, ctx)).toHaveLength(1);
       await runHandlers(handlers, "tool_result", {
         type: "tool_result",
         toolCallId: "post-compact-lock-call",
@@ -1145,7 +1145,7 @@ maxRecords: 1,
       expect(notifications.at(-1)?.message).toContain("compactCleanupFailures=2");
 
       await runHandlers(handlers, "session_compact", { type: "session_compact" }, ctx);
-      expect((pi as any).__piRogueContextBroker.lookup({ text: "payload preserved" })).toHaveLength(0);
+      expect((pi as any).__piRogueContextBroker.lookup({ text: "payload preserved" }, ctx)).toHaveLength(0);
       expect(notifications.at(-1)?.message).toContain("purged 2 unpinned artifacts");
     } finally {
       rmSync(dir, { recursive: true, force: true });
@@ -1194,7 +1194,7 @@ maxRecords: 1,
         isError: false,
         timestamp: 101,
       }, ctx);
-      expect((pi as any).__piRogueContextBroker.lookup({ text: "persisted after release" })[0]?.payload).toContain("persisted after release");
+      expect((pi as any).__piRogueContextBroker.lookup({ text: "persisted after release" }, ctx)[0]?.payload).toContain("persisted after release");
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -1304,6 +1304,61 @@ maxRecords: 1,
 
     expect(second.notifications.at(-1)?.message).toContain("payload-from-B");
     expect(second.notifications.at(-1)?.message).not.toContain("payload-from-A");
+  });
+
+  it("keeps alternating session prompt briefs and non-exact lookups isolated", async () => {
+    const { pi, handlers, commands, tools } = createPiMock();
+    registerContextBrokerBeta(pi, { rewriteThresholdBytes: 1 });
+    const first = createCtx();
+    first.ctx.sessionManager.getSessionFile = () => "/sessions/a.jsonl";
+    const second = createCtx();
+    second.ctx.sessionManager.getSessionFile = () => "/sessions/b.jsonl";
+
+    await runHandlers(handlers, "tool_result", {
+      type: "tool_result",
+      toolCallId: "call-a",
+      toolName: "bash",
+      input: { command: "echo SESSION_A_SECRET_MARKER" },
+      content: [{ type: "text", text: "payload-a" }],
+      isError: false,
+    }, first.ctx);
+    const aHandle = commands.get("pi-rogue-context").getArgumentCompletions("lookup ")?.[0]?.value.replace(/^lookup /, "");
+
+    await runHandlers(handlers, "tool_result", {
+      type: "tool_result",
+      toolCallId: "call-b",
+      toolName: "bash",
+      input: { command: "echo SESSION_B_SECRET_MARKER" },
+      content: [{ type: "text", text: "payload-b" }],
+      isError: false,
+    }, second.ctx);
+    const bHandle = commands.get("pi-rogue-context").getArgumentCompletions("lookup ")?.[0]?.value.replace(/^lookup /, "");
+
+    const aPrompt = await handlers.get("before_agent_start")?.[0]({ systemPrompt: "base-a" }, first.ctx);
+    const aCompletions = commands.get("pi-rogue-context").getArgumentCompletions("lookup ")?.map((item: any) => item.value) ?? [];
+    const bPrompt = await handlers.get("before_agent_start")?.[0]({ systemPrompt: "base-b" }, second.ctx);
+    const bCompletions = commands.get("pi-rogue-context").getArgumentCompletions("lookup ")?.map((item: any) => item.value) ?? [];
+    const aLookup = await tools.get("context_lookup").execute("lookup-a", { text: "SESSION_A_SECRET_MARKER" }, undefined, undefined, first.ctx);
+    const bLookup = await tools.get("context_lookup").execute("lookup-b", { text: "SESSION_B_SECRET_MARKER" }, undefined, undefined, second.ctx);
+
+    expect(aHandle).toBeTruthy();
+    expect(bHandle).toBeTruthy();
+    expect(aPrompt.systemPrompt).toContain(aHandle);
+    expect(aPrompt.systemPrompt).not.toContain(bHandle);
+    expect(aPrompt.systemPrompt).toContain("SESSION_A_SECRET_MARKER");
+    expect(aPrompt.systemPrompt).not.toContain("SESSION_B_SECRET_MARKER");
+    expect(bPrompt.systemPrompt).toContain(bHandle);
+    expect(bPrompt.systemPrompt).not.toContain(aHandle);
+    expect(bPrompt.systemPrompt).toContain("SESSION_B_SECRET_MARKER");
+    expect(bPrompt.systemPrompt).not.toContain("SESSION_A_SECRET_MARKER");
+    expect(aLookup.content[0].text).toContain("SESSION_A_SECRET_MARKER");
+    expect(aLookup.content[0].text).not.toContain("SESSION_B_SECRET_MARKER");
+    expect(bLookup.content[0].text).toContain("SESSION_B_SECRET_MARKER");
+    expect(bLookup.content[0].text).not.toContain("SESSION_A_SECRET_MARKER");
+    expect(aCompletions).toContain(`lookup ${aHandle}`);
+    expect(aCompletions).not.toContain(`lookup ${bHandle}`);
+    expect(bCompletions).toContain(`lookup ${bHandle}`);
+    expect(bCompletions).not.toContain(`lookup ${aHandle}`);
   });
 
   it("injects a bounded broker brief without raw payload text", async () => {

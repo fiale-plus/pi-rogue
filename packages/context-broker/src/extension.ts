@@ -647,7 +647,10 @@ export async function registerContextBrokerBeta(pi: ExtensionAPI, options: Conte
 
   const seenSourceIds = new Set<string>();
   const sourceHandles = new Map<string, string>();
-  let activeSessionId = process.cwd();
+  // Pi invokes command autocomplete with only the argument prefix. Retain the
+  // active UI session only for completion lookup; prompt/tool boundaries
+  // always derive session identity from their lifecycle context.
+  let autocompleteSessionId = process.cwd();
   const routingTelemetry = {
     contextHookCalls: 0,
     contextHookToolResults: 0,
@@ -771,11 +774,21 @@ export async function registerContextBrokerBeta(pi: ExtensionAPI, options: Conte
     return `Context broker routing telemetry: ${line.join(", ")}`;
   }
 
-  function sourceCacheKey(sourceId: string): string {
-    return `${activeSessionId}\u0000${sourceId}`;
+  function sourceCacheKey(sessionId: string, sourceId: string): string {
+    return `${sessionId}\u0000${sourceId}`;
   }
 
-  function publishToolArtifact(event: {
+  function clearSourceCache(sessionId: string): void {
+    const prefix = `${sessionId}\u0000`;
+    for (const key of seenSourceIds) {
+      if (key.startsWith(prefix)) seenSourceIds.delete(key);
+    }
+    for (const key of sourceHandles.keys()) {
+      if (key.startsWith(prefix)) sourceHandles.delete(key);
+    }
+  }
+
+  function publishToolArtifact(sessionId: string, event: {
     toolName: string;
     input?: any;
     content?: unknown;
@@ -787,7 +800,7 @@ export async function registerContextBrokerBeta(pi: ExtensionAPI, options: Conte
   }): ContextArtifact | null {
     if (!shouldBrokerToolName(event.toolName)) return null;
 
-    const cacheKey = event.sourceId ? sourceCacheKey(event.sourceId) : undefined;
+    const cacheKey = event.sourceId ? sourceCacheKey(sessionId, event.sourceId) : undefined;
     if (cacheKey) {
       const existingHandle = sourceHandles.get(cacheKey);
       if (existingHandle) {
@@ -815,7 +828,7 @@ export async function registerContextBrokerBeta(pi: ExtensionAPI, options: Conte
     let artifact: ContextArtifact;
     try {
       artifact = broker.publish({
-        sessionId: activeSessionId,
+        sessionId,
         kind: "tool_output",
         payload,
         summary: summarizeTool(sanitizedEvent, bytes, hostilePayload),
@@ -856,7 +869,7 @@ export async function registerContextBrokerBeta(pi: ExtensionAPI, options: Conte
   }
 
   function backfillSessionArtifacts(ctx: Partial<SessionContextLike>): { added: number; scanned: number; errors: number } {
-    activeSessionId = sessionIdFor(ctx);
+    const sessionId = sessionIdFor(ctx);
     let entries: any[] = [];
     try {
       entries = ctx.sessionManager?.getBranch?.() ?? [];
@@ -880,9 +893,9 @@ export async function registerContextBrokerBeta(pi: ExtensionAPI, options: Conte
           routingTelemetry.backfillScans += 1;
           const sourceId = typeof entry.message.toolCallId === "string" ? entry.message.toolCallId : entryId;
           const toolInput = sourceId ? toolInputs.get(sourceId) : undefined;
-          const sourceKey = sourceId ? sourceCacheKey(sourceId) : undefined;
+          const sourceKey = sourceId ? sourceCacheKey(sessionId, sourceId) : undefined;
           const alreadySeen = sourceKey ? seenSourceIds.has(sourceKey) || sourceHandles.has(sourceKey) : false;
-          if (publishToolArtifact({
+          if (publishToolArtifact(sessionId, {
             toolName: String(entry.message.toolName ?? toolInput?.toolName ?? "tool"),
             input: entry.message.input ?? toolInput?.input,
             content: entry.message.content,
@@ -902,9 +915,9 @@ export async function registerContextBrokerBeta(pi: ExtensionAPI, options: Conte
           scanned += 1;
           routingTelemetry.backfillScans += 1;
           const sourceId = entryId;
-          const sourceKey = sourceId ? sourceCacheKey(sourceId) : undefined;
+          const sourceKey = sourceId ? sourceCacheKey(sessionId, sourceId) : undefined;
           const alreadySeen = sourceKey ? seenSourceIds.has(sourceKey) || sourceHandles.has(sourceKey) : false;
-          if (publishToolArtifact({
+          if (publishToolArtifact(sessionId, {
             toolName: "bash",
             input: { command: entry.message.command },
             content: entry.message.output,
@@ -932,17 +945,24 @@ export async function registerContextBrokerBeta(pi: ExtensionAPI, options: Conte
     return { added, scanned, errors };
   }
 
-  function currentBrief(): string {
-    return broker.renderBrief({ sessionId: activeSessionId, budgetBytes: briefBytes });
+  function currentBrief(sessionId: string): string {
+    return broker.renderBrief({ sessionId, budgetBytes: briefBytes });
   }
 
   p.__piRogueContextBroker = {
-    renderBrief: currentBrief,
-    lookup: broker.lookup,
+    sessionId: (ctx: Partial<SessionContextLike>) => sessionIdFor(ctx),
+    renderBrief: (ctx: Partial<SessionContextLike>) => currentBrief(sessionIdFor(ctx)),
+    lookup: (query: Parameters<typeof broker.lookup>[0], ctx: Partial<SessionContextLike>) => {
+      const input = query ?? {};
+      return broker.lookup({
+        ...input,
+        sessionId: input.handle ? input.sessionId : input.sessionId ?? sessionIdFor(ctx),
+      });
+    },
     status: broker.status,
-    publish: (input: Omit<Parameters<typeof broker.publish>[0], "sessionId"> & { sessionId?: string }) => broker.publish({
+    publish: (input: Omit<Parameters<typeof broker.publish>[0], "sessionId"> & { sessionId?: string }, ctx: Partial<SessionContextLike>) => broker.publish({
       ...input,
-      sessionId: input.sessionId ?? activeSessionId,
+      sessionId: input.sessionId ?? sessionIdFor(ctx),
     }),
   };
 
@@ -956,9 +976,9 @@ export async function registerContextBrokerBeta(pi: ExtensionAPI, options: Conte
     { value: "prune", label: "prune", description: "Run TTL/cap pruning now" },
   ];
 
-  function artifactCompletions(action: "lookup" | "pin" | "export", query: string): AutocompleteItem[] {
+  function artifactCompletions(action: "lookup" | "pin" | "export", query: string, sessionId: string): AutocompleteItem[] {
     const needle = query.trim().toLowerCase();
-    return broker.lookup({ sessionId: activeSessionId, limit: 10 })
+    return broker.lookup({ sessionId, limit: 10 })
       .filter((artifact) => {
         if (!needle) return true;
         return artifact.handle.toLowerCase().includes(needle)
@@ -976,6 +996,7 @@ export async function registerContextBrokerBeta(pi: ExtensionAPI, options: Conte
 
   function contextArgumentCompletions(argumentPrefix: string): AutocompleteItem[] | null {
     const prefix = argumentPrefix.trimStart();
+    const sessionId = autocompleteSessionId;
     const [action = "", ...restParts] = prefix.split(/\s+/);
     const hasActionSeparator = /\s/.test(prefix);
 
@@ -985,7 +1006,7 @@ export async function registerContextBrokerBeta(pi: ExtensionAPI, options: Conte
     }
 
     if (action === "lookup" || action === "pin" || action === "export") {
-      const items = artifactCompletions(action, restParts.join(" "));
+      const items = artifactCompletions(action, restParts.join(" "), sessionId);
       return items.length ? items : null;
     }
 
@@ -1023,6 +1044,7 @@ export async function registerContextBrokerBeta(pi: ExtensionAPI, options: Conte
   }
 
   pi.on("session_start", async (_event, ctx) => {
+    autocompleteSessionId = sessionIdFor(ctx);
     refreshRewriteThresholdFromConfig(ctx);
     const { added, scanned, errors } = backfillSessionArtifacts(ctx);
     ctx.ui.setStatus?.("context-broker", "ctx:on");
@@ -1037,12 +1059,13 @@ export async function registerContextBrokerBeta(pi: ExtensionAPI, options: Conte
   });
 
   pi.on("session_compact", async (_event, ctx) => {
-    activeSessionId = sessionIdFor(ctx);
+    const sessionId = sessionIdFor(ctx);
+    autocompleteSessionId = sessionId;
     let before: ContextBrokerStatus;
     let after: ContextBrokerStatus;
     try {
       before = broker.status();
-      after = broker.purge({ sessionId: activeSessionId, keepPinned: true });
+      after = broker.purge({ sessionId, keepPinned: true });
     } catch (error) {
       routingTelemetry.compactCleanupFailures += 1;
       const failureKind = /database is locked|SQLITE_BUSY|SQLITE_LOCKED/i.test(errorMessage(error)) ? "locked" : "unavailable";
@@ -1056,22 +1079,23 @@ export async function registerContextBrokerBeta(pi: ExtensionAPI, options: Conte
       }
       return;
     }
-    seenSourceIds.clear();
-    sourceHandles.clear();
+    clearSourceCache(sessionId);
     const removed = before.records - after.records;
     if (removed > 0) ctx.ui.notify(`Context broker compact cleanup purged ${removed} unpinned artifact${removed === 1 ? "" : "s"}; pinned artifacts retained.`, "info");
   });
 
   pi.on("tool_result", async (event: ToolResultEvent, ctx) => {
-    activeSessionId = sessionIdFor(ctx);
+    const sessionId = sessionIdFor(ctx);
+    autocompleteSessionId = sessionId;
     routingTelemetry.toolResultEvents += 1;
-    publishToolArtifact({ ...event, sourceId: event.toolCallId });
+    publishToolArtifact(sessionId, { ...event, sourceId: event.toolCallId });
     notifyPublishFailure(ctx);
   });
 
   pi.on("context", async (event, ctx) => {
     refreshRewriteThresholdFromConfig(ctx);
-    activeSessionId = sessionIdFor(ctx);
+    const sessionId = sessionIdFor(ctx);
+    autocompleteSessionId = sessionId;
     routingTelemetry.contextHookCalls += 1;
     const toolInputs = collectToolInputs(event.messages);
     type RewriteDraft = {
@@ -1126,7 +1150,7 @@ export async function registerContextBrokerBeta(pi: ExtensionAPI, options: Conte
         const replacementText = (live: ContextArtifact) => (lens
           ? contextLensPlaceholder(live, lens, commandOrPath)
           : brokerPlaceholder(live));
-        const artifact = publishToolArtifact({
+        const artifact = publishToolArtifact(sessionId, {
           toolName,
           input: message.input ?? toolInput?.input,
           content: message.content,
@@ -1182,7 +1206,7 @@ export async function registerContextBrokerBeta(pi: ExtensionAPI, options: Conte
         const replacementText = (live: ContextArtifact) => (lens
           ? contextLensPlaceholder(live, lens, command)
           : brokerPlaceholder(live));
-        const artifact = publishToolArtifact({
+        const artifact = publishToolArtifact(sessionId, {
           toolName: "bash",
           input: { command: message.command },
           content: message.output,
@@ -1227,13 +1251,13 @@ export async function registerContextBrokerBeta(pi: ExtensionAPI, options: Conte
       if (!draft.artifact || !draft.rewrite) return draft.original;
       const matches = safeBrokerLookup({ handle: draft.artifact.handle });
       if (matches === null) {
-        for (const parentId of draft.artifact.parentIds) sourceHandles.delete(parentId);
+        for (const parentId of draft.artifact.parentIds) sourceHandles.delete(sourceCacheKey(sessionId, parentId));
         return draft.original;
       }
       const live = matches[0];
       if (!live) {
         if (draft.usedContextLens) routingTelemetry.contextLensFallbacks += 1;
-        for (const parentId of draft.artifact.parentIds) sourceHandles.delete(parentId);
+        for (const parentId of draft.artifact.parentIds) sourceHandles.delete(sourceCacheKey(sessionId, parentId));
         if (draft.safeFallback) {
           changed = true;
           recordContextRewrite(draft.rawBytes ?? promptPayloadBytes(draft.original), promptPayloadBytes(draft.safeFallback));
@@ -1251,8 +1275,10 @@ export async function registerContextBrokerBeta(pi: ExtensionAPI, options: Conte
     return changed ? { messages } : undefined;
   });
 
-  pi.on("before_agent_start", async (event) => {
-    const brief = currentBrief();
+  pi.on("before_agent_start", async (event, ctx) => {
+    const sessionId = sessionIdFor(ctx);
+    autocompleteSessionId = sessionId;
+    const brief = currentBrief(sessionId);
     if (!brief.includes("ctx://")) return;
     return {
       systemPrompt: [
@@ -1282,7 +1308,7 @@ export async function registerContextBrokerBeta(pi: ExtensionAPI, options: Conte
       limit: Type.Optional(Type.Number({ minimum: 1, maximum: 10, description: "Maximum artifacts to return" })),
     }),
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
-      activeSessionId = sessionIdFor(ctx);
+      const sessionId = sessionIdFor(ctx);
       routingTelemetry.toolLookupCalls += 1;
       const p = params as { handle?: string; text?: string; path?: string; tag?: string; kind?: any; tier?: any; limit?: number };
       const exact = typeof p.handle === "string" && p.handle.startsWith("ctx://");
@@ -1294,7 +1320,7 @@ export async function registerContextBrokerBeta(pi: ExtensionAPI, options: Conte
       }
       const results = broker.lookup({
         handle: exact ? p.handle : undefined,
-        sessionId: exact ? undefined : activeSessionId,
+        sessionId: exact ? undefined : sessionId,
         text: exact ? undefined : p.text,
         path: p.path,
         tag: p.tag,
@@ -1317,7 +1343,8 @@ export async function registerContextBrokerBeta(pi: ExtensionAPI, options: Conte
     description: "Inspect the context broker: status | brief | lookup <handle-or-text> | pin <handle-or-id> | export <handle-or-id> | config | prune",
     getArgumentCompletions: contextArgumentCompletions,
     handler: async (args, ctx) => {
-      activeSessionId = sessionIdFor(ctx);
+      const sessionId = sessionIdFor(ctx);
+      autocompleteSessionId = sessionId;
       const [action = "status", ...rest] = String(args || "").trim().split(/\s+/).filter(Boolean);
       const query = rest.join(" ");
 
@@ -1326,7 +1353,7 @@ export async function registerContextBrokerBeta(pi: ExtensionAPI, options: Conte
         routingTelemetry.statusCalls += 1;
         const status = broker.status();
         ctx.ui.notify(
-          `Context broker: enabled, backend=${effectiveBackend}, path=${effectivePath}, session=${activeSessionId}, records=${status.records}/${status.maxRecords}, bytes=${status.bytes}/${status.maxBytes}, rewriteThresholdBytes=${rewriteThresholdBytes}(${rewriteThresholdSource}), globalCaps=records:${capText(status.globalMaxRecords)} bytes:${capText(status.globalMaxBytes)}, tiers=hot:${status.hotRecords}/${status.hotBytes} warm:${status.warmRecords}/${status.warmBytes} cold:${status.coldRecords}/${status.coldBytes}, pinned=${status.pinnedRecords}/${status.pinnedBytes} bytes`,
+          `Context broker: enabled, backend=${effectiveBackend}, path=${effectivePath}, session=${sessionId}, records=${status.records}/${status.maxRecords}, bytes=${status.bytes}/${status.maxBytes}, rewriteThresholdBytes=${rewriteThresholdBytes}(${rewriteThresholdSource}), globalCaps=records:${capText(status.globalMaxRecords)} bytes:${capText(status.globalMaxBytes)}, tiers=hot:${status.hotRecords}/${status.hotBytes} warm:${status.warmRecords}/${status.warmBytes} cold:${status.coldRecords}/${status.coldBytes}, pinned=${status.pinnedRecords}/${status.pinnedBytes} bytes`,
           "info",
         );
         ctx.ui.notify(formatRoutingTelemetry(), "info");
@@ -1334,7 +1361,7 @@ export async function registerContextBrokerBeta(pi: ExtensionAPI, options: Conte
       }
 
       if (action === "brief") {
-        ctx.ui.notify(currentBrief(), "info");
+        ctx.ui.notify(currentBrief(sessionId), "info");
         return;
       }
 
@@ -1347,7 +1374,7 @@ export async function registerContextBrokerBeta(pi: ExtensionAPI, options: Conte
         const exact = query.startsWith("ctx://");
         routingTelemetry.commandLookupExactCalls += exact ? 1 : 0;
         routingTelemetry.commandLookupTextCalls += exact ? 0 : 1;
-        const results = broker.lookup(exact ? { handle: query } : { sessionId: activeSessionId, text: query, limit: 5 });
+        const results = broker.lookup(exact ? { handle: query } : { sessionId, text: query, limit: 5 });
         if (results.length) {
           routingTelemetry.commandLookupHits += 1;
         } else {
