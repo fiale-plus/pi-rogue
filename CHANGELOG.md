@@ -1,5 +1,29 @@
 # Changelog
 
+## 0.3.30
+
+### Summary
+
+This patch release completes the post-0.3.29 reliability audit across context persistence, advisor routing, orchestration lifecycle, Router/Fusion feedback, and bounded Fusion execution. Every retained change was backed by a focused reproduction or regression test.
+
+### Changes
+
+- Enforce owner-only persisted artifact permissions and make JSONL pruning durable, serialized, session-safe, and restart-stable.
+- Scope context source deduplication by session across extension and JSONL backends, honor environment configuration, and contain SQLite lock failures during compaction.
+- Keep Router observation active with printing disabled, restore profile/model feedback, and make same-session Fusion provider status accurate.
+- Dispose Fusion timeout resources, strictly validate judge/synthesis output, and enforce runtime default overall/per-model deadlines even for non-cooperative completers.
+- Continue advisor model fallback after per-candidate authentication failures and use complete, versioned, scope-aware answer-cache identities.
+- Make advisor manual mode explicit-only and turn trusted binary review-gate escalation into an actionable review route while preserving opt-outs and safety overrides.
+- Recover failed goal-message enqueues, release advisor check-in ownership on session shutdown, and preserve resumable goal/loop state.
+- Run required CI when draft pull requests become ready for review and preserve the canonical exact-artifact release/deprecation contract.
+
+### Validation
+
+- Required Node.js `22.19.0` CI passed for every merged change.
+- Full workspace TypeScript and validation-coverage checks passed.
+- Recursive Vitest suite passed with 61 files and 686 tests on the release baseline.
+- Canonical tarball contract, Pi-host loading, fresh-cache npm install, and legacy deprecation verification remain release gates.
+
 ## 0.3.29
 
 ### Summary
