@@ -7,7 +7,7 @@ import type { AutocompleteItem } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import type { ExtensionAPI, ExtensionContext, ToolResultEvent } from "@earendil-works/pi-coding-agent";
 import { secureWriteFile, tightenOwnerOnlyFile } from "@fiale-plus/pi-core";
-import type { BoundedContextBroker, ContextArtifact } from "@fiale-plus/pi-core";
+import type { BoundedContextBroker, ContextArtifact, ContextBrokerStatus } from "@fiale-plus/pi-core";
 import { createFileContextBroker } from "./file.js";
 import { createInMemoryContextBroker } from "./index.js";
 
@@ -687,10 +687,12 @@ export async function registerContextBrokerBeta(pi: ExtensionAPI, options: Conte
     statusCalls: 0,
     pruneCalls: 0,
     runtimePublishFailures: 0,
+    compactCleanupFailures: 0,
   };
   let unreportedPublishFailures = 0;
   let lastPublishFailureNoticeAt = 0;
   let lastPublishFailureKind = "unavailable";
+  let lastCompactFailureNoticeAt = 0;
 
   function recordPublishFailure(error: unknown): void {
     routingTelemetry.runtimePublishFailures += 1;
@@ -763,6 +765,7 @@ export async function registerContextBrokerBeta(pi: ExtensionAPI, options: Conte
       `pins=${routingTelemetry.pinCalls}`,
       `pruneCalls=${routingTelemetry.pruneCalls}`,
       `runtimePublishFailures=${routingTelemetry.runtimePublishFailures}`,
+      `compactCleanupFailures=${routingTelemetry.compactCleanupFailures}`,
       `backfill scans=${routingTelemetry.backfillScans} added=${routingTelemetry.backfillAdded} errors=${routingTelemetry.backfillErrors}`,
     ];
     return `Context broker routing telemetry: ${line.join(", ")}`;
@@ -1035,8 +1038,24 @@ export async function registerContextBrokerBeta(pi: ExtensionAPI, options: Conte
 
   pi.on("session_compact", async (_event, ctx) => {
     activeSessionId = sessionIdFor(ctx);
-    const before = broker.status();
-    const after = broker.purge({ sessionId: activeSessionId, keepPinned: true });
+    let before: ContextBrokerStatus;
+    let after: ContextBrokerStatus;
+    try {
+      before = broker.status();
+      after = broker.purge({ sessionId: activeSessionId, keepPinned: true });
+    } catch (error) {
+      routingTelemetry.compactCleanupFailures += 1;
+      const failureKind = /database is locked|SQLITE_BUSY|SQLITE_LOCKED/i.test(errorMessage(error)) ? "locked" : "unavailable";
+      const now = Date.now();
+      if (lastCompactFailureNoticeAt === 0 || now - lastCompactFailureNoticeAt >= 60_000) {
+        lastCompactFailureNoticeAt = now;
+        ctx.ui.notify(
+          `Context broker compact cleanup ${failureKind}; cleanup deferred and existing artifacts/source cache preserved.`,
+          "warning",
+        );
+      }
+      return;
+    }
     seenSourceIds.clear();
     sourceHandles.clear();
     const removed = before.records - after.records;

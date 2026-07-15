@@ -1098,6 +1098,60 @@ maxRecords: 1,
     }
   });
 
+  it("defers locked sqlite compaction without rejecting or discarding artifacts", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "ctx-broker-compact-lock-test-"));
+    const path = join(dir, "artifacts.sqlite");
+    try {
+      const { pi, handlers, commands } = createPiMock();
+      await registerContextBrokerBeta(pi, { durable: true, storeDir: dir, rewriteThresholdBytes: 1 });
+      const { ctx, notifications } = createCtx();
+      await runHandlers(handlers, "session_start", { type: "session_start" }, ctx);
+      await runHandlers(handlers, "tool_result", {
+        type: "tool_result",
+        toolCallId: "compact-lock-call",
+        toolName: "bash",
+        input: { command: "echo preserved" },
+        content: [{ type: "text", text: "payload preserved across deferred compaction" }],
+        isError: false,
+      }, ctx);
+
+      const lockDb = new DatabaseSync(path);
+      try {
+        lockDb.exec("BEGIN IMMEDIATE");
+        await expect(runHandlers(handlers, "session_compact", { type: "session_compact" }, ctx)).resolves.toBeUndefined();
+        await expect(runHandlers(handlers, "session_compact", { type: "session_compact" }, ctx)).resolves.toBeUndefined();
+        const compactWarnings = notifications.filter((entry) => entry.message.includes("cleanup deferred"));
+        expect(compactWarnings).toHaveLength(1);
+        expect(compactWarnings[0]).toMatchObject({ type: "warning" });
+        expect(compactWarnings[0]?.message).toContain("artifacts/source cache preserved");
+      } finally {
+        lockDb.exec("ROLLBACK");
+        lockDb.close();
+      }
+
+      expect((pi as any).__piRogueContextBroker.lookup({ text: "payload preserved" })).toHaveLength(1);
+      await runHandlers(handlers, "tool_result", {
+        type: "tool_result",
+        toolCallId: "post-compact-lock-call",
+        toolName: "bash",
+        input: { command: "echo recovered" },
+        content: [{ type: "text", text: "publish after compact lock release" }],
+        isError: false,
+      }, ctx);
+      expect(notifications.filter((entry) => entry.message.includes("publish failure"))).toHaveLength(0);
+      expect(notifications.filter((entry) => entry.message.includes("preserved original tool/context flow"))).toHaveLength(0);
+      await commands.get("pi-rogue-context").handler("status", ctx);
+      expect(notifications.at(-1)?.message).toContain("runtimePublishFailures=0");
+      expect(notifications.at(-1)?.message).toContain("compactCleanupFailures=2");
+
+      await runHandlers(handlers, "session_compact", { type: "session_compact" }, ctx);
+      expect((pi as any).__piRogueContextBroker.lookup({ text: "payload preserved" })).toHaveLength(0);
+      expect(notifications.at(-1)?.message).toContain("purged 2 unpinned artifacts");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }, 10_000);
+
   it("contains locked runtime publishes in tool_result and context hooks, then recovers", async () => {
     const dir = mkdtempSync(join(tmpdir(), "ctx-broker-runtime-lock-test-"));
     const path = join(dir, "artifacts.sqlite");
