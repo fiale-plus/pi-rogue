@@ -1,8 +1,11 @@
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { createRequire } from "node:module";
 import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+
+const fsRequire = createRequire(import.meta.url)("node:fs");
 import { createFileContextBroker } from "./file.js";
 import { MAX_CONTEXT_SOURCES_GLOBAL, MAX_CONTEXT_SOURCES_PER_SESSION } from "./index.js";
 
@@ -398,4 +401,58 @@ describe("file context broker durable pruning", () => {
     expect(restarted.lookup({ handle: retained.handle })).toHaveLength(1);
     expect(readdirSync(dir).some((name) => name.startsWith("metadata.jsonl.tmp-"))).toBe(false);
   });
+
+  it("does not re-read retained JSONL payload blobs on each normal append publish", () => {
+    const dir = mkdtempSync(join(tmpdir(), "ctx-file-replay-cost-"));
+    const broker = createFileContextBroker({
+      dir,
+      maxRecords: 2_048,
+      maxBytes: 64_000_000,
+      globalMaxRecords: 2_048,
+      globalMaxBytes: 64_000_000,
+    });
+    for (let index = 0; index < 64; index += 1) {
+      broker.publish(input(`${index}-${"x".repeat(16_384)}`));
+    }
+
+    const readFileSyncSpy = vi.spyOn(fsRequire, "readFileSync");
+    try {
+      readFileSyncSpy.mockClear();
+      broker.publish(input("extra append record", Date.now()));
+      const blobDir = join(dir, "blobs");
+      const blobReadCount = readFileSyncSpy.mock.calls.filter(([path]) => typeof path === "string" && path.startsWith(blobDir) && path.endsWith(".txt")).length;
+      expect(blobReadCount).toBe(0);
+    } finally {
+      readFileSyncSpy.mockRestore();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("does not re-read retained JSONL payload blobs when append hits configured caps", () => {
+    const dir = mkdtempSync(join(tmpdir(), "ctx-file-replay-cost-cap-"));
+    const broker = createFileContextBroker({
+      dir,
+      maxRecords: 2_048,
+      maxBytes: 16_000_000,
+      globalMaxRecords: 2_048,
+      globalMaxBytes: 16_000_000,
+    });
+    const now = Date.now();
+    for (let index = 0; index < 2_048; index += 1) {
+      broker.publish(input(`pre-${index}`, now + index));
+    }
+
+    const readFileSyncSpy = vi.spyOn(fsRequire, "readFileSync");
+    try {
+      readFileSyncSpy.mockClear();
+      broker.publish(input("cap overflow append", Date.now()));
+      const blobDir = join(dir, "blobs");
+      const blobReadCount = readFileSyncSpy.mock.calls.filter(([path]) => typeof path === "string" && path.startsWith(blobDir) && path.endsWith(".txt")).length;
+      expect(blobReadCount).toBe(0);
+      expect(broker.status().records).toBe(2_048);
+    } finally {
+      readFileSyncSpy.mockRestore();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }, 15000);
 });

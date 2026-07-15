@@ -1,4 +1,4 @@
-import { existsSync, readdirSync, readFileSync, renameSync, unlinkSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, renameSync, statSync, unlinkSync } from "node:fs";
 import { homedir } from "node:os";
 import { DatabaseSync } from "node:sqlite";
 import { dirname, join } from "node:path";
@@ -11,6 +11,29 @@ export interface FileContextBrokerOptions extends ContextBrokerOptions {
 }
 
 const STORE_VERSION = 1;
+type DurableStateSignature = string;
+
+function durableStoreSignature(dir: string): DurableStateSignature {
+  const checkpoint = checkpointFile(dir);
+  if (existsSync(checkpoint)) {
+    try {
+      const state = statSync(checkpoint);
+      return `checkpoint:${state.ino}:${state.size}:${state.mtimeMs}`;
+    } catch {
+      return `checkpoint-missing`;
+    }
+  }
+
+  const metadata = metadataFile(dir);
+  const sourceLedger = sourceLedgerFile(dir);
+  const metadataState = existsSync(metadata) ? statSync(metadata) : undefined;
+  const sourceState = existsSync(sourceLedger) ? statSync(sourceLedger) : undefined;
+  return `legacy:${metadataState ? `${metadataState.ino}:${metadataState.size}:${metadataState.mtimeMs}` : "missing"}:${sourceState ? `${sourceState.ino}:${sourceState.size}:${sourceState.mtimeMs}` : "missing"}`;
+}
+
+function isDurableStateSignature(stale: DurableStateSignature, current: DurableStateSignature): boolean {
+  return stale === current;
+}
 
 interface StoredRecord {
   version: number;
@@ -295,6 +318,84 @@ function removeUnreferencedBlobs(dir: string, keptSha256: Set<string>): void {
   }
 }
 
+function snapshotBrokerArtifacts(broker: BoundedContextBroker): (ContextArtifact & { sequence?: number })[] {
+  return (broker as BoundedContextBroker & {
+    [CONTEXT_BROKER_PERSISTENCE_SNAPSHOT](): (ContextArtifact & { sequence?: number })[];
+  })[CONTEXT_BROKER_PERSISTENCE_SNAPSHOT]();
+}
+
+function materializePersistedState(
+  artifacts: (ContextArtifact & { sequence?: number })[],
+  persistedSources: Map<string, string>,
+  persistedHandleByCurrent: Map<string, string>,
+  persistedIdByCurrent: Map<string, string>,
+): {
+  nextSources: Map<string, string>;
+  nextAliases: Map<string, string>;
+  nextPersistedByCurrent: Map<string, string>;
+  nextIdAliases: Map<string, string>;
+  nextPersistedIdByCurrent: Map<string, string>;
+  records: StoredRecord[];
+  keptSha256: Set<string>;
+} {
+  const nextSources = new Map<string, string>(persistedSources);
+  const nextAliases = new Map<string, string>();
+  const nextPersistedByCurrent = new Map<string, string>();
+  const nextIdAliases = new Map<string, string>();
+  const nextPersistedIdByCurrent = new Map<string, string>();
+  const records: StoredRecord[] = [];
+  const keptSha256 = new Set<string>();
+  for (const artifact of artifacts) {
+    keptSha256.add(artifact.sha256);
+    const persistedHandle = persistedHandleByCurrent.get(artifact.handle) ?? artifact.handle;
+    const persistedId = persistedIdByCurrent.get(artifact.id) ?? artifact.id;
+    const source = stableSource(snapshotInput(artifact));
+    if (source && !nextSources.has(source)) {
+      nextSources.set(source, artifact.handle);
+    }
+    nextAliases.set(persistedHandle, artifact.handle);
+    if (!nextAliases.has(artifact.handle)) nextAliases.set(artifact.handle, artifact.handle);
+    nextPersistedByCurrent.set(artifact.handle, persistedHandle);
+    nextIdAliases.set(persistedId, artifact.id);
+    if (!nextIdAliases.has(artifact.id)) nextIdAliases.set(artifact.id, artifact.id);
+    nextPersistedIdByCurrent.set(artifact.id, persistedId);
+    records.push(storedRecord(artifact, snapshotInput(artifact), persistedHandle, persistedId));
+  }
+  return {
+    nextSources,
+    nextAliases,
+    nextPersistedByCurrent,
+    nextIdAliases,
+    nextPersistedIdByCurrent,
+    records,
+    keptSha256,
+  };
+}
+
+function applyPersistedState(
+  persistedSources: Map<string, string>,
+  handleAliases: Map<string, string>,
+  persistedHandleByCurrent: Map<string, string>,
+  idAliases: Map<string, string>,
+  persistedIdByCurrent: Map<string, string>,
+  nextSources: Map<string, string>,
+  nextAliases: Map<string, string>,
+  nextPersistedByCurrent: Map<string, string>,
+  nextIdAliases: Map<string, string>,
+  nextPersistedIdByCurrent: Map<string, string>,
+): void {
+  persistedSources.clear();
+  handleAliases.clear();
+  persistedHandleByCurrent.clear();
+  idAliases.clear();
+  persistedIdByCurrent.clear();
+  for (const [key, value] of nextSources) persistedSources.set(key, value);
+  for (const [key, value] of nextAliases) handleAliases.set(key, value);
+  for (const [key, value] of nextPersistedByCurrent) persistedHandleByCurrent.set(key, value);
+  for (const [key, value] of nextIdAliases) idAliases.set(key, value);
+  for (const [key, value] of nextPersistedIdByCurrent) persistedIdByCurrent.set(key, value);
+}
+
 export function createFileContextBroker(options: FileContextBrokerOptions = {}): BoundedContextBroker {
   const dir = options.dir ?? process.env.PI_CONTEXT_BROKER_STORE_DIR ?? defaultStoreDir();
   ensureDir(dir);
@@ -329,6 +430,7 @@ export function createFileContextBroker(options: FileContextBrokerOptions = {}):
 
   initialReplayControl.autoPruneOnPublish = true;
   broker.prune();
+  let durableStateSignature = durableStoreSignature(dir);
 
   // File-backed readers must not serve the process-local replay after another
   // instance has compacted or purged the store. Rebuild while holding the same
@@ -363,6 +465,12 @@ export function createFileContextBroker(options: FileContextBrokerOptions = {}):
     for (const [key, value] of nextPersistedByCurrent) persistedHandleByCurrent.set(key, value);
     for (const [key, value] of nextIdAliases) idAliases.set(key, value);
     for (const [key, value] of nextPersistedIdByCurrent) persistedIdByCurrent.set(key, value);
+    durableStateSignature = durableStoreSignature(dir);
+  }
+
+  function refreshFromDiskIfNeeded(): void {
+    const currentSignature = durableStoreSignature(dir);
+    if (!isDurableStateSignature(durableStateSignature, currentSignature)) refreshFromDisk();
   }
 
   function refreshed<T>(read: () => T): T {
@@ -431,6 +539,7 @@ export function createFileContextBroker(options: FileContextBrokerOptions = {}):
     for (const [key, value] of nextPersistedByCurrent) persistedHandleByCurrent.set(key, value);
     for (const [key, value] of nextIdAliases) idAliases.set(key, value);
     for (const [key, value] of nextPersistedIdByCurrent) persistedIdByCurrent.set(key, value);
+    durableStateSignature = durableStoreSignature(dir);
     return result;
   }
 
@@ -445,63 +554,49 @@ export function createFileContextBroker(options: FileContextBrokerOptions = {}):
     const sourceId = sourceIdFor(input);
     const source = sourceId ? `${input.sessionId}\u0000${sourceId}` : undefined;
     return withStoreLock(dir, () => {
-      const state = readPersistedState(dir);
-      const sourceKey = source;
-      // Read durable provenance before replaying records: its handle can outlive
-      // the payload after pruning.
-      const persistedHandle = sourceKey ? state.sources.get(sourceKey) : undefined;
-      const sourceWasSeen = sourceKey ? state.sources.has(sourceKey) : false;
-      const replayControl = { autoPruneOnPublish: false };
-      const fresh = createInMemoryContextBroker(options, replayControl);
-      const nextSources = state.sources;
-      const nextAliases = new Map<string, string>();
-      const nextPersistedByCurrent = new Map<string, string>();
-      const nextIdAliases = new Map<string, string>();
-      const nextPersistedIdByCurrent = new Map<string, string>();
-      for (const record of state.records) {
-        const payload = loadPayload(dir, record.input.payloadSha256);
-        if (payload === undefined) continue;
-        const replayed = replayRecord(fresh, record, payload);
-        nextAliases.set(record.handle, replayed.handle);
-        if (!nextAliases.has(replayed.handle)) nextAliases.set(replayed.handle, replayed.handle);
-        nextPersistedByCurrent.set(replayed.handle, record.handle);
-        const persistedId = record.id ?? replayed.id;
-        nextIdAliases.set(persistedId, replayed.id);
-        if (!nextIdAliases.has(replayed.id)) nextIdAliases.set(replayed.id, replayed.id);
-        nextPersistedIdByCurrent.set(replayed.id, persistedId);
-        const replayedSource = stableSource(replayed);
-        if (replayedSource && !nextSources.has(replayedSource)) rememberSourceKey(nextSources, replayedSource, replayed.handle);
-      }
-      const applyFreshState = () => {
-        broker = fresh;
-        persistedSources.clear(); handleAliases.clear(); persistedHandleByCurrent.clear(); idAliases.clear(); persistedIdByCurrent.clear();
-        for (const [key, value] of nextSources) persistedSources.set(key, value);
-        for (const [key, value] of nextAliases) handleAliases.set(key, value);
-        for (const [key, value] of nextPersistedByCurrent) persistedHandleByCurrent.set(key, value);
-        for (const [key, value] of nextIdAliases) idAliases.set(key, value);
-        for (const [key, value] of nextPersistedIdByCurrent) persistedIdByCurrent.set(key, value);
-      };
+      refreshFromDiskIfNeeded();
+      const persistedHandle = source ? persistedSources.get(source) : undefined;
+      const sourceWasSeen = source ? persistedSources.has(source) : false;
       if (sourceWasSeen) {
-        const existing = persistedHandle ? fresh.lookup({ handle: nextAliases.get(persistedHandle) ?? persistedHandle, limit: 1 })[0] : undefined;
-        applyFreshState();
-        return existing ? externalizeArtifact(existing) : sourceTombstoneArtifact(input, sourceId!, persistedHandle);
+        const existing = persistedHandle
+          ? broker.lookup({ handle: handleAliases.get(persistedHandle) ?? persistedHandle, limit: 1 })[0]
+          : undefined;
+        return existing
+          ? externalizeArtifact(existing)
+          : sourceTombstoneArtifact(input, sourceId!, persistedHandle);
       }
-      replayControl.autoPruneOnPublish = true;
-      const artifact = fresh.publish(input);
+      const artifact = broker.publish(input);
       // Write blobs before the commit point; only the checkpoint publishes the
       // artifact and its provenance together.
       ensureBlob(dir, artifact);
-      if (source) rememberSourceKey(nextSources, source, artifact.handle);
-      const retained = (fresh as BoundedContextBroker & { [CONTEXT_BROKER_PERSISTENCE_SNAPSHOT](): ContextArtifact[] })[CONTEXT_BROKER_PERSISTENCE_SNAPSHOT]();
-      const records = retained
-        .map((current) => storedRecord(current, snapshotInput(current), nextPersistedByCurrent.get(current.handle) ?? current.handle, nextPersistedIdByCurrent.get(current.id) ?? current.id));
+      if (source) {
+        rememberSource(persistedSources, input.sessionId, sourceId!, artifact.handle);
+      }
+      const retained = snapshotBrokerArtifacts(broker);
+      const {
+        nextSources,
+        nextAliases,
+        nextPersistedByCurrent,
+        nextIdAliases,
+        nextPersistedIdByCurrent,
+        records,
+        keptSha256,
+      } = materializePersistedState(retained, persistedSources, persistedHandleByCurrent, persistedIdByCurrent);
       checkpointPersistedState(dir, records, nextSources);
-      removeUnreferencedBlobs(dir, new Set(retained.map((current) => current.sha256)));
-      nextAliases.set(artifact.handle, artifact.handle);
-      nextPersistedByCurrent.set(artifact.handle, artifact.handle);
-      nextIdAliases.set(artifact.id, artifact.id);
-      nextPersistedIdByCurrent.set(artifact.id, artifact.id);
-      applyFreshState();
+      removeUnreferencedBlobs(dir, keptSha256);
+      applyPersistedState(
+        persistedSources,
+        handleAliases,
+        persistedHandleByCurrent,
+        idAliases,
+        persistedIdByCurrent,
+        nextSources,
+        nextAliases,
+        nextPersistedByCurrent,
+        nextIdAliases,
+        nextPersistedIdByCurrent,
+      );
+      durableStateSignature = durableStoreSignature(dir);
       return externalizeArtifact(artifact);
     });
   }
@@ -512,6 +607,7 @@ export function createFileContextBroker(options: FileContextBrokerOptions = {}):
       const currentSources = readPersistedState(dir).sources;
       persistedSources.clear();
       for (const [key, handle] of currentSources) persistedSources.set(key, handle);
+      durableStateSignature = durableStoreSignature(dir);
       return currentSources.has(`${sessionId}\u0000${source}`);
     });
   }
@@ -521,77 +617,62 @@ export function createFileContextBroker(options: FileContextBrokerOptions = {}):
     // that prevents one malformed batch member from partially committing.
     const sources = inputs.map((input) => sourceIdFor(input));
     return withStoreLock(dir, () => {
-      // Never consult the process-local cache for provenance. Another instance
-      // may have appended or compacted while this broker was idle.
-      const replayControl = { autoPruneOnPublish: false };
-      const fresh = createInMemoryContextBroker(options, replayControl);
-      const nextSources = readPersistedState(dir).sources;
-      const nextAliases = new Map<string, string>();
-      const nextPersistedByCurrent = new Map<string, string>();
-      const nextIdAliases = new Map<string, string>();
-      const nextPersistedIdByCurrent = new Map<string, string>();
-      for (const record of readPersistedState(dir).records) {
-        const payload = loadPayload(dir, record.input.payloadSha256);
-        if (payload === undefined) continue;
-        const replayed = replayRecord(fresh, record, payload);
-        nextAliases.set(record.handle, replayed.handle);
-        if (!nextAliases.has(replayed.handle)) nextAliases.set(replayed.handle, replayed.handle);
-        nextPersistedByCurrent.set(replayed.handle, record.handle);
-        const persistedId = record.id ?? replayed.id;
-        nextIdAliases.set(persistedId, replayed.id);
-        if (!nextIdAliases.has(replayed.id)) nextIdAliases.set(replayed.id, replayed.id);
-        nextPersistedIdByCurrent.set(replayed.id, persistedId);
-        const source = stableSource(record.input as unknown as ContextArtifactInput);
-        if (source && !nextSources.has(source)) rememberSourceKey(nextSources, source, record.handle);
-      }
-
-      const before = fresh.status().records;
+      refreshFromDiskIfNeeded();
+      const before = broker.status().records;
       const artifacts: ContextArtifact[] = [];
       let duplicateSources = 0;
       for (let index = 0; index < inputs.length; index += 1) {
         const input = inputs[index];
         const source = sources[index];
-        const existingHandle = source ? nextSources.get(`${input.sessionId}\u0000${source}`) : undefined;
+        const sourceKey = source ? `${input.sessionId}\u0000${source}` : undefined;
+        const existingHandle = sourceKey ? persistedSources.get(sourceKey) : undefined;
         if (existingHandle !== undefined) {
           duplicateSources += 1;
-          const existing = fresh.lookup({ handle: nextAliases.get(existingHandle) ?? existingHandle, limit: 1 })[0];
+          const existing = broker.lookup({ handle: handleAliases.get(existingHandle) ?? existingHandle, limit: 1 })[0];
           if (existing) artifacts.push(existing);
           continue;
         }
-        const artifact = fresh.publish(input);
+        const artifact = broker.publish(input);
         artifacts.push(artifact);
-        if (source) rememberSource(nextSources, input.sessionId, source, artifact.handle);
-        nextAliases.set(artifact.handle, artifact.handle);
-        nextPersistedByCurrent.set(artifact.handle, artifact.handle);
-        nextIdAliases.set(artifact.id, artifact.id);
-        nextPersistedIdByCurrent.set(artifact.id, artifact.id);
+        if (source) {
+          rememberSource(persistedSources, input.sessionId, source, artifact.handle);
+        }
       }
 
       // A batch has exactly one bounded prune and exactly one metadata/ledger
       // checkpoint while the same store lock still protects the disk snapshot.
-      fresh.prune();
-      const remaining = (fresh as BoundedContextBroker & { [CONTEXT_BROKER_PERSISTENCE_SNAPSHOT](): ContextArtifact[] })[CONTEXT_BROKER_PERSISTENCE_SNAPSHOT]();
-      const keptSha256 = new Set<string>();
-      const records: StoredRecord[] = [];
+      broker.prune();
+      const remaining = snapshotBrokerArtifacts(broker);
+      const {
+        nextSources,
+        nextAliases,
+        nextPersistedByCurrent,
+        nextIdAliases,
+        nextPersistedIdByCurrent,
+        records,
+        keptSha256,
+      } = materializePersistedState(remaining, persistedSources, persistedHandleByCurrent, persistedIdByCurrent);
       for (const artifact of remaining) {
         ensureBlob(dir, artifact);
-        keptSha256.add(artifact.sha256);
-        const persistedHandle = nextPersistedByCurrent.get(artifact.handle) ?? artifact.handle;
-        const persistedId = nextPersistedIdByCurrent.get(artifact.id) ?? artifact.id;
-        records.push(storedRecord(artifact, snapshotInput(artifact), persistedHandle, persistedId));
       }
       checkpointPersistedState(dir, records, nextSources);
       removeUnreferencedBlobs(dir, keptSha256);
 
-      broker = fresh;
-      persistedSources.clear(); handleAliases.clear(); persistedHandleByCurrent.clear(); idAliases.clear(); persistedIdByCurrent.clear();
-      for (const [key, value] of nextSources) persistedSources.set(key, value);
-      for (const [key, value] of nextAliases) handleAliases.set(key, value);
-      for (const [key, value] of nextPersistedByCurrent) persistedHandleByCurrent.set(key, value);
-      for (const [key, value] of nextIdAliases) idAliases.set(key, value);
-      for (const [key, value] of nextPersistedIdByCurrent) persistedIdByCurrent.set(key, value);
-      const after = fresh.status().records;
-      const retained = artifacts.filter((artifact) => fresh.lookup({ id: artifact.id, limit: 1 }).length > 0).map(externalizeArtifact);
+      applyPersistedState(
+        persistedSources,
+        handleAliases,
+        persistedHandleByCurrent,
+        idAliases,
+        persistedIdByCurrent,
+        nextSources,
+        nextAliases,
+        nextPersistedByCurrent,
+        nextIdAliases,
+        nextPersistedIdByCurrent,
+      );
+      durableStateSignature = durableStoreSignature(dir);
+      const after = broker.status().records;
+      const retained = artifacts.filter((artifact) => broker.lookup({ id: artifact.id, limit: 1 }).length > 0).map(externalizeArtifact);
       return { artifacts: retained, scanned: inputs.length, duplicateSources, published: inputs.length - duplicateSources, pruned: Math.max(0, before + inputs.length - duplicateSources - after) };
     });
   }
