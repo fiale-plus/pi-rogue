@@ -34,6 +34,7 @@ describe("review preflight", () => {
   it("ignores passive nested review-doc paths but keeps required ones", () => {
     expect(extractReviewArtifactHints("Package docs: earendil-works/pi-coding-agent/docs/progress.md; source: packages/core/progress.md")).toEqual([]);
     expect(extractReviewArtifactHints("Read packages/core/progress.md before review")).toEqual(["packages/core/progress.md"]);
+    expect(extractReviewArtifactHints("[Read from: packages/core/progress.md]")).toEqual(["packages/core/progress.md"]);
   });
 
   it("preserves and resolves home-relative review artifact hints", () => {

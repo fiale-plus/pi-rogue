@@ -26,11 +26,29 @@ function imperativeListContainsRef(raw: string, ref: string): boolean {
 
     const residue = clause
       .replace(ARTIFACT_TOKEN_RE, " ")
-      .replace(/\b(?:the|these|following|required|both|all|file|files|artifact|artifacts|path|paths|bundle|bundles|and|or|before|continuing|proceed|proceeding|review|first|then|next|please)\b/gi, " ")
+      .replace(/\b(?:the|these|following|required|both|all|file|files|artifact|artifacts|path|paths|bundle|bundles|change|changes|in|as|well|and|or|before|continuing|proceed|proceeding|review|first|then|next|please)\b/gi, " ")
       .replace(/[\s,:()[\]`'"-]+/g, "");
     if (!residue) return true;
   }
   return false;
+}
+
+function markdownListBlock(text: string): string {
+  const list: string[] = [];
+  let started = false;
+  for (const line of text.split("\n")) {
+    if (/^\s*(?:[-*]|\d+[.)])\s+/.test(line)) {
+      started = true;
+      list.push(line);
+      continue;
+    }
+    if (started && (!line.trim() || /^\s{2,}\S/.test(line))) {
+      list.push(line);
+      continue;
+    }
+    break;
+  }
+  return list.join("\n");
 }
 
 function imperativeMultilineListContainsRef(raw: string, ref: string): boolean {
@@ -41,13 +59,7 @@ function imperativeMultilineListContainsRef(raw: string, ref: string): boolean {
   const target = new RegExp(`${refPattern(ref)}(?![A-Za-z0-9._/-])`, "i");
   let match: RegExpExecArray | null;
   while ((match = header.exec(raw)) !== null) {
-    const lines = raw.slice(header.lastIndex).split("\n");
-    const list: string[] = [];
-    for (const line of lines) {
-      if (!/^\s*(?:[-*]|\d+[.)])\s+/.test(line)) break;
-      list.push(line);
-    }
-    if (target.test(list.join("\n"))) return true;
+    if (target.test(markdownListBlock(raw.slice(header.lastIndex)))) return true;
   }
   return false;
 }
@@ -59,12 +71,7 @@ function labeledListContainsRef(raw: string, ref: string): boolean {
   while ((match = header.exec(raw)) !== null) {
     const remainder = raw.slice(header.lastIndex, header.lastIndex + 500);
     if (remainder.startsWith("\n")) {
-      const list: string[] = [];
-      for (const line of remainder.slice(1).split("\n")) {
-        if (!/^\s*(?:[-*]|\d+[.)])\s+/.test(line)) break;
-        list.push(line);
-      }
-      if (target.test(list.join("\n"))) return true;
+      if (target.test(markdownListBlock(remainder.slice(1)))) return true;
       continue;
     }
     const boundary = remainder.search(/(?:[!?](?=\s)|\.(?=\s)|[;\n])/);

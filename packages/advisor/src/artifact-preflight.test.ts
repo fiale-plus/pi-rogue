@@ -44,6 +44,8 @@ describe("artifact preflight", () => {
   it("recognizes directly introduced imperatives regardless of clause prefix", () => {
     expect(extractArtifactReferences("Before continuing, read docs/setup.md")).toEqual(["docs/setup.md"]);
     expect(extractArtifactReferences("Can you check packages/core/src/index.ts?")).toEqual(["packages/core/src/index.ts"]);
+    expect(extractArtifactReferences("Review changes in packages/core/src/index.ts")).toEqual(["packages/core/src/index.ts"]);
+    expect(extractArtifactReferences("Read docs/a.md as well as packages/core/b.ts")).toEqual(["docs/a.md", "packages/core/b.ts"]);
   });
 
   it("extracts required paths from inline and multiline imperative lists", () => {
@@ -55,7 +57,7 @@ describe("artifact preflight", () => {
 
   it("extracts inline and multiline required artifact labels", () => {
     expect(extractArtifactReferences("Required artifacts: docs/plan.md and packages/core/progress.md")).toEqual(["docs/plan.md", "packages/core/progress.md"]);
-    expect(extractArtifactReferences("Required files:\n- docs/setup.md\n- packages/core/src/index.ts")).toEqual(["docs/setup.md", "packages/core/src/index.ts"]);
+    expect(extractArtifactReferences("Required files:\n- docs/setup.md\n  setup context\n\n- packages/core/src/index.ts")).toEqual(["docs/setup.md", "packages/core/src/index.ts"]);
   });
 
   it("does not treat passive review headings as imperative lists", () => {
