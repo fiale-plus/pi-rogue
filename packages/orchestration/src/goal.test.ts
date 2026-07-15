@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { resetAdvisorSessionContext, setAdvisorCheckinDemand } from "./advisor-checkins.js";
-import { endGoalCheck, hasGoalCheckPending } from "./goal-resolution.js";
+import { endGoalCheck, GOAL_CHECK_DELIVERY_LEASE_MS, hasGoalCheckPending } from "./goal-resolution.js";
 import { activeGoal, clearGoal, completeActiveGoal, handleGoalCommand, registerGoal, setGoal, startGoalProcessing } from "./goal.js";
 import { featureFile, readText, sessionFile, writeText } from "./internal.js";
 import { readResearchState, writeResearchState } from "./autoresearch-state.js";
@@ -72,6 +72,76 @@ describe("goal processing", () => {
     expect(sent[0].text).toContain("Take the first concrete step now");
     expect(sent[0].text).toContain("Do not only record, restate, or summarize the goal.");
     endGoalCheck(ctx);
+  });
+
+  it("rolls back a pending goal check when immediate enqueue fails", () => {
+    const ctx = fakeCtx();
+    const sent: string[] = [];
+    let attempts = 0;
+    const pi = {
+      sendUserMessage: (text: string) => {
+        attempts += 1;
+        if (attempts === 1) throw new Error("transient enqueue failure");
+        sent.push(text);
+      },
+    } as any;
+
+    expect(() => startGoalProcessing(pi, ctx, "retry delivery")).toThrow("transient enqueue failure");
+    expect(hasGoalCheckPending(ctx)).toBe(false);
+    expect(startGoalProcessing(pi, ctx, "retry delivery")).toBe("standalone");
+    expect(hasGoalCheckPending(ctx)).toBe(true);
+    expect(sent).toHaveLength(1);
+    endGoalCheck(ctx);
+  });
+
+  it("expires an undelivered request when the host hides an async enqueue rejection", () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    const ctx = fakeCtx();
+    let attempts = 0;
+    const pi = {
+      sendUserMessage: () => {
+        attempts += 1;
+        void Promise.reject(new Error("hidden async enqueue failure")).catch(() => undefined);
+      },
+    } as any;
+
+    expect(startGoalProcessing(pi, ctx, "retry hidden failure")).toBe("standalone");
+    expect(hasGoalCheckPending(ctx)).toBe(true);
+    vi.setSystemTime(Date.now() + GOAL_CHECK_DELIVERY_LEASE_MS);
+    expect(hasGoalCheckPending(ctx)).toBe(false);
+    expect(startGoalProcessing(pi, ctx, "retry hidden failure")).toBe("standalone");
+    expect(attempts).toBe(2);
+    endGoalCheck(ctx);
+    vi.useRealTimers();
+  });
+
+  it("does not expire a successfully queued follow-up during a long-running turn", () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    const ctx = { ...fakeCtx(undefined, false), hasPendingMessages: () => true };
+    const sent: Array<{ options?: { deliverAs?: string } }> = [];
+    const pi = { sendUserMessage: (_text: string, options?: { deliverAs?: string }) => sent.push({ options }) } as any;
+
+    expect(startGoalProcessing(pi, ctx, "long queued goal")).toBe("standalone");
+    expect(sent[0]?.options?.deliverAs).toBe("followUp");
+    vi.setSystemTime(Date.now() + GOAL_CHECK_DELIVERY_LEASE_MS * 2);
+    expect(hasGoalCheckPending(ctx)).toBe(true);
+    endGoalCheck(ctx);
+    vi.useRealTimers();
+  });
+
+  it("expires a failed follow-up when the host queue has no pending message", () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    const ctx = { ...fakeCtx(undefined, false), hasPendingMessages: () => false };
+    const pi = {
+      sendUserMessage: () => {
+        void Promise.reject(new Error("hidden follow-up failure")).catch(() => undefined);
+      },
+    } as any;
+
+    expect(startGoalProcessing(pi, ctx, "failed queued goal")).toBe("standalone");
+    vi.setSystemTime(Date.now() + GOAL_CHECK_DELIVERY_LEASE_MS);
+    expect(hasGoalCheckPending(ctx)).toBe(false);
+    vi.useRealTimers();
   });
 
   it("does not append history or reset orchestration for an exact active goal duplicate", () => {
