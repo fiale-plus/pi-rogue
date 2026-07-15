@@ -74,4 +74,5 @@ For quieter sessions, set it to a higher value to only rewrite larger outputs.
   - `PI_CONTEXT_BROKER_GLOBAL_MAX_RECORDS`
   - `PI_CONTEXT_BROKER_GLOBAL_MAX_BYTES`
 - Durable mode defaults to global caps of 2,048 records and 256 MiB when those env vars are unset; in-memory mode remains per-session capped unless global caps are explicitly provided.
+- Source provenance is separately bounded to the newest 4,096 entries per session and 65,536 entries globally across sessions. When the global cap is reached, the oldest ingested source entries are evicted (independent of artifact retention) in memory, SQLite, and JSONL/checkpoints.
 - Rollback is immediate: set `PI_CONTEXT_BROKER_ENABLED=false` and `/reload` or restart Pi. In the canonical bundle, disable durable writes with `PI_CONTEXT_BROKER_DURABLE=false`; unsetting durability returns to the bundle's durable SQLite default. In standalone registration, leave durability and store-directory settings unset for memory mode.

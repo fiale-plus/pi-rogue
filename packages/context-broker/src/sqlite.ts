@@ -3,6 +3,7 @@ import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { ensureOwnerOnlyDirectory, safeName, tightenSqliteArtifacts } from "@fiale-plus/pi-core";
+import { MAX_CONTEXT_SOURCES_GLOBAL, MAX_CONTEXT_SOURCES_PER_SESSION, sourceIdFor, sourceTombstoneArtifact } from "./index.js";
 import type {
   BoundedContextBroker,
   ContextArtifact,
@@ -141,6 +142,7 @@ function rowToArtifact(row: Record<string, unknown>): ContextArtifact & { baseTi
     expiresAt: row.expiresAt == null ? undefined : Number(row.expiresAt),
     pinned: Boolean(row.pinned),
     parentIds: jsonList(row.parentIdsJson as string | undefined),
+    sourceId: row.sourceId == null ? undefined : String(row.sourceId),
     baseTier: String(row.baseTier ?? row.tier) as ContextArtifactTier,
   };
 }
@@ -165,7 +167,7 @@ function likePattern(text: string): string {
 }
 
 function stableSource(input: ContextArtifactInput): string | undefined {
-  return input.parentIds?.find(Boolean);
+  return sourceIdFor(input);
 }
 
 export function isSqliteLockedError(error: unknown): boolean {
@@ -190,6 +192,17 @@ function initialize(db: DatabaseSync): void {
       key TEXT PRIMARY KEY,
       value TEXT NOT NULL
     );
+    -- Provenance is intentionally independent from artifacts: pruning payloads must not replay a session source.
+    CREATE TABLE IF NOT EXISTS source_ledger (
+      sessionId TEXT NOT NULL,
+      sourceId TEXT NOT NULL,
+      handle TEXT,
+      createdAt INTEGER NOT NULL,
+      -- This is a monotonic ledger sequence, not the source event timestamp.
+      -- Backfills can legitimately have very old createdAt values.
+      ingestedAt INTEGER NOT NULL,
+      PRIMARY KEY(sessionId, sourceId)
+    );
     CREATE TABLE IF NOT EXISTS artifacts (
       id TEXT PRIMARY KEY,
       handle TEXT NOT NULL UNIQUE,
@@ -210,7 +223,8 @@ function initialize(db: DatabaseSync): void {
       sequence INTEGER NOT NULL DEFAULT 0,
       expiresAt INTEGER,
       pinned INTEGER NOT NULL DEFAULT 0,
-      parentIdsJson TEXT NOT NULL
+      parentIdsJson TEXT NOT NULL,
+      sourceId TEXT
     );
     CREATE INDEX IF NOT EXISTS idx_artifacts_session ON artifacts(sessionId);
     CREATE INDEX IF NOT EXISTS idx_artifacts_handle ON artifacts(handle);
@@ -219,7 +233,23 @@ function initialize(db: DatabaseSync): void {
     CREATE INDEX IF NOT EXISTS idx_artifacts_created ON artifacts(createdAt);
     CREATE VIRTUAL TABLE IF NOT EXISTS artifact_fts USING fts5(id UNINDEXED, summary, payload, command, tags, paths);
   `);
+  const sourceLedgerColumns = new Set<string>(db.prepare("PRAGMA table_info(source_ledger)").all().map((row) => String((row as Record<string, unknown>).name ?? "")));
+  if (!sourceLedgerColumns.has("ingestedAt")) {
+    // SQLite only permits a constant default when adding a NOT NULL column.
+    // rowid preserves the old ledger's insertion order for this one-time
+    // backfill, after which new values use the monotonic meta sequence below.
+    db.exec("ALTER TABLE source_ledger ADD COLUMN ingestedAt INTEGER NOT NULL DEFAULT 0");
+    db.exec("UPDATE source_ledger SET ingestedAt = rowid WHERE ingestedAt = 0");
+  }
+  db.exec("CREATE INDEX IF NOT EXISTS idx_source_ledger_ingested ON source_ledger(sessionId, ingestedAt DESC)");
+  db.exec("CREATE INDEX IF NOT EXISTS idx_source_ledger_global_ingested ON source_ledger(ingestedAt DESC)");
   const artifactColumns = new Set<string>(db.prepare("PRAGMA table_info(artifacts)").all().map((row) => String((row as Record<string, unknown>).name ?? "")));
+  // Record whether the stored rows predate explicit artifact source identity.
+  // Only those rows may use parentIdsJson as a provenance fallback below.
+  const artifactsPreSourceIdSchema = !artifactColumns.has("sourceId");
+  if (artifactsPreSourceIdSchema) {
+    db.exec("ALTER TABLE artifacts ADD COLUMN sourceId TEXT");
+  }
   if (!artifactColumns.has("sequence")) {
     db.exec("ALTER TABLE artifacts ADD COLUMN sequence INTEGER NOT NULL DEFAULT 0");
   }
@@ -227,6 +257,55 @@ function initialize(db: DatabaseSync): void {
   const maxSequenceRow = db.prepare("SELECT COALESCE(MAX(sequence), 0) AS sequence FROM artifacts").get() ?? {};
   const maxSequence = Number((maxSequenceRow as Record<string, unknown>).sequence ?? 0);
   db.prepare("INSERT INTO meta(key, value) VALUES('sequence', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").run(String(maxSequence));
+  const maxIngestedAtRow = db.prepare("SELECT COALESCE(MAX(ingestedAt), 0) AS ingestedAt FROM source_ledger").get() ?? {};
+  const maxIngestedAt = Number((maxIngestedAtRow as Record<string, unknown>).ingestedAt ?? 0);
+  db.prepare(`INSERT INTO meta(key, value) VALUES('source-ledger-sequence', ?)
+    ON CONFLICT(key) DO UPDATE SET value = CASE
+      WHEN CAST(meta.value AS INTEGER) < CAST(excluded.value AS INTEGER) THEN excluded.value
+      ELSE meta.value END`).run(String(maxIngestedAt));
+
+  // Import historical provenance exactly once. Without this marker, reopening
+  // a store would restore ledger rows deliberately evicted by its source cap.
+  const legacyMigrationKey = "source-ledger-artifact-migration-v1";
+  const legacyMigrationDone = db.prepare("SELECT 1 FROM meta WHERE key = ?").get(legacyMigrationKey);
+  if (!legacyMigrationDone) {
+    const legacyArtifacts = db.prepare("SELECT sessionId, sourceId, parentIdsJson, handle, createdAt FROM artifacts ORDER BY sequence ASC, rowid ASC").all();
+    const sourceLedgerSequenceRow = db.prepare("SELECT value FROM meta WHERE key = 'source-ledger-sequence'").get() ?? {};
+    let sourceLedgerSequence = Number((sourceLedgerSequenceRow as Record<string, unknown>).value ?? 0);
+    const hasLedgerSource = db.prepare("SELECT 1 FROM source_ledger WHERE sessionId = ? AND sourceId = ?");
+    const insertLedger = db.prepare("INSERT INTO source_ledger(sessionId, sourceId, handle, createdAt, ingestedAt) VALUES (?, ?, ?, ?, ?)");
+    for (const row of legacyArtifacts) {
+      const record = row as Record<string, unknown>;
+      const sessionId = String(record.sessionId ?? "");
+      try {
+        const source = artifactsPreSourceIdSchema
+          ? sourceIdFor({ sessionId, parentIds: jsonList(record.parentIdsJson as string | undefined), kind: "tool_output", payload: "" })
+          : sourceIdFor({ sessionId, sourceId: record.sourceId == null ? undefined : String(record.sourceId), kind: "tool_output", payload: "" });
+        if (source && !hasLedgerSource.get(sessionId, source)) {
+          sourceLedgerSequence += 1;
+          insertLedger.run(sessionId, source, String(record.handle ?? ""), Number(record.createdAt ?? Date.now()), sourceLedgerSequence);
+        }
+      } catch {
+        // Retain historical artifacts even when an old source is unsuitable
+        // as current provenance.
+      }
+    }
+    db.prepare("INSERT INTO meta(key, value) VALUES('source-ledger-sequence', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").run(String(sourceLedgerSequence));
+    db.prepare("INSERT INTO meta(key, value) VALUES(?, '1')").run(legacyMigrationKey);
+  }
+  // Keep the newest entries by monotonic ingestion order. The global bound is
+  // independent of sessions so a large number of sessions cannot grow the
+  // durable ledger without bound.
+  for (const row of db.prepare("SELECT DISTINCT sessionId FROM source_ledger").all()) {
+    db.prepare(`DELETE FROM source_ledger WHERE rowid IN (
+      SELECT rowid FROM source_ledger WHERE sessionId = ?
+      ORDER BY ingestedAt DESC, rowid DESC LIMIT -1 OFFSET ?
+    )`).run(String((row as Record<string, unknown>).sessionId), MAX_CONTEXT_SOURCES_PER_SESSION);
+  }
+  db.prepare(`DELETE FROM source_ledger WHERE rowid IN (
+    SELECT rowid FROM source_ledger
+    ORDER BY ingestedAt DESC, rowid DESC LIMIT -1 OFFSET ?
+  )`).run(MAX_CONTEXT_SOURCES_GLOBAL);
 }
 
 export function createSqliteContextBroker(options: SqliteContextBrokerOptions = {}): BoundedContextBroker {
@@ -306,6 +385,24 @@ export function createSqliteContextBroker(options: SqliteContextBrokerOptions = 
     const next = Number(row?.value ?? 0) + 1;
     db.prepare("INSERT INTO meta(key, value) VALUES('sequence', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").run(String(next));
     return next;
+  }
+
+  function nextSourceLedgerSequence(): number {
+    const row = db.prepare("SELECT value FROM meta WHERE key = 'source-ledger-sequence'").get();
+    const next = Number(row?.value ?? 0) + 1;
+    db.prepare("INSERT INTO meta(key, value) VALUES('source-ledger-sequence', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").run(String(next));
+    return next;
+  }
+
+  function pruneSourceLedger(sessionId: string): void {
+    db.prepare(`DELETE FROM source_ledger WHERE rowid IN (
+      SELECT rowid FROM source_ledger WHERE sessionId = ?
+      ORDER BY ingestedAt DESC, rowid DESC LIMIT -1 OFFSET ?
+    )`).run(sessionId, MAX_CONTEXT_SOURCES_PER_SESSION);
+    db.prepare(`DELETE FROM source_ledger WHERE rowid IN (
+      SELECT rowid FROM source_ledger
+      ORDER BY ingestedAt DESC, rowid DESC LIMIT -1 OFFSET ?
+    )`).run(MAX_CONTEXT_SOURCES_GLOBAL);
   }
 
   function deleteArtifact(id: string): boolean {
@@ -465,7 +562,7 @@ export function createSqliteContextBroker(options: SqliteContextBrokerOptions = 
     return row?.id == null ? undefined : String(row.id);
   }
 
-  function prune(now = Date.now(), protectedIds = new Set<string>()): ContextBrokerStatus {
+  function prune(now = Date.now(), protectedIds = new Set<string>(), maintenance = true): ContextBrokerStatus {
     let removedCount = dropExpired(now, protectedIds);
     applyCooling(now, protectedIds);
     const sessions = db.prepare("SELECT DISTINCT sessionId FROM artifacts").all().map((row) => String(row.sessionId));
@@ -504,7 +601,7 @@ export function createSqliteContextBroker(options: SqliteContextBrokerOptions = 
       else deletionBlocked = true;
     }
     const status = currentStatus();
-    maintainStorage(removedCount, { purge: false });
+    if (maintenance) maintainStorage(removedCount, { purge: false });
     return status;
   }
 
@@ -543,15 +640,39 @@ export function createSqliteContextBroker(options: SqliteContextBrokerOptions = 
     return status;
   }
 
+  function insertArtifact(input: ContextArtifactInput, now: number): ContextArtifact & { baseTier: ContextArtifactTier; sequence: number } {
+    const payload = payloadText(input.payload);
+    const sha256 = hashPayload(input.payload);
+    const bytes = payloadBytes(input.payload);
+    const tags = normalizeList(input.tags);
+    const paths = normalizeList(input.paths);
+    const parentIds = normalizeList(input.parentIds);
+    const baseTier = classifyBaseTier(input, tags);
+    const tier: ContextArtifactTier = input.pinned ? "hot" : baseTier;
+    const ttlMs = input.ttlMs ?? tierTtlMs[tier];
+    const sequence = nextSequence();
+    const id = `ctx-${now.toString(36)}-${String(sequence).padStart(4, "0")}-${sha256.slice(0, 12)}`;
+    const session = safeName(input.sessionId || "session");
+    const handle = `ctx://session/${session}/${input.kind}/${sha256.slice(0, 16)}/${id}`;
+    const artifact = {
+      id, handle, sessionId: input.sessionId, kind: input.kind, createdAt: now, updatedAt: now,
+      bytes, sha256, payload, summary: summarizeArtifact(input.summary, input.kind, bytes, sha256, summaryBytes),
+      tags, paths, command: input.command?.trim() || undefined, branch: input.branch?.trim() || undefined,
+      tier, baseTier, sequence, expiresAt: ttlMs > 0 ? now + ttlMs : undefined, pinned: Boolean(input.pinned), parentIds,
+      sourceId: input.sourceId,
+    } as ContextArtifact & { baseTier: ContextArtifactTier; sequence: number };
+    db.prepare(`
+      INSERT INTO artifacts(id, handle, sessionId, kind, createdAt, updatedAt, bytes, sha256, payload, summary, tagsJson, pathsJson, command, branch, tier, baseTier, sequence, expiresAt, pinned, parentIdsJson, sourceId)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(artifact.id, artifact.handle, artifact.sessionId, artifact.kind, artifact.createdAt, artifact.updatedAt, artifact.bytes, artifact.sha256, artifact.payload, artifact.summary, JSON.stringify(artifact.tags), JSON.stringify(artifact.paths), artifact.command ?? null, artifact.branch ?? null, artifact.tier, artifact.baseTier, artifact.sequence, artifact.expiresAt ?? null, artifact.pinned ? 1 : 0, JSON.stringify(artifact.parentIds), artifact.sourceId ?? null);
+    db.prepare("INSERT INTO artifact_fts(id, summary, payload, command, tags, paths) VALUES (?, ?, ?, ?, ?, ?)").run(artifact.id, artifact.summary, artifact.payload, artifact.command ?? "", artifact.tags.join(" "), artifact.paths.join(" "));
+    return artifact;
+  }
+
   function publish(input: ContextArtifactInput): ContextArtifact {
     const now = input.createdAt ?? Date.now();
+    // Validate before beginning a transaction or allocating a sequence.
     const source = stableSource(input);
-    if (source) {
-      const existing = db.prepare("SELECT * FROM artifacts WHERE sessionId = ? AND parentIdsJson LIKE ? ESCAPE '\\' AND (pinned = 1 OR expiresAt IS NULL OR expiresAt > ?) ORDER BY createdAt DESC, sequence DESC LIMIT 1")
-        .get(input.sessionId, likePattern(`"${source}"`), now);
-      if (existing) return rowToArtifact(existing);
-    }
-
 
     const payload = payloadText(input.payload);
     const sha256 = hashPayload(input.payload);
@@ -566,6 +687,16 @@ export function createSqliteContextBroker(options: SqliteContextBrokerOptions = 
 
     beginImmediateWithRetry();
     try {
+      if (source) {
+        const ledger = db.prepare("SELECT handle FROM source_ledger WHERE sessionId = ? AND sourceId = ?").get(input.sessionId, source) as Record<string, unknown> | undefined;
+        if (ledger) {
+          const persistedHandle = String(ledger.handle ?? "");
+          const existing = persistedHandle ? db.prepare("SELECT * FROM artifacts WHERE handle = ?").get(persistedHandle) : undefined;
+          db.exec("COMMIT");
+          restoreBusyTimeout();
+          return existing ? rowToArtifact(existing as Record<string, unknown>) : sourceTombstoneArtifact(input, source, persistedHandle);
+        }
+      }
       const sequence = nextSequence();
       const id = `ctx-${now.toString(36)}-${String(sequence).padStart(4, "0")}-${sha256.slice(0, 12)}`;
       const session = safeName(input.sessionId || "session");
@@ -592,10 +723,11 @@ export function createSqliteContextBroker(options: SqliteContextBrokerOptions = 
         expiresAt: ttlMs > 0 ? now + ttlMs : undefined,
         pinned: Boolean(input.pinned),
         parentIds,
+        sourceId: input.sourceId,
       };
       db.prepare(`
-        INSERT INTO artifacts(id, handle, sessionId, kind, createdAt, updatedAt, bytes, sha256, payload, summary, tagsJson, pathsJson, command, branch, tier, baseTier, sequence, expiresAt, pinned, parentIdsJson)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO artifacts(id, handle, sessionId, kind, createdAt, updatedAt, bytes, sha256, payload, summary, tagsJson, pathsJson, command, branch, tier, baseTier, sequence, expiresAt, pinned, parentIdsJson, sourceId)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `).run(
         artifact.id,
         artifact.handle,
@@ -617,6 +749,7 @@ export function createSqliteContextBroker(options: SqliteContextBrokerOptions = 
         artifact.expiresAt ?? null,
         artifact.pinned ? 1 : 0,
         JSON.stringify(artifact.parentIds),
+        artifact.sourceId ?? null,
       );
       db.prepare("INSERT INTO artifact_fts(id, summary, payload, command, tags, paths) VALUES (?, ?, ?, ?, ?, ?)").run(
         artifact.id,
@@ -626,6 +759,11 @@ export function createSqliteContextBroker(options: SqliteContextBrokerOptions = 
         artifact.tags.join(" "),
         artifact.paths.join(" "),
       );
+      if (source) {
+        db.prepare("INSERT INTO source_ledger(sessionId, sourceId, handle, createdAt, ingestedAt) VALUES (?, ?, ?, ?, ?)")
+          .run(input.sessionId, source, artifact.handle, now, nextSourceLedgerSequence());
+        pruneSourceLedger(input.sessionId);
+      }
       db.exec("COMMIT");
     } catch (error) {
       try { db.exec("ROLLBACK"); } catch { /* transaction may not be active after a SQLite failure */ }
@@ -642,6 +780,58 @@ export function createSqliteContextBroker(options: SqliteContextBrokerOptions = 
     } finally {
       restoreBusyTimeout();
     }
+  }
+
+  function publishBatch(inputs: ContextArtifactInput[]): import("@fiale-plus/pi-core").ContextPublishBatchResult {
+    // Validate before opening the transaction: malformed source ids never leave partial provenance.
+    const sources = inputs.map((input) => stableSource(input));
+    const artifacts: ContextArtifact[] = [];
+    let duplicates = 0;
+    const before = currentStatus().records;
+    beginImmediateWithRetry();
+    try {
+      for (let index = 0; index < inputs.length; index += 1) {
+        const input = inputs[index];
+        const source = sources[index];
+        if (source) {
+          const ledger = db.prepare("SELECT handle FROM source_ledger WHERE sessionId = ? AND sourceId = ?").get(input.sessionId, source) as Record<string, unknown> | undefined;
+          if (ledger) {
+            duplicates += 1;
+            const handle = String(ledger.handle ?? "");
+            const existing = handle ? db.prepare("SELECT * FROM artifacts WHERE handle = ?").get(handle) : undefined;
+            if (existing) artifacts.push(rowToArtifact(existing as Record<string, unknown>));
+            continue;
+          }
+        }
+        const artifact = insertArtifact(input, input.createdAt ?? Date.now());
+        artifacts.push(artifact);
+        if (source) {
+          db.prepare("INSERT INTO source_ledger(sessionId, sourceId, handle, createdAt, ingestedAt) VALUES (?, ?, ?, ?, ?)")
+            .run(input.sessionId, source, artifact.handle, artifact.createdAt, nextSourceLedgerSequence());
+          pruneSourceLedger(input.sessionId);
+        }
+      }
+      // One bounded prune is part of the same transaction as both artifact and provenance writes.
+      prune(Date.now(), new Set(), false);
+      db.exec("COMMIT");
+    } catch (error) {
+      try { db.exec("ROLLBACK"); } catch { /* preserve the original failure */ }
+      restoreBusyTimeout();
+      throw error;
+    }
+    const after = currentStatus().records;
+    const removed = Math.max(0, before + inputs.length - duplicates - after);
+    // The batch committed before maintenance; retain one checkpoint for its
+    // single prune rather than checkpointing each individual deletion.
+    maintainStorage(removed, { purge: false });
+    restoreBusyTimeout();
+    return { artifacts: artifacts.filter((artifact) => Boolean(db.prepare("SELECT 1 FROM artifacts WHERE id = ?").get(artifact.id))), scanned: inputs.length, duplicateSources: duplicates, published: inputs.length - duplicates, pruned: removed };
+  }
+
+  function sourceSeen(sessionId: string, sourceId: string): boolean {
+    // Reuse validation so callers cannot create ambiguous cache/ledger keys.
+    const source = sourceIdFor({ sessionId, sourceId, kind: "tool_output", payload: "" });
+    return Boolean(db.prepare("SELECT 1 FROM source_ledger WHERE sessionId = ? AND sourceId = ?").get(sessionId, source!));
   }
 
   function lookup(query: ContextLookupQuery = {}): ContextArtifact[] {
@@ -726,7 +916,7 @@ export function createSqliteContextBroker(options: SqliteContextBrokerOptions = 
     return truncateUtf8(lines.join("\n"), budget);
   }
 
-  return { publish, lookup, pin, prune, purge, status, renderBrief };
+  return { publish, publishBatch, sourceSeen, lookup, pin, prune, purge, status, renderBrief };
 }
 
 export function contextBrokerSqlitePathForSession(baseDir: string, sessionId: string): string {

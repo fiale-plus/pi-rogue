@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
-import { createInMemoryContextBroker } from "./index.js";
+import { createInMemoryContextBroker, MAX_CONTEXT_SOURCES_GLOBAL, MAX_CONTEXT_SOURCES_PER_SESSION, rememberSource } from "./index.js";
 
 describe("createInMemoryContextBroker", () => {
   it("publishes stable, unique handles and looks up artifacts by handle", () => {
@@ -345,6 +345,59 @@ describe("createInMemoryContextBroker", () => {
     expect(broker.lookup({ handle: unpinned.handle })).toEqual([]);
     expect(broker.lookup({ handle: pinned.handle })[0]?.payload).toBe("keep");
     expect(broker.lookup({ handle: other.handle })[0]?.payload).toBe("other");
+  });
+
+  it("keeps in-memory source provenance after a batch prunes its artifacts", () => {
+    const broker = createInMemoryContextBroker({ maxRecords: 1, defaultTtlMs: 0 });
+    const first = broker.publishBatch([
+      { sessionId: "s", kind: "tool_output", payload: "first", sourceId: "first-source", createdAt: 1 },
+      { sessionId: "s", kind: "tool_output", payload: "second", sourceId: "second-source", createdAt: 2 },
+    ]);
+    expect(first).toMatchObject({ published: 2, pruned: 1 });
+    expect(broker.sourceSeen("s", "first-source")).toBe(true);
+    expect(broker.publishBatch([{ sessionId: "s", kind: "tool_output", payload: "replay", sourceId: "first-source" }])).toMatchObject({ published: 0, duplicateSources: 1 });
+  });
+
+  it("caps in-memory source provenance while retaining its newest session tail", () => {
+    const broker = createInMemoryContextBroker({ maxRecords: 1, defaultTtlMs: 0 });
+    broker.publishBatch(Array.from({ length: MAX_CONTEXT_SOURCES_PER_SESSION + 1 }, (_, index) => ({
+      sessionId: "s", kind: "tool_output" as const, payload: `payload-${index}`, sourceId: `source-${index}`, createdAt: index,
+    })));
+
+    expect(broker.sourceSeen("s", "source-0")).toBe(false);
+    expect(broker.sourceSeen("s", `source-${MAX_CONTEXT_SOURCES_PER_SESSION}`)).toBe(true);
+  });
+
+  it("globally caps provenance across many sessions by oldest ingestion", () => {
+    const sources = new Map<string, string>();
+    for (let index = 0; index <= MAX_CONTEXT_SOURCES_GLOBAL; index += 1) {
+      const sessionId = `session-${index % 32}`;
+      rememberSource(sources, sessionId, `source-${index}`, `handle-${index}`);
+    }
+
+    expect(sources.size).toBe(MAX_CONTEXT_SOURCES_GLOBAL);
+    expect(sources.has("session-0\u0000source-0")).toBe(false);
+    expect(sources.get(`session-${MAX_CONTEXT_SOURCES_GLOBAL % 32}\u0000source-${MAX_CONTEXT_SOURCES_GLOBAL}`)).toBe(`handle-${MAX_CONTEXT_SOURCES_GLOBAL}`);
+  });
+
+  it("does not republish a single source whose artifact was pruned", () => {
+    const broker = createInMemoryContextBroker({ maxRecords: 1, defaultTtlMs: 0 });
+    const first = broker.publish({ sessionId: "s", kind: "tool_output", payload: "old", sourceId: "old-source", createdAt: 1 });
+    broker.publish({ sessionId: "s", kind: "tool_output", payload: "new", sourceId: "new-source", createdAt: 2 });
+
+    const replay = broker.publish({ sessionId: "s", kind: "tool_output", payload: "must not persist", sourceId: "old-source", createdAt: 3 });
+
+    expect(replay.handle).toBe(first.handle);
+    expect(replay.payload).toBe("");
+    expect(broker.status().records).toBe(1);
+    expect(broker.lookup({ text: "must not persist" })).toEqual([]);
+  });
+
+  it("validates a single source ID before mutating in-memory artifacts", () => {
+    const broker = createInMemoryContextBroker();
+
+    expect(() => broker.publish({ sessionId: "s", kind: "tool_output", payload: "invalid", sourceId: "bad\0source" })).toThrow(/Invalid context broker sourceId/);
+    expect(broker.status().records).toBe(0);
   });
 
   it("enforces optional global caps across sessions", () => {

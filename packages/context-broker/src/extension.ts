@@ -7,9 +7,9 @@ import type { AutocompleteItem } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import type { ExtensionAPI, ExtensionContext, ToolResultEvent } from "@earendil-works/pi-coding-agent";
 import { secureWriteFile, tightenOwnerOnlyFile } from "@fiale-plus/pi-core";
-import type { BoundedContextBroker, ContextArtifact, ContextBrokerStatus } from "@fiale-plus/pi-core";
+import type { BoundedContextBroker, ContextArtifact, ContextArtifactInput, ContextBrokerStatus } from "@fiale-plus/pi-core";
 import { createFileContextBroker } from "./file.js";
-import { createInMemoryContextBroker } from "./index.js";
+import { createInMemoryContextBroker, sourceIdFor } from "./index.js";
 
 export interface ContextBrokerBetaOptions {
   enabled?: boolean;
@@ -44,9 +44,31 @@ const PACKAGE_LENS_MAX_BYTES = 2 * 1024;
 const DEFAULT_TTL_MS = 24 * 60 * 60 * 1000;
 const DEFAULT_HOT_TO_WARM_MS = 2 * 60 * 60 * 1000;
 const DEFAULT_WARM_TO_COLD_MS = 12 * 60 * 60 * 1000;
+// Resume only needs the active broker tail. Keeping this equal to the default
+// per-session record cap prevents old compacted history from being republished.
+const BACKFILL_MAX_ARTIFACTS = 64;
+// Bound resume work even when a session branch is mostly non-tool messages.
+const BACKFILL_MAX_RAW_ENTRIES = BACKFILL_MAX_ARTIFACTS * 8;
 const DEFAULT_DURABLE_GLOBAL_MAX_RECORDS = 2_048;
 const DEFAULT_DURABLE_GLOBAL_MAX_BYTES = 256 * 1024 * 1024;
 const ENABLED_VALUES = new Set(["1", "true", "yes", "on"]);
+
+/** Keep the newest per-session source tail and its matching artifact handles. */
+export function rememberNewestSource(
+  seenSourceIds: Set<string>,
+  sourceHandles: Map<string, string>,
+  cacheKey: string,
+  maxPerSession = BACKFILL_MAX_ARTIFACTS,
+): void {
+  const prefix = cacheKey.slice(0, cacheKey.indexOf("\u0000") + 1);
+  seenSourceIds.delete(cacheKey);
+  seenSourceIds.add(cacheKey);
+  const sessionKeys = [...seenSourceIds].filter((key) => key.startsWith(prefix));
+  for (const key of sessionKeys.slice(0, Math.max(0, sessionKeys.length - maxPerSession))) {
+    seenSourceIds.delete(key);
+    sourceHandles.delete(key);
+  }
+}
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
@@ -669,7 +691,15 @@ export async function registerContextBrokerBeta(pi: ExtensionAPI, options: Conte
     toolResultEvents: 0,
     toolResultArtifacts: 0,
     backfillScans: 0,
+    backfillBranchEntriesScanned: 0,
+    backfillCandidateSourceIds: 0,
+    backfillActualPublished: 0,
+    backfillActualPruned: 0,
+    backfillSkippedSeen: 0,
     backfillAdded: 0,
+    backfillDuplicateSources: 0,
+    backfillBatchCommits: 0,
+    backfillBackendMs: 0,
     backfillErrors: 0,
     toolLookupCalls: 0,
     toolLookupExactCalls: 0,
@@ -769,7 +799,7 @@ export async function registerContextBrokerBeta(pi: ExtensionAPI, options: Conte
       `pruneCalls=${routingTelemetry.pruneCalls}`,
       `runtimePublishFailures=${routingTelemetry.runtimePublishFailures}`,
       `compactCleanupFailures=${routingTelemetry.compactCleanupFailures}`,
-      `backfill scans=${routingTelemetry.backfillScans} added=${routingTelemetry.backfillAdded} errors=${routingTelemetry.backfillErrors}`,
+      `backfill scans=${routingTelemetry.backfillScans} limit=${BACKFILL_MAX_ARTIFACTS} skippedSeen=${routingTelemetry.backfillSkippedSeen} added=${routingTelemetry.backfillAdded} errors=${routingTelemetry.backfillErrors} branchEntriesScanned=${routingTelemetry.backfillBranchEntriesScanned} candidateSourceIds=${routingTelemetry.backfillCandidateSourceIds} duplicateSources=${routingTelemetry.backfillDuplicateSources} actualPublished=${routingTelemetry.backfillActualPublished} actualPruned=${routingTelemetry.backfillActualPruned} batchCommits=${routingTelemetry.backfillBatchCommits} backendMs=${routingTelemetry.backfillBackendMs}`,
     ];
     return `Context broker routing telemetry: ${line.join(", ")}`;
   }
@@ -778,17 +808,29 @@ export async function registerContextBrokerBeta(pi: ExtensionAPI, options: Conte
     return `${sessionId}\u0000${sourceId}`;
   }
 
-  function clearSourceCache(sessionId: string): void {
+  function rememberSeenSource(cacheKey: string): void {
+    rememberNewestSource(seenSourceIds, sourceHandles, cacheKey);
+  }
+
+  function clearSourceHandles(sessionId: string): void {
     const prefix = `${sessionId}\u0000`;
-    for (const key of seenSourceIds) {
-      if (key.startsWith(prefix)) seenSourceIds.delete(key);
-    }
     for (const key of sourceHandles.keys()) {
       if (key.startsWith(prefix)) sourceHandles.delete(key);
     }
   }
 
-  function publishToolArtifact(sessionId: string, event: {
+  function hydrateSeenSources(sessionId: string): void {
+    const artifacts = safeBrokerLookup({ sessionId, limit: BACKFILL_MAX_ARTIFACTS });
+    if (!artifacts) return;
+    for (const artifact of [...artifacts].reverse()) {
+      if (!artifact.sourceId) continue;
+      const cacheKey = sourceCacheKey(sessionId, artifact.sourceId);
+      sourceHandles.set(cacheKey, artifact.handle);
+      rememberSeenSource(cacheKey);
+    }
+  }
+
+  type ToolArtifactEvent = {
     toolName: string;
     input?: any;
     content?: unknown;
@@ -797,24 +839,11 @@ export async function registerContextBrokerBeta(pi: ExtensionAPI, options: Conte
     sourceId?: string;
     createdAt?: number;
     ttlMs?: number;
-  }): ContextArtifact | null {
+  };
+
+  /** Build a sanitized artifact without touching storage so resume can commit one batch. */
+  function buildToolArtifactInput(sessionId: string, event: ToolArtifactEvent): ContextArtifactInput | null {
     if (!shouldBrokerToolName(event.toolName)) return null;
-
-    const cacheKey = event.sourceId ? sourceCacheKey(sessionId, event.sourceId) : undefined;
-    if (cacheKey) {
-      const existingHandle = sourceHandles.get(cacheKey);
-      if (existingHandle) {
-        const matches = safeBrokerLookup({ handle: existingHandle });
-        if (matches === null) return null;
-        const existing = matches[0];
-        if (existing) return existing;
-        sourceHandles.delete(cacheKey);
-        seenSourceIds.delete(cacheKey);
-      }
-      if (seenSourceIds.has(cacheKey)) seenSourceIds.delete(cacheKey);
-      seenSourceIds.add(cacheKey);
-    }
-
     const sanitizedEvent = {
       ...event,
       input: sanitizeValue(event.input) as any,
@@ -825,32 +854,65 @@ export async function registerContextBrokerBeta(pi: ExtensionAPI, options: Conte
     const bytes = Buffer.byteLength(payload, "utf8");
     const hostilePayload = isHostilePayload(payload) || hasHostileValue(sanitizedEvent);
     const opaquePayload = !hostilePayload && (isOpaquePayload(payload) || hasOpaqueValue(sanitizedEvent));
-    let artifact: ContextArtifact;
+    return {
+      sessionId,
+      kind: "tool_output",
+      payload,
+      summary: summarizeTool(sanitizedEvent, bytes, hostilePayload),
+      tags: [
+        event.toolName,
+        event.isError ? "error" : "ok",
+        event.sourceId ? "session-backfill" : "live",
+        ...(hostilePayload ? ["hostile", "binary"] : []),
+        ...(opaquePayload ? ["opaque"] : []),
+      ],
+      command: event.toolName === "bash" && typeof sanitizedEvent.input?.command === "string" ? sanitizedEvent.input.command : undefined,
+      paths: typeof sanitizedEvent.input?.path === "string" ? [sanitizedEvent.input.path] : [],
+      ttlMs: event.ttlMs ?? DEFAULT_TTL_MS,
+      parentIds: event.sourceId ? [event.sourceId] : [],
+      sourceId: event.sourceId,
+      createdAt: event.createdAt,
+    };
+  }
+
+  function publishToolArtifact(sessionId: string, event: ToolArtifactEvent): ContextArtifact | null | undefined {
+    const artifactInput = buildToolArtifactInput(sessionId, event);
+    if (!artifactInput) return undefined;
+    const cacheKey = event.sourceId ? sourceCacheKey(sessionId, event.sourceId) : undefined;
+    if (cacheKey) {
+      const existingHandle = sourceHandles.get(cacheKey);
+      if (existingHandle) {
+        const matches = safeBrokerLookup({ handle: existingHandle });
+        if (matches === null) return null;
+        const existing = matches[0];
+        if (existing) {
+          rememberSeenSource(cacheKey);
+          return existing;
+        }
+        sourceHandles.delete(cacheKey);
+      }
+    }
+
+    let artifact: ContextArtifact | undefined;
     try {
-      artifact = broker.publish({
-        sessionId,
-        kind: "tool_output",
-        payload,
-        summary: summarizeTool(sanitizedEvent, bytes, hostilePayload),
-        tags: [
-          event.toolName,
-          event.isError ? "error" : "ok",
-          event.sourceId ? "session-backfill" : "live",
-          ...(hostilePayload ? ["hostile", "binary"] : []),
-          ...(opaquePayload ? ["opaque"] : []),
-        ],
-        command: event.toolName === "bash" && typeof sanitizedEvent.input?.command === "string" ? sanitizedEvent.input.command : undefined,
-        paths: typeof sanitizedEvent.input?.path === "string" ? [sanitizedEvent.input.path] : [],
-        ttlMs: event.ttlMs ?? DEFAULT_TTL_MS,
-        parentIds: event.sourceId ? [event.sourceId] : [],
-        createdAt: event.createdAt,
-      });
+      // Live ingestion uses publish's protected pruning semantics: a newly
+      // inserted result cannot be evicted by its own cap maintenance.
+      artifact = broker.publish(artifactInput);
     } catch (error) {
       recordPublishFailure(error);
+      return undefined;
+    }
+    // A durable duplicate may be represented by publish's compatibility
+    // tombstone. Never route a context rewrite to its pruned handle.
+    if (!artifact || !safeBrokerLookup({ handle: artifact.handle })?.length) {
+      if (cacheKey) rememberSeenSource(cacheKey);
       return null;
     }
-    if (artifact) routingTelemetry.toolResultArtifacts += 1;
-    if (cacheKey) sourceHandles.set(cacheKey, artifact.handle);
+    routingTelemetry.toolResultArtifacts += 1;
+    if (cacheKey) {
+      sourceHandles.set(cacheKey, artifact.handle);
+      rememberSeenSource(cacheKey);
+    }
     return artifact;
   }
 
@@ -874,75 +936,107 @@ export async function registerContextBrokerBeta(pi: ExtensionAPI, options: Conte
     try {
       entries = ctx.sessionManager?.getBranch?.() ?? [];
     } catch {
+      routingTelemetry.backfillErrors += 1;
       return { added: 0, scanned: 0, errors: 1 };
     }
 
-    const toolInputs = collectToolInputs(entries);
+    // One bounded backwards pass keeps startup work predictable.  It examines
+    // a fixed raw-entry window (rather than stopping after 64 results), so
+    // sparse branches can still retain up to 64 eligible artifacts while the
+    // adjacent assistant tool calls needed to describe those results are seen
+    // in that same window.
+    const activeTail: any[] = [];
+    const toolInputs = new Map<string, { toolName?: string; input?: unknown }>();
+    let branchEntriesScanned = 0;
+    for (let index = entries.length - 1; index >= 0 && branchEntriesScanned < BACKFILL_MAX_RAW_ENTRIES; index -= 1) {
+      const entry = entries[index];
+      branchEntriesScanned += 1;
+      const message = entry?.type === "message" ? entry.message : entry;
+      if (message?.role === "assistant" && Array.isArray(message.content)) {
+        for (const block of message.content) {
+          if (block?.type === "toolCall" && typeof block.id === "string") {
+            toolInputs.set(block.id, { toolName: typeof block.name === "string" ? block.name : undefined, input: block.arguments });
+          }
+        }
+      }
+      const role = entry?.type === "message" ? entry.message?.role : undefined;
+      if (activeTail.length < BACKFILL_MAX_ARTIFACTS
+        && (role === "toolResult" || (role === "bashExecution" && entry.message?.excludeFromContext !== true))) activeTail.push(entry);
+    }
+    activeTail.reverse();
+    routingTelemetry.backfillBranchEntriesScanned += branchEntriesScanned;
+    routingTelemetry.backfillScans += activeTail.length;
+    hydrateSeenSources(sessionId);
 
-    let added = 0;
-    let scanned = 0;
+    const candidates: ContextArtifactInput[] = [];
     let errors = 0;
-
-    for (const entry of entries) {
+    for (const entry of activeTail) {
       try {
         const entryId = typeof entry?.id === "string" ? entry.id : undefined;
         const createdAt = messageTimestamp(entry);
-
-        if (entry?.type === "message" && entry.message?.role === "toolResult") {
-          scanned += 1;
-          routingTelemetry.backfillScans += 1;
-          const sourceId = typeof entry.message.toolCallId === "string" ? entry.message.toolCallId : entryId;
-          const toolInput = sourceId ? toolInputs.get(sourceId) : undefined;
-          const sourceKey = sourceId ? sourceCacheKey(sessionId, sourceId) : undefined;
-          const alreadySeen = sourceKey ? seenSourceIds.has(sourceKey) || sourceHandles.has(sourceKey) : false;
-          if (publishToolArtifact(sessionId, {
-            toolName: String(entry.message.toolName ?? toolInput?.toolName ?? "tool"),
-            input: entry.message.input ?? toolInput?.input,
-            content: entry.message.content,
-            details: entry.message.details,
-            isError: Boolean(entry.message.isError),
+        const message = entry.message;
+        const isToolResult = message?.role === "toolResult";
+        const sourceId = isToolResult
+          ? (typeof message.toolCallId === "string" ? message.toolCallId : entryId)
+          : entryId;
+        const candidate = isToolResult
+          ? buildToolArtifactInput(sessionId, {
+            toolName: String(message.toolName ?? toolInputs.get(sourceId ?? "")?.toolName ?? "tool"),
+            input: message.input ?? toolInputs.get(sourceId ?? "")?.input,
+            content: message.content,
+            details: message.details,
+            isError: Boolean(message.isError),
             sourceId,
             createdAt,
             ttlMs: ttlFromNowFor(createdAt),
-          }) && !alreadySeen) {
-            added += 1;
-            routingTelemetry.backfillAdded += 1;
-          }
-        }
-
-        if (entry?.type === "message" && entry.message?.role === "bashExecution") {
-          if (entry.message.excludeFromContext === true) continue;
-          scanned += 1;
-          routingTelemetry.backfillScans += 1;
-          const sourceId = entryId;
-          const sourceKey = sourceId ? sourceCacheKey(sessionId, sourceId) : undefined;
-          const alreadySeen = sourceKey ? seenSourceIds.has(sourceKey) || sourceHandles.has(sourceKey) : false;
-          if (publishToolArtifact(sessionId, {
+          })
+          : buildToolArtifactInput(sessionId, {
             toolName: "bash",
-            input: { command: entry.message.command },
-            content: entry.message.output,
-            details: {
-              exitCode: entry.message.exitCode,
-              cancelled: entry.message.cancelled,
-              truncated: entry.message.truncated,
-              fullOutputPath: entry.message.fullOutputPath,
-            },
-            isError: typeof entry.message.exitCode === "number" ? entry.message.exitCode !== 0 : Boolean(entry.message.cancelled),
+            input: { command: message.command },
+            content: message.output,
+            details: { exitCode: message.exitCode, cancelled: message.cancelled, truncated: message.truncated, fullOutputPath: message.fullOutputPath },
+            isError: typeof message.exitCode === "number" ? message.exitCode !== 0 : Boolean(message.cancelled),
             sourceId,
             createdAt,
             ttlMs: ttlFromNowFor(createdAt),
-          }) && !alreadySeen) {
-            added += 1;
-            routingTelemetry.backfillAdded += 1;
-          }
-        }
+          });
+        if (!candidate) continue;
+        // Validate persisted producer identity before the atomic batch so one
+        // malformed historical row cannot reject every valid tail candidate.
+        sourceIdFor(candidate);
+        candidates.push(candidate);
       } catch {
         errors += 1;
         routingTelemetry.backfillErrors += 1;
       }
     }
 
-    return { added, scanned, errors };
+    routingTelemetry.backfillCandidateSourceIds += candidates.filter((candidate) => Boolean(candidate.sourceId)).length;
+    if (!candidates.length) return { added: 0, scanned: activeTail.length, errors };
+
+    const startedAt = Date.now();
+    try {
+      const batch = broker.publishBatch(candidates);
+      routingTelemetry.backfillBackendMs += Math.max(0, Date.now() - startedAt);
+      routingTelemetry.backfillBatchCommits += 1;
+      routingTelemetry.backfillDuplicateSources += batch.duplicateSources;
+      routingTelemetry.backfillAdded += batch.published;
+      routingTelemetry.backfillActualPublished += batch.published;
+      routingTelemetry.backfillActualPruned += batch.pruned ?? 0;
+      for (const candidate of candidates) {
+        if (!candidate.sourceId) continue;
+        const key = sourceCacheKey(sessionId, candidate.sourceId);
+        const artifact = batch.artifacts.find((item) => item.sourceId === candidate.sourceId);
+        if (artifact) sourceHandles.set(key, artifact.handle);
+        rememberSeenSource(key);
+      }
+      return { added: batch.published, scanned: activeTail.length, errors };
+    } catch (error) {
+      routingTelemetry.backfillBackendMs += Math.max(0, Date.now() - startedAt);
+      recordPublishFailure(error);
+      routingTelemetry.backfillErrors += 1;
+      return { added: 0, scanned: activeTail.length, errors: errors + 1 };
+    }
   }
 
   function currentBrief(sessionId: string): string {
@@ -1079,7 +1173,10 @@ export async function registerContextBrokerBeta(pi: ExtensionAPI, options: Conte
       }
       return;
     }
-    clearSourceCache(sessionId);
+    // Retain the bounded seen-source tail so the next resume does not
+    // synchronously republish pre-compaction history. Handles are invalidated
+    // because unpinned artifacts were intentionally purged.
+    clearSourceHandles(sessionId);
     const removed = before.records - after.records;
     if (removed > 0) ctx.ui.notify(`Context broker compact cleanup purged ${removed} unpinned artifact${removed === 1 ? "" : "s"}; pinned artifacts retained.`, "info");
   });
@@ -1160,6 +1257,9 @@ export async function registerContextBrokerBeta(pi: ExtensionAPI, options: Conte
           createdAt: typeof message.timestamp === "number" ? message.timestamp : undefined,
           ttlMs: ttlFromNowFor(typeof message.timestamp === "number" ? message.timestamp : undefined),
         });
+        // A durable source tombstone has no retained payload to look up.
+        // Preserve the current raw result instead of rewriting to its pruned handle.
+        if (artifact === null) return { original: message };
         if (!artifact) return { original: message };
         if (lens && contextLensesEnabled) {
           routingTelemetry.contextLensHits += 1;
@@ -1221,6 +1321,9 @@ export async function registerContextBrokerBeta(pi: ExtensionAPI, options: Conte
           createdAt: typeof message.timestamp === "number" ? message.timestamp : undefined,
           ttlMs: ttlFromNowFor(typeof message.timestamp === "number" ? message.timestamp : undefined),
         });
+        // A durable source tombstone has no retained payload to look up.
+        // Preserve the current raw result instead of rewriting to its pruned handle.
+        if (artifact === null) return { original: message };
         if (!artifact) return { original: message };
         if (lens && contextLensesEnabled) {
           routingTelemetry.contextLensHits += 1;
