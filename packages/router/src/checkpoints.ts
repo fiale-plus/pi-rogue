@@ -5,7 +5,77 @@ import { routerSessionKey } from "./config.js";
 import { diffChurnScore, EMPTY_DIFF_STATS, readGitDiffStats } from "./git-features.js";
 import { touchedFileHashesFromEvent } from "./progress.js";
 import { readPiSession, sessionIdFromPath, streamPiSessionEvents, type PiSession, type RawPiSessionEvent } from "./session-reader.js";
-import { RAW_SESSION_REF_SCHEMA, ROUTER_CHECKPOINT_SCHEMA, type ProgressSignals, type RawSessionRef, type RouterCheckpoint, type SessionCommandEvent, type SessionToolResultEvent } from "./types.js";
+import { RAW_SESSION_REF_SCHEMA, ROUTER_CHECKPOINT_SCHEMA, type DiffStats, type ProgressSignals, type RawSessionRef, type RouterCheckpoint, type SessionCommandEvent, type SessionRole, type SessionToolResultEvent } from "./types.js";
+
+export interface SerializedBuildState {
+  contextTokensApprox: number | null;
+  phase: RouterCheckpoint["phase"];
+  activeModel?: string;
+  provider?: string;
+  lastUserGoalHash?: string;
+  lastCommandHash?: string;
+  sameCommandRepeatedCount: number;
+  lastErrorHash?: string;
+  previousErrorHash?: string;
+  lastErrorFingerprintHash?: string;
+  previousErrorFingerprintHash?: string;
+  sameErrorRepeatedCount: number;
+  verifierUsed: boolean;
+  commandCount: number;
+  recentCommands: string[];
+  touchedFileHashes: string[];
+  diffStats: DiffStats;
+}
+
+export interface SerializedReplayRefEvent {
+  index: number;
+  byteStart: number;
+  byteEnd: number;
+  rawLineHash: string;
+  pointer: {
+    index: number;
+    byteStart: number;
+    byteEnd: number;
+    id?: string;
+    timestamp?: string;
+    type: string;
+    role: SessionRole;
+  };
+}
+
+export interface CheckpointReplayState {
+  fileFingerprint: {
+    size: number;
+    mtimeMs: number;
+    ino?: number;
+  };
+  sessionId: string;
+  sessionPath: string;
+  sessionCwd?: string;
+  nextByteOffset: number;
+  nextEventIndex: number;
+  buildState: SerializedBuildState;
+  replayRefs: SerializedReplayRefEvent[];
+  checkpoint: RouterCheckpoint;
+}
+
+export interface CheckpointReplayInput {
+  fromByteStart: number;
+  fromEventIndex: number;
+  sessionCwd?: string;
+  buildState?: SerializedBuildState;
+  replayRefs?: SerializedReplayRefEvent[];
+}
+
+export interface CheckpointReplayResult {
+  latestCheckpoint: RouterCheckpoint | null;
+  nextByteOffset: number;
+  nextEventIndex: number;
+  sessionCwd?: string;
+  buildState: SerializedBuildState;
+  replayRefs: SerializedReplayRefEvent[];
+  parsedEventCount: number;
+}
 
 function textFromEvent(event: RawPiSessionEvent): string {
   const message = event.raw.message;
@@ -46,7 +116,7 @@ interface SessionContext {
   cwd?: string;
 }
 
-function rawSessionRef(session: SessionContext, refEvents: RawPiSessionEvent[], last: RawPiSessionEvent | undefined): RawSessionRef {
+function rawSessionRef(session: SessionContext, refEvents: ReplayRefEvent[], last: ReplayRefEvent | undefined): RawSessionRef {
   const first = refEvents[0];
   const fromByte = first?.byteStart ?? 0;
   const toByte = last?.byteEnd ?? 0;
@@ -69,7 +139,7 @@ function clamp01(value: number): number {
   return Math.max(0, Math.min(1, value));
 }
 
-const RAW_REF_EVENT_WINDOW = 30;
+export const RAW_REF_EVENT_WINDOW = 30;
 
 interface BuildState {
   activeModel?: string;
@@ -88,7 +158,90 @@ interface BuildState {
   commandCount: number;
   recentCommands: string[];
   touchedFileHashes: Set<string>;
-  diffStats: import("./types.js").DiffStats;
+  diffStats: DiffStats;
+}
+
+type ReplayRefEvent = Pick<RawPiSessionEvent, "index" | "byteStart" | "byteEnd" | "rawLineHash" | "pointer">;
+
+export function serializeBuildState(state: BuildState): SerializedBuildState {
+  return {
+    contextTokensApprox: state.contextTokensApprox,
+    phase: state.phase,
+    activeModel: state.activeModel,
+    provider: state.provider,
+    lastUserGoalHash: state.lastUserGoalHash,
+    lastCommandHash: state.lastCommandHash,
+    sameCommandRepeatedCount: state.sameCommandRepeatedCount,
+    lastErrorHash: state.lastErrorHash,
+    previousErrorHash: state.previousErrorHash,
+    lastErrorFingerprintHash: state.lastErrorFingerprintHash,
+    previousErrorFingerprintHash: state.previousErrorFingerprintHash,
+    sameErrorRepeatedCount: state.sameErrorRepeatedCount,
+    verifierUsed: state.verifierUsed,
+    commandCount: state.commandCount,
+    recentCommands: [...state.recentCommands],
+    touchedFileHashes: [...state.touchedFileHashes],
+    diffStats: { ...state.diffStats },
+  };
+}
+
+export function hydrateBuildState(snapshot?: SerializedBuildState): BuildState {
+  if (!snapshot) return initialBuildState();
+  return {
+    activeModel: snapshot.activeModel,
+    provider: snapshot.provider,
+    contextTokensApprox: snapshot.contextTokensApprox,
+    lastUserGoalHash: snapshot.lastUserGoalHash,
+    phase: snapshot.phase,
+    lastCommandHash: snapshot.lastCommandHash,
+    sameCommandRepeatedCount: snapshot.sameCommandRepeatedCount,
+    lastErrorHash: snapshot.lastErrorHash,
+    previousErrorHash: snapshot.previousErrorHash,
+    lastErrorFingerprintHash: snapshot.lastErrorFingerprintHash,
+    previousErrorFingerprintHash: snapshot.previousErrorFingerprintHash,
+    sameErrorRepeatedCount: snapshot.sameErrorRepeatedCount,
+    verifierUsed: snapshot.verifierUsed,
+    commandCount: snapshot.commandCount,
+    recentCommands: [...snapshot.recentCommands],
+    touchedFileHashes: new Set(snapshot.touchedFileHashes),
+    diffStats: { ...EMPTY_DIFF_STATS, ...snapshot.diffStats },
+  };
+}
+
+export function serializeReplayRefs(refEvents: ReplayRefEvent[]): SerializedReplayRefEvent[] {
+  return refEvents.slice(-RAW_REF_EVENT_WINDOW).map((event) => ({
+    index: event.index,
+    byteStart: event.byteStart,
+    byteEnd: event.byteEnd,
+    rawLineHash: event.rawLineHash,
+    pointer: {
+      index: event.pointer.index,
+      byteStart: event.pointer.byteStart,
+      byteEnd: event.pointer.byteEnd,
+      id: event.pointer.id,
+      timestamp: event.pointer.timestamp,
+      type: event.pointer.type,
+      role: event.pointer.role,
+    },
+  }));
+}
+
+function hydrateReplayRefs(refs: SerializedReplayRefEvent[]): ReplayRefEvent[] {
+  return refs.map((entry) => ({
+    index: entry.index,
+    byteStart: entry.byteStart,
+    byteEnd: entry.byteEnd,
+    rawLineHash: entry.rawLineHash,
+    pointer: {
+      index: entry.pointer.index,
+      byteStart: entry.pointer.byteStart,
+      byteEnd: entry.pointer.byteEnd,
+      id: entry.pointer.id,
+      timestamp: entry.pointer.timestamp,
+      type: entry.pointer.type,
+      role: entry.pointer.role,
+    },
+  }));
 }
 
 function updateCommandState(state: BuildState, command: SessionCommandEvent): void {
@@ -150,7 +303,7 @@ function signalsFromState(state: BuildState): ProgressSignals {
   };
 }
 
-function checkpointFromState(session: SessionContext, event: RawPiSessionEvent, refEvents: RawPiSessionEvent[], state: BuildState): RouterCheckpoint {
+function checkpointFromState(session: SessionContext, event: RawPiSessionEvent, refEvents: ReplayRefEvent[], state: BuildState): RouterCheckpoint {
   const signals = signalsFromState(state);
   return {
     schema: ROUTER_CHECKPOINT_SCHEMA,
@@ -215,14 +368,14 @@ function isCheckpointEvent(event: RawPiSessionEvent): boolean {
   return event.role === "user" || event.role === "assistant" || event.role === "toolResult";
 }
 
-function pushRefWindow(refEvents: RawPiSessionEvent[], event: RawPiSessionEvent): void {
+function pushRefWindow(refEvents: ReplayRefEvent[], event: ReplayRefEvent): void {
   refEvents.push(event);
   if (refEvents.length > RAW_REF_EVENT_WINDOW) refEvents.shift();
 }
 
 export function* iterateCheckpoints(session: PiSession): Generator<RouterCheckpoint> {
   const state = initialBuildState();
-  const refEvents: RawPiSessionEvent[] = [];
+  const refEvents: ReplayRefEvent[] = [];
   for (const event of session.events) {
     pushRefWindow(refEvents, event);
     updateStateFromEvent(state, event);
@@ -234,7 +387,7 @@ export function* iterateCheckpoints(session: PiSession): Generator<RouterCheckpo
 export async function* streamCheckpointsFromSessionPath(sessionPath: string): AsyncGenerator<RouterCheckpoint> {
   const session: SessionContext = { id: sessionIdFromPath(resolve(sessionPath)), path: resolve(sessionPath) };
   const state = initialBuildState();
-  const refEvents: RawPiSessionEvent[] = [];
+  const refEvents: ReplayRefEvent[] = [];
   for await (const event of streamPiSessionEvents(session.path)) {
     if (event.raw.type === "session" && typeof event.raw.cwd === "string") session.cwd = event.raw.cwd;
     pushRefWindow(refEvents, event);
@@ -242,6 +395,47 @@ export async function* streamCheckpointsFromSessionPath(sessionPath: string): As
     if (!isCheckpointEvent(event)) continue;
     yield checkpointFromState(session, event, refEvents, state);
   }
+}
+
+export async function streamCheckpointsFromSessionPathWithReplay(
+  sessionPath: string,
+  input: CheckpointReplayInput,
+): Promise<CheckpointReplayResult> {
+  const session: SessionContext = {
+    id: sessionIdFromPath(resolve(sessionPath)),
+    path: resolve(sessionPath),
+    cwd: input.sessionCwd,
+  };
+  const state = hydrateBuildState(input.buildState);
+  const refEvents: ReplayRefEvent[] = hydrateReplayRefs(input.replayRefs ?? []);
+  let latest: RouterCheckpoint | null = null;
+  let parsedEventCount = 0;
+  let byteOffset = input.fromByteStart;
+  let nextEventIndex = input.fromEventIndex;
+
+  for await (const event of streamPiSessionEvents(session.path, {
+    fromByteStart: input.fromByteStart,
+    startIndex: input.fromEventIndex,
+  })) {
+    if (event.raw.type === "session" && typeof event.raw.cwd === "string") session.cwd = event.raw.cwd;
+    byteOffset = event.byteEnd;
+    nextEventIndex = event.index + 1;
+    parsedEventCount++;
+    pushRefWindow(refEvents, event);
+    updateStateFromEvent(state, event);
+    if (!isCheckpointEvent(event)) continue;
+    latest = checkpointFromState(session, event, refEvents, state);
+  }
+
+  return {
+    latestCheckpoint: latest,
+    nextByteOffset: byteOffset,
+    nextEventIndex,
+    sessionCwd: session.cwd,
+    buildState: serializeBuildState(state),
+    replayRefs: serializeReplayRefs(refEvents),
+    parsedEventCount,
+  };
 }
 
 function clampFeature(value: number): number {

@@ -232,6 +232,34 @@ describe("router config profiles", () => {
     expect(ctx.notifications).toHaveLength(notifications);
   });
 
+  it("replays only session JSONL suffix when unchanged and reparses on truncation", async () => {
+    const cwd = mkdtempSync(join(tmpdir(), "pi-router-replay-"));
+    const session = writeSessionFixture(cwd, "replay.jsonl");
+    appendAutoModelTurn(session, "gpt-5.3-codex-spark");
+    const ctx = { ...ctxMock(session), cwd };
+    saveRouterConfig(ctx, { ...loadRouterConfig(ctx), enabled: true, mode: "observe", print: "off" });
+
+    const first = await observeRouterTurn(ctx);
+    expect(first).not.toBeNull();
+    expect(loadRouterState(ctx, session).lastCheckpointReplayParse).toMatchObject({ source: "full", parsedEventCount: 3 });
+
+    const duplicate = await observeRouterTurn(ctx);
+    expect(duplicate).toBeNull();
+    expect(loadRouterState(ctx, session).lastCheckpointReplayParse).toMatchObject({ source: "none", parsedEventCount: 0 });
+
+    appendAutoModelTurn(session, "gpt-5.3-codex-spark");
+    const replay = await observeRouterTurn(ctx);
+    expect(replay).not.toBeNull();
+    expect(loadRouterState(ctx, session).lastCheckpointReplayParse).toMatchObject({ source: "replay", parsedEventCount: 1 });
+
+    const lines = readFileSync(session, "utf8").split("\n").filter((line) => line.trim());
+    writeFileSync(session, `${lines[0]}\n${lines[1]}\n`);
+
+    const fallback = await observeRouterTurn(ctx);
+    expect(fallback).not.toBeNull();
+    expect(loadRouterState(ctx, session).lastCheckpointReplayParse).toMatchObject({ source: "full", parsedEventCount: 2 });
+  });
+
   it("keeps config repo-global while state and live events are session-scoped", async () => {
     const cwd = mkdtempSync(join(tmpdir(), "pi-router-sessions-"));
     const firstSession = writeSessionFixture(cwd, "session-a.jsonl");
