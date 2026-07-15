@@ -3621,10 +3621,7 @@ async function doReview(pi: ExtensionAPI, ctx: any, trigger: string, delta: stri
       return;
     }
 
-    const shouldRun =
-      finalReview === "strict"
-        ? meta.isAgentEnd || meta.fileChanged || meta.failed || reviewRoute.label !== "abstain" || state.turns % 3 === 0
-        : meta.fileChanged || meta.failed;
+    const shouldRun = shouldRunAdvisorReview(finalReview, meta, reviewRoute, state.turns);
     if (!shouldRun) {
       if (hasCleanCloseoutEvidence(delta, meta)) {
         finalDecision = "continue";
@@ -3805,17 +3802,28 @@ async function doReview(pi: ExtensionAPI, ctx: any, trigger: string, delta: stri
 
 // ── Extension entry point ──────────────────────────────────────────────────
 
+export function shouldRunAdvisorReview(
+  review: ReviewPolicy,
+  meta: { isAgentEnd: boolean; fileChanged: boolean; failed: boolean },
+  route: AdvisorRouteDecision,
+  turns: number,
+): boolean {
+  return review === "strict"
+    ? meta.isAgentEnd || meta.fileChanged || meta.failed || route.label !== "abstain" || turns % 3 === 0
+    : review !== "off" && (meta.fileChanged || meta.failed);
+}
+
 export function applyReviewGatePrediction(heuristic: AdvisorRouteDecision, prediction: BinaryGatePrediction | null, failed = false): AdvisorRouteDecision {
   if (!prediction?.trusted || heuristic.safety || failed) return heuristic;
   const gateContinues = prediction.decision === "continue";
   return {
     ...heuristic,
-    label: gateContinues ? "abstain" : heuristic.label,
+    label: gateContinues ? "abstain" : "course_correct",
     confidence: prediction.confidence,
     source: "model",
     reason: gateContinues ? "local gate predicts continue" : "local gate predicts review",
-    review: gateContinues ? "off" : heuristic.review,
-    escalate: gateContinues ? false : heuristic.escalate,
+    review: gateContinues ? "off" : "strict",
+    escalate: !gateContinues,
   };
 }
 

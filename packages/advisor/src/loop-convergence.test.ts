@@ -6,6 +6,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { completeSimple } from "@earendil-works/pi-ai/compat";
 import { advisorSessionStatePath, registerAdvisor } from "./extension.js";
+import * as advisorRouter from "./router.js";
 
 const testHome = vi.hoisted(() => `/tmp/pi-rogue-advisor-loop-convergence-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2)}`);
 
@@ -1193,6 +1194,8 @@ describe("advisor two-agent convergence", () => {
       message: { role: "assistant", content: "Validation failed before the final fix." },
     }, ctx);
     expect(readAdvisorState().followUp).toContain("Closeout is incomplete");
+    // Isolate evidence convergence from the independently tested binary review gate.
+    writeFileSync(ADVISOR_CONFIG_PATH, JSON.stringify({ mode: "auto", review: "off", checkins: "off", checkinIntervalMinutes: 30 }), "utf8");
 
     await turnEnd![0]({
       toolResults: [{
@@ -1216,6 +1219,8 @@ describe("advisor two-agent convergence", () => {
     expect(turnEnd?.length).toBe(1);
 
     await handlers.session_start?.[0]?.({}, ctx);
+    // This test covers structured validation parsing, not gate-driven review calls.
+    writeFileSync(ADVISOR_CONFIG_PATH, JSON.stringify({ mode: "auto", review: "off", checkins: "off", checkinIntervalMinutes: 30 }), "utf8");
     await turnEnd![0]({
       toolResults: [{
         toolName: "bash",
@@ -1736,6 +1741,31 @@ describe("advisor two-agent convergence", () => {
 
     expect(completeSimpleMock).toHaveBeenCalledTimes(1);
     expect(readAdvisorState().reviewControl.lastDecision).toBe("review");
+  });
+
+  it("invokes review for a trusted gate escalation without material signals, unless review is off", async () => {
+    const turnEnd = handlers.turn_end;
+    const gate = vi.spyOn(advisorRouter, "binaryGatePredict").mockReturnValue({
+      decision: "escalate",
+      confidence: 0.91,
+      probability: 0.91,
+      threshold: 0.5,
+      source: "model-v2",
+      trusted: true,
+    });
+    try {
+      await handlers.session_start?.[0]?.({}, ctx);
+      await turnEnd![0]({ toolResults: [], message: { role: "assistant", content: "Looks okay." } }, ctx);
+      expect(completeSimpleMock).toHaveBeenCalledTimes(1);
+      expect(readAdvisorState().router.review).toMatchObject({ label: "course_correct", review: "strict", escalate: true });
+
+      completeSimpleMock.mockClear();
+      writeFileSync(ADVISOR_CONFIG_PATH, JSON.stringify({ mode: "auto", review: "off", checkins: "off", checkinIntervalMinutes: 30 }), "utf8");
+      await turnEnd![0]({ toolResults: [], message: { role: "assistant", content: "Still okay." } }, ctx);
+      expect(completeSimpleMock).not.toHaveBeenCalled();
+    } finally {
+      gate.mockRestore();
+    }
   });
 
   it("keeps manual mode free of automatic post-turn and agent-end model calls", async () => {
