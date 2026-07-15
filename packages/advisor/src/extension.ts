@@ -2000,6 +2000,18 @@ function hasActiveTerminalEvidence(state: SessionState): boolean {
   return isTaskContinuation(evidence.task, state.lastTask);
 }
 
+function hasBlockingEvidenceAfterTimestamp(state: SessionState, at: string): boolean {
+  const cutoff = Date.parse(at);
+  if (!Number.isFinite(cutoff)) return false;
+  return (state.evidenceLedger ?? []).some((entry) => {
+    const entryTime = Date.parse(entry.timestamp);
+    if (!Number.isFinite(entryTime) || entryTime <= cutoff) return false;
+    if (entry.kind === "validation" && entry.result === "fail") return true;
+    if (entry.kind === "merge" && (entry.result === "not_merged" || entry.result === "error")) return true;
+    return false;
+  });
+}
+
 function hasCleanCloseoutEvidence(delta: string, meta: ReviewMaterialMeta): boolean {
   if (!meta.isAgentEnd || meta.failed) return false;
   if (hasStructuredCleanCloseoutEvidence(delta, meta)) return true;
@@ -3648,6 +3660,19 @@ async function doReview(pi: ExtensionAPI, ctx: any, trigger: string, delta: stri
   if (terminalReason) {
     clearResolvedReviewWarning(state, ctx, terminalReason);
     markReviewApplied(state, signature, trigger, "continue", terminalReason, true);
+    persistReviewState(state, true);
+    return;
+  }
+  const terminalEvidence = normalizeTerminalEvidence(state.reviewControl.terminalEvidence);
+  if (
+    terminalEvidence
+    && hasActiveTerminalEvidence(state)
+    && !meta.failed
+    && !hasBlockingEvidenceAfterTimestamp(state, terminalEvidence.at)
+  ) {
+    const reason = terminalEvidence.reason || "terminal clean closeout evidence";
+    clearResolvedReviewWarning(state, ctx, reason);
+    markReviewApplied(state, signature, trigger, "continue", reason, true);
     persistReviewState(state, true);
     return;
   }
