@@ -297,6 +297,70 @@ describe("fusion extension", () => {
     }
   });
 
+  it("keeps an in-flight fusion run bound to its originating session", async () => {
+    const cwdA = mkdtempSync(join(tmpdir(), "fusion-session-a-"));
+    const cwdB = mkdtempSync(join(tmpdir(), "fusion-session-b-"));
+    const target = join(cwdA, "recipes.json");
+    const previous = process.env.PI_ROGUE_FUSION_RECIPES;
+    let releaseCompletion!: () => void;
+    const completionGate = new Promise<void>((resolve) => { releaseCompletion = resolve; });
+    try {
+      process.env.PI_ROGUE_FUSION_RECIPES = target;
+      writeFileSync(target, JSON.stringify({ recipes: [{
+        schema: "pi-rogue.fusion.recipe.v1",
+        kind: "fusion",
+        id: "session-bound",
+        model: "openai-codex/gpt-5.5",
+        analysis_models: ["openai-codex/gpt-5.5"],
+      }] }));
+      completeSimpleMock.mockImplementation(async () => {
+        await completionGate;
+        return {
+          content: [{ type: "text", text: "Substantive session-bound response." }],
+          usage: {
+            input: 0,
+            output: 0,
+            cacheRead: 0,
+            cacheWrite: 0,
+            totalTokens: 0,
+            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+          },
+          stopReason: "stop",
+        };
+      });
+
+      const { pi, handlers, providers } = createPiMock();
+      const publish = vi.fn();
+      pi.__piRogueContextBroker = {
+        sessionId: (ctx: any) => ctx.sessionManager.getSessionFile(),
+        publish,
+      };
+      registerFusion(pi);
+      const ctxA: any = createCtx(cwdA);
+      ctxA.sessionManager = { getSessionFile: () => "/sessions/a.jsonl" };
+      const ctxB: any = createCtx(cwdB);
+      ctxB.sessionManager = { getSessionFile: () => "/sessions/b.jsonl" };
+      handlers.get("session_start")?.[0]?.({}, ctxA);
+
+      const provider = providers.get("fusion");
+      const stream = provider.streamSimple(provider.models[0], { messages: [] }, {});
+      ctxA.sessionManager.getSessionFile = () => { throw new Error("stale session context"); };
+      handlers.get("session_start")?.[0]?.({}, ctxB);
+      releaseCompletion();
+      await stream.result();
+
+      expect(publish).toHaveBeenCalled();
+      expect(publish.mock.calls.every((call) => call[0].sessionId === "/sessions/a.jsonl")).toBe(true);
+      expect(publish.mock.calls.some((call) => call[0].sessionId === "/sessions/b.jsonl")).toBe(false);
+    } finally {
+      completeSimpleMock.mockReset();
+      if (previous === undefined) delete process.env.PI_ROGUE_FUSION_RECIPES;
+      else process.env.PI_ROGUE_FUSION_RECIPES = previous;
+      rmSync(cwdA, { recursive: true, force: true });
+      rmSync(cwdB, { recursive: true, force: true });
+    }
+  });
+
   it("/pi-rogue-fusion configure help lists scoped session models", async () => {
     const cwd = mkdtempSync(join(tmpdir(), "fusion-help-"));
     const notifications: Array<{ message: string; type?: string }> = [];

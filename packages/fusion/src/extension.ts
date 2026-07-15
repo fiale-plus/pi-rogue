@@ -99,15 +99,14 @@ function textStream(model: Model<Api>, promise: Promise<{ text: string; result?:
   return stream;
 }
 
-function createCompleter(getCtx: () => any, usageSink: { usage: Usage }): FusionCompleter {
+function createCompleter(modelRegistry: any, usageSink: { usage: Usage }): FusionCompleter {
   return {
     async complete(request) {
-      const ctx = getCtx();
       const ref = parseModelRef(request.model);
       if (ref.provider === "fusion") throw new Error(`recursive fusion model is disabled: ${request.model}`);
-      const found = ctx.modelRegistry?.find?.(ref.provider, ref.model);
+      const found = modelRegistry?.find?.(ref.provider, ref.model);
       if (!found) throw new Error(`model not found: ${request.model}`);
-      const auth = await ctx.modelRegistry?.getApiKeyAndHeaders?.(found);
+      const auth = await modelRegistry?.getApiKeyAndHeaders?.(found);
       if (!auth?.ok) throw new Error(`model auth unavailable for ${request.model}: ${auth?.error ?? "unknown error"}`);
       const response = await completeSimple(found, request.context, {
         apiKey: auth.apiKey,
@@ -127,7 +126,7 @@ function createCompleter(getCtx: () => any, usageSink: { usage: Usage }): Fusion
   };
 }
 
-function createBrokerPublisher(pi: ExtensionAPI): FusionBrokerPublisher | undefined {
+function createBrokerPublisher(pi: ExtensionAPI, sessionId: string): FusionBrokerPublisher | undefined {
   const broker = (pi as any).__piRogueContextBroker;
   if (typeof broker?.publish !== "function") return undefined;
   return {
@@ -144,13 +143,14 @@ function createBrokerPublisher(pi: ExtensionAPI): FusionBrokerPublisher | undefi
         trace_path: result.trace_path,
       };
       broker.publish({
+        sessionId,
         kind: "fusion_result",
         payload: JSON.stringify(compactPayload, null, 2),
         summary,
         tags: ["fusion", result.status, ...(result.degraded ? [result.degraded] : [])],
         paths: result.trace_path ? [result.trace_path] : [],
         tier: result.status === "error" || result.degraded ? "hot" : "warm",
-      });
+      }, {});
     },
   };
 }
@@ -373,10 +373,16 @@ function registerFusionProviderForContext(pi: ExtensionAPI, ctx: any, getCtx: ()
       const recipe = recipesById.get(model.id);
       if (!recipe) return textStream(model, Promise.reject(new Error(`fusion recipe not found: ${model.id}`)), options?.signal);
       const usageSink = { usage: usageZero() };
+      const runCtx = getCtx();
+      const modelRegistry = runCtx.modelRegistry;
+      const contextBroker = (pi as any).__piRogueContextBroker;
+      const sessionId = typeof contextBroker?.sessionId === "function"
+        ? contextBroker.sessionId(runCtx)
+        : String(runCtx.sessionManager?.getSessionFile?.() ?? runCtx.cwd ?? process.cwd());
       const promise = runFusionCompletion(recipe, context, {
-        completer: createCompleter(getCtx, usageSink),
-        traceStore: createFileFusionTraceStore(traceDir(getCtx())),
-        broker: createBrokerPublisher(pi),
+        completer: createCompleter(modelRegistry, usageSink),
+        traceStore: createFileFusionTraceStore(traceDir(runCtx)),
+        broker: createBrokerPublisher(pi, sessionId),
         signal: options?.signal,
       }).then((result) => {
         if (result.status === "error") throw new Error(fusionFailureMessage(result));

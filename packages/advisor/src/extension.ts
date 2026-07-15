@@ -890,9 +890,9 @@ function brief(s: SessionState): string {
   return lines.join("\n").slice(0, 1200);
 }
 
-function contextBrokerBrief(pi: ExtensionAPI): string {
+function contextBrokerBrief(pi: ExtensionAPI, ctx: any): string {
   try {
-    const text = (pi as any).__piRogueContextBroker?.renderBrief?.();
+    const text = (pi as any).__piRogueContextBroker?.renderBrief?.(ctx);
     return typeof text === "string" && text.includes("ctx://") ? sanitizeAdvisorText(text).slice(0, 2400) : "";
   } catch {
     return "";
@@ -3475,7 +3475,7 @@ async function askAdvisor(pi: ExtensionAPI, ctx: any, question: string, scope: s
 
   const normalizedScope = sanitizeAdvisorText(scope).replace(/\s+/g, " ").trim().toLowerCase();
   const sessionBrief = includeWork ? brief(state) : "";
-  const brokerBrief = includeWork ? contextBrokerBrief(pi) : "";
+  const brokerBrief = includeWork ? contextBrokerBrief(pi, ctx) : "";
   const ck = hash(JSON.stringify({
     version: "advisor-answer-v2",
     model: config.model ?? "auto",
@@ -3639,7 +3639,7 @@ async function doReview(pi: ExtensionAPI, ctx: any, trigger: string, delta: stri
     }
 
     const b = brief(state);
-    const brokerBrief = contextBrokerBrief(pi);
+    const brokerBrief = contextBrokerBrief(pi, ctx);
     if (!b && !brokerBrief) {
       finalDecision = "defer";
       finalReason = "missing brief context";
@@ -3931,7 +3931,7 @@ export function registerAdvisor(pi: ExtensionAPI): void {
     }
     const currentTask = state.lastTask || "";
     const briefText = brief(state);
-    const brokerBrief = contextBrokerBrief(pi);
+    const brokerBrief = contextBrokerBrief(pi, ctx);
     const intent = prompt ? classifyIntent(prompt) : "";
     const mode = prompt ? classifyMode(prompt) : "";
     const intentTag = intent ? `Intent: ${intent}` : "";
