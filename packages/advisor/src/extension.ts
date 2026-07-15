@@ -3468,18 +3468,29 @@ export async function completeWithHigherAdvisorModel(
 async function askAdvisor(pi: ExtensionAPI, ctx: any, question: string, scope: string, includeWork: boolean) {
   const config = loadConfig();
   const state = loadState(ctx);
-  if (!question.trim()) return { text: "Ask a question.", error: "empty" };
+  const normalizedQuestion = sanitizeAdvisorText(question).trim();
+  if (!normalizedQuestion) return { text: "Ask a question.", error: "empty" };
 
+  const normalizedScope = sanitizeAdvisorText(scope).replace(/\s+/g, " ").trim().toLowerCase();
+  const sessionBrief = includeWork ? brief(state) : "";
   const brokerBrief = includeWork ? contextBrokerBrief(pi) : "";
-  const ck = hash("adv", config.model ?? "auto", squish(question, 300), includeWork ? brief(state) : "", brokerBrief);
+  const ck = hash(JSON.stringify({
+    version: "advisor-answer-v2",
+    model: config.model ?? "auto",
+    question: normalizedQuestion,
+    scope: normalizedScope,
+    includeRecentWork: includeWork,
+    sessionBrief,
+    brokerBrief,
+  }));
   const cache = loadCache();
   if (cache[ck]) { state.cacheHits++; saveState(state); return { text: cache[ck], cached: true }; }
 
   const msgs = [
     { role: "user", content: [
-      `Question: ${question}`,
-      scope ? `Scope: ${scope}` : "",
-      includeWork && brief(state) ? `Session:\n${brief(state)}` : "",
+      `Question: ${normalizedQuestion}`,
+      normalizedScope ? `Scope: ${normalizedScope}` : "",
+      sessionBrief ? `Session:\n${sessionBrief}` : "",
       brokerBrief ? `Context broker brief:\n${brokerBrief}` : "",
     ].filter(Boolean).join("\n"), timestamp: new Date().toISOString() },
   ] as any[];
