@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Context } from "@earendil-works/pi-ai";
-import { disposableMergedSignal, parseJudgeAnalysis, runFusionCompletion } from "./runner.js";
+import { DEFAULT_FUSION_PER_MODEL_TIMEOUT_MS, DEFAULT_FUSION_TIMEOUT_MS, disposableMergedSignal, parseJudgeAnalysis, runFusionCompletion } from "./runner.js";
 import type { FusionRecipe } from "./types.js";
 
 const context: Context = {
@@ -43,6 +43,58 @@ describe("fusion runner", () => {
     expect(panelAttempts).toBe(2);
     expect(signals[0]).not.toBe(signals[1]);
     expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("applies runtime defaults and times out a completer that ignores abort", async () => {
+    vi.useFakeTimers();
+    const pending = runFusionCompletion({ ...recipe, analysis_models: ["panel/a"], min_panel_success: 1 }, context, {
+      completer: { complete: async () => new Promise<string>(() => undefined) },
+    });
+
+    await vi.advanceTimersByTimeAsync(DEFAULT_FUSION_PER_MODEL_TIMEOUT_MS);
+    const result = await pending;
+    expect(result.status).toBe("error");
+    expect(result.failed_models[0]?.error).toContain(`timeout after ${DEFAULT_FUSION_PER_MODEL_TIMEOUT_MS}ms`);
+    expect(result.effective_params).toMatchObject({
+      timeout_ms: DEFAULT_FUSION_TIMEOUT_MS,
+      per_model_timeout_ms: DEFAULT_FUSION_PER_MODEL_TIMEOUT_MS,
+    });
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("caps an explicit per-model timeout at the remaining overall deadline", async () => {
+    vi.useFakeTimers();
+    const pending = runFusionCompletion({
+      ...recipe,
+      analysis_models: ["panel/a"],
+      min_panel_success: 1,
+      timeout_ms: 100,
+      per_model_timeout_ms: 10_000,
+    }, context, {
+      completer: { complete: async () => new Promise<string>(() => undefined) },
+    });
+
+    await vi.advanceTimersByTimeAsync(100);
+    const result = await pending;
+    expect(result.status).toBe("error");
+    const timeout = Number(/timeout after (\d+)ms/.exec(result.failed_models[0]?.error ?? "")?.[1]);
+    expect(timeout).toBeGreaterThan(0);
+    expect(timeout).toBeLessThanOrEqual(100);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("does not invoke a completer after caller cancellation", async () => {
+    const parent = new AbortController();
+    parent.abort(new Error("caller cancelled"));
+    const complete = vi.fn(async () => "must not run");
+
+    const result = await runFusionCompletion({ ...recipe, analysis_models: ["panel/a"], min_panel_success: 1 }, context, {
+      signal: parent.signal,
+      completer: { complete },
+    });
+
+    expect(result.status).toBe("error");
+    expect(complete).not.toHaveBeenCalled();
   });
 
   it("disposes the timer and parent listener on parent abort and timeout", () => {

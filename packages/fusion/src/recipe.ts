@@ -16,6 +16,20 @@ function cleanString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
 
+function cleanPositiveInt(value: unknown, field: string, max: number, errors: string[]): number | undefined {
+  if (value === undefined) return undefined;
+  const n = Number(value);
+  if (!Number.isInteger(n) || n <= 0) {
+    errors.push(`${field} must be a positive integer`);
+    return undefined;
+  }
+  if (n > max) {
+    errors.push(`${field} must be <= ${max}`);
+    return undefined;
+  }
+  return n;
+}
+
 function cleanNonNegativeInt(value: unknown, field: string, max: number, errors: string[]): number | undefined {
   if (value === undefined) return undefined;
   const n = Number(value);
@@ -81,8 +95,8 @@ export function validateFusionRecipe(raw: unknown): { ok: true; recipe: FusionRe
 
   const max_tool_calls = cleanNonNegativeInt(raw.max_tool_calls, "max_tool_calls", 64, errors);
   const max_completion_tokens = cleanNonNegativeInt(raw.max_completion_tokens, "max_completion_tokens", MAX_COMPLETION_TOKENS, errors);
-  const timeout_ms = cleanNonNegativeInt(raw.timeout_ms, "timeout_ms", MAX_TIMEOUT_MS, errors);
-  const per_model_timeout_ms = cleanNonNegativeInt(raw.per_model_timeout_ms, "per_model_timeout_ms", MAX_TIMEOUT_MS, errors);
+  const timeout_ms = cleanPositiveInt(raw.timeout_ms, "timeout_ms", MAX_TIMEOUT_MS, errors);
+  const per_model_timeout_ms = cleanPositiveInt(raw.per_model_timeout_ms, "per_model_timeout_ms", MAX_TIMEOUT_MS, errors);
 
   let temperature: number | undefined;
   if (raw.temperature !== undefined) {

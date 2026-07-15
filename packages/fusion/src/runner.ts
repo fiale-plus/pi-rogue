@@ -461,6 +461,9 @@ function compactSummary(result: FusionRunResult): string {
   return parts.join(" | ").slice(0, 1_000);
 }
 
+export const DEFAULT_FUSION_TIMEOUT_MS = 300_000;
+export const DEFAULT_FUSION_PER_MODEL_TIMEOUT_MS = 120_000;
+
 export interface DisposableFusionSignal {
   signal: AbortSignal | undefined;
   dispose(): void;
@@ -505,7 +508,14 @@ async function completeWithDisposableSignal(
 ): Promise<string> {
   const merged = disposableMergedSignal(parent, timeoutMs);
   try {
-    return await completer.complete({ ...request, signal: merged.signal });
+    if (merged.signal?.aborted) throw merged.signal.reason ?? new Error("fusion completion aborted");
+    const completion = Promise.resolve().then(() => completer.complete({ ...request, signal: merged.signal }));
+    if (!merged.signal) return await completion;
+    return await new Promise<string>((resolve, reject) => {
+      const abort = () => reject(merged.signal?.reason ?? new Error("fusion completion aborted"));
+      merged.signal?.addEventListener("abort", abort, { once: true });
+      completion.then(resolve, reject).finally(() => merged.signal?.removeEventListener("abort", abort));
+    });
   } finally {
     merged.dispose();
   }
@@ -513,6 +523,12 @@ async function completeWithDisposableSignal(
 
 export async function runFusionCompletion(recipe: FusionRecipe, context: Context, options: RunFusionOptions): Promise<FusionRunResult> {
   const run_id = options.runId ?? `fusion-${Date.now()}-${randomUUID().slice(0, 8)}`;
+  const overallTimeoutMs = recipe.timeout_ms ?? DEFAULT_FUSION_TIMEOUT_MS;
+  const perModelTimeoutMs = recipe.per_model_timeout_ms ?? DEFAULT_FUSION_PER_MODEL_TIMEOUT_MS;
+  const deadline = performance.now() + overallTimeoutMs;
+  const overall = disposableMergedSignal(options.signal, overallTimeoutMs);
+  const nextCallTimeoutMs = () => Math.max(1, Math.floor(Math.min(perModelTimeoutMs, deadline - performance.now())));
+  try {
   const requested_params = {
     model: recipe.model,
     analysis_models: recipe.analysis_models,
@@ -532,7 +548,7 @@ export async function runFusionCompletion(recipe: FusionRecipe, context: Context
 
     for (const budget of panelBudgets) {
       try {
-        const timeoutMs = recipe.per_model_timeout_ms ?? recipe.timeout_ms;
+        const timeoutMs = nextCallTimeoutMs();
         const content = responseText(await completeWithDisposableSignal(options.completer, {
           model,
           context: panelPrompt(context, budget),
@@ -540,7 +556,7 @@ export async function runFusionCompletion(recipe: FusionRecipe, context: Context
           temperature: recipe.temperature,
           reasoning: recipe.reasoning?.effort,
           timeoutMs,
-        }, options.signal, timeoutMs));
+        }, overall.signal, timeoutMs));
         if (!content) throw new Error("empty panel response");
         return { model, content, wall_ms: Math.round(performance.now() - started) };
       } catch (error) {
@@ -562,7 +578,12 @@ export async function runFusionCompletion(recipe: FusionRecipe, context: Context
   const allowPartial = recipe.allow_partial_panel !== false;
 
   const minimumPanelSuccess = recipe.min_panel_success ?? minimumPanelSuccessCount(recipe.analysis_models.length);
-  const effective_params = { ...requested_params, min_panel_success: minimumPanelSuccess };
+  const effective_params = {
+    ...requested_params,
+    min_panel_success: minimumPanelSuccess,
+    timeout_ms: overallTimeoutMs,
+    per_model_timeout_ms: perModelTimeoutMs,
+  };
   const panelQuorumMet = responses.length >= minimumPanelSuccess;
 
   if (!panelQuorumMet || (!allowPartial && failed_models.length > 0)) {
@@ -608,13 +629,14 @@ export async function runFusionCompletion(recipe: FusionRecipe, context: Context
   let degraded: FusionRunResult["degraded"] = failed_models.length > 0 ? "panel_partial" : undefined;
   let judgeUsageLimit = false;
   try {
+    const judgeTimeoutMs = nextCallTimeoutMs();
     const judgeText = await completeWithDisposableSignal(options.completer, {
       model: recipe.model,
       context: buildJudgeContext(context, responses, failed_models),
       maxTokens: Math.min(recipe.max_completion_tokens ?? 1500, 4000),
       reasoning: recipe.reasoning?.effort,
-      timeoutMs: recipe.timeout_ms,
-    }, options.signal, recipe.timeout_ms);
+      timeoutMs: judgeTimeoutMs,
+    }, overall.signal, judgeTimeoutMs);
     judge_raw = judgeText;
     analysis = parseJudgeAnalysis(judgeText) ?? undefined;
     if (!analysis) {
@@ -636,14 +658,15 @@ export async function runFusionCompletion(recipe: FusionRecipe, context: Context
     degraded = "judge_failed";
   } else {
     try {
+      const synthesisTimeoutMs = nextCallTimeoutMs();
       final_text = validatedSynthesisText(await completeWithDisposableSignal(options.completer, {
         model: recipe.model,
         context: buildSynthesisContext(context, responses, failed_models, analysis),
         maxTokens: recipe.max_completion_tokens,
         temperature: recipe.temperature,
         reasoning: recipe.reasoning?.effort,
-        timeoutMs: recipe.timeout_ms,
-      }, options.signal, recipe.timeout_ms));
+        timeoutMs: synthesisTimeoutMs,
+      }, overall.signal, synthesisTimeoutMs));
     } catch (error) {
       if (degraded !== "judge_failed") degraded = "synthesis_failed";
       final_text = [
@@ -672,6 +695,9 @@ export async function runFusionCompletion(recipe: FusionRecipe, context: Context
   result.trace_path = options.traceStore?.write(result);
   options.broker?.publish(result, compactSummary(result));
   return result;
+  } finally {
+    overall.dispose();
+  }
 }
 
 export function createFileFusionTraceStore(dir: string): FusionTraceStore {
