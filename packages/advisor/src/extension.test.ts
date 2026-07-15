@@ -213,9 +213,9 @@ describe("Advisor binary gate status", () => {
     thresholds: { default: 0.5, preflight: 0.7, review: 0.6 },
   };
 
-  it("shows a wired-but-dormant gate under budget-board manual/review-off posture", () => {
+  it("shows a wired-but-dormant gate under manual mode even when review is enabled", () => {
     const text = formatAdvisorBinaryGateStatus(
-      normalizeAdvisorConfig({ mode: "manual", review: "off" }),
+      normalizeAdvisorConfig({ mode: "manual", review: "strict" }),
       state({ router: { review: { phase: "review", source: "model", reason: "local gate predicts review", confidence: 0.82 } } }),
       usableGate,
     );
@@ -223,7 +223,7 @@ describe("Advisor binary gate status", () => {
     expect(text).toContain("Binary gate:");
     expect(text).toContain("binary-logreg-v2; features=6000");
     expect(text).toContain("advisor preflight: dormant (mode=manual)");
-    expect(text).toContain("advisor review: dormant (review=off)");
+    expect(text).toContain("advisor review: dormant (mode=manual)");
     expect(text).toContain("can act now: wired but dormant under current advisor config");
     expect(text).toContain("latest route: review: local gate predicts review (confidence=0.82)");
   });

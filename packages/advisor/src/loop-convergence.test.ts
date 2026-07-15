@@ -1738,6 +1738,22 @@ describe("advisor two-agent convergence", () => {
     expect(readAdvisorState().reviewControl.lastDecision).toBe("review");
   });
 
+  it("keeps manual mode free of automatic post-turn and agent-end model calls", async () => {
+    const turnEnd = handlers.turn_end;
+    const agentEnd = handlers.agent_end;
+    writeFileSync(ADVISOR_CONFIG_PATH, JSON.stringify({ mode: "manual", review: "strict", checkins: "off", checkinIntervalMinutes: 30 }), "utf8");
+    await handlers.session_start?.[0]?.({}, ctx);
+
+    await turnEnd![0]({ toolResults: [{ toolName: "edit" }], message: { role: "assistant", content: "Edited a file." } }, ctx);
+    await agentEnd![0]({ messages: [{ role: "toolResult", content: "edit tool changed file" }, { role: "assistant", content: "Done." }] }, ctx);
+
+    expect(completeSimpleMock).not.toHaveBeenCalled();
+    expect(readAdvisorState().notes).toContain("Edited a file.");
+
+    await commands["pi-rogue-advisor"].handler("manual question still works", ctx);
+    expect(completeSimpleMock).toHaveBeenCalledTimes(1);
+  });
+
   it("recovers running review control state on session start", async () => {
     const preflight = handlers.before_agent_start;
     const sessionStart = handlers.session_start;

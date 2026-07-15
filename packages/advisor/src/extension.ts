@@ -2554,9 +2554,11 @@ function advisorBinaryGatePathStatus(config: AdvisorConfig): { preflight: string
       : "off (mode=off)";
   const review = normalized.mode === "off"
     ? "off (mode=off)"
-    : normalized.review === "off"
-      ? "dormant (review=off)"
-      : `active in ${normalized.review} review`;
+    : normalized.mode === "manual"
+      ? "dormant (mode=manual)"
+      : normalized.review === "off"
+        ? "dormant (review=off)"
+        : `active in ${normalized.review} review`;
   return { preflight, review };
 }
 
@@ -3985,7 +3987,7 @@ export function registerAdvisor(pi: ExtensionAPI): void {
     recordBoardShadowIfEnabled(ctx, cfg, state, "turn_end", toolResults);
     saveState(state);
     setPiRogueStatus(ctx, cfg, state);
-    if (cfg.review !== "off" && !suppressedThisTurn) {
+    if (cfg.mode === "auto" && cfg.review !== "off" && !suppressedThisTurn) {
       await doReview(pi, ctx, `turn-${state.turns}`, text, {
         fileChanged,
         failed,
@@ -3995,7 +3997,7 @@ export function registerAdvisor(pi: ExtensionAPI): void {
     }
 
     const post = loadState(ctx);
-    if (!isAdvisorAutoRunSuppressed(post, post.turns)) {
+    if (cfg.mode === "auto" && !isAdvisorAutoRunSuppressed(post, post.turns)) {
       void maybeAdvisorCheckin(pi, ctx, "turn_end");
     }
   });
@@ -4016,10 +4018,10 @@ export function registerAdvisor(pi: ExtensionAPI): void {
       return `${m?.role || "msg"}: ${sig ? squish(sig, 120) : "(empty)"}`;
     });
     const suppressed = isAdvisorAutoRunSuppressedForTurnContext(state, state.turns);
-    if (cfg.review === "off" || suppressed) {
+    if (cfg.mode !== "auto" || cfg.review === "off" || suppressed) {
       recordBoardShadowIfEnabled(ctx, cfg, state, "agent_end", msgs);
       saveState(state);
-      if (!suppressed) {
+      if (cfg.mode === "auto" && !suppressed) {
         void maybeAdvisorCheckin(pi, ctx, "agent_end");
       }
       return;
