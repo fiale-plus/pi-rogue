@@ -427,6 +427,28 @@ describe("advisor two-agent convergence", () => {
     );
   });
 
+  it("emits one controlled failure only after every auth candidate is exhausted", async () => {
+    const attempted: string[] = [];
+    ctx.ui.notify = vi.fn();
+    ctx.modelRegistry.getApiKeyAndHeaders = async (model: any) => {
+      attempted.push(`${model.provider}/${model.id}`);
+      throw new Error("credential lookup failed with secret=sk-sensitive-token-value");
+    };
+
+    await commands["pi-rogue-advisor"].handler("can an advisor answer this?", ctx);
+
+    expect(attempted).toEqual([
+      "openai-codex/openai-codex/gpt-5.5",
+      "openai-codex/openai-codex/gpt-5.4-mini",
+      "provider/provider/text-light",
+    ]);
+    expect(completeSimpleMock).not.toHaveBeenCalled();
+    expect(sendMessageMock).not.toHaveBeenCalled();
+    expect(ctx.ui.notify).toHaveBeenCalledTimes(1);
+    expect(ctx.ui.notify).toHaveBeenCalledWith("No model available. Install one via pi config.", "warning");
+    expect(readFileSync(ADVISOR_DIAGNOSTICS_PATH, "utf8")).not.toContain("sensitive-token-value");
+  });
+
   it("includes broker briefs in manual advisor context when available", async () => {
     expect(commands["pi-rogue-advisor"]).toBeTruthy();
     piMock.__piRogueContextBroker = {
