@@ -49,6 +49,16 @@ describe("fusion recipe validation", () => {
     if (!below.ok) expect(below.errors.join("\n")).toContain("min_panel_success must be at least 1");
   });
 
+  it("rejects explicit zero or negative execution timeouts", () => {
+    const zero = validateFusionRecipe({ ...baseRecipe, timeout_ms: 0 });
+    const negative = validateFusionRecipe({ ...baseRecipe, per_model_timeout_ms: -1 });
+
+    expect(zero.ok).toBe(false);
+    expect(negative.ok).toBe(false);
+    if (!zero.ok) expect(zero.errors.join("\n")).toContain("timeout_ms must be a positive integer");
+    if (!negative.ok) expect(negative.errors.join("\n")).toContain("per_model_timeout_ms must be a positive integer");
+  });
+
   it("rejects role-pass and recursive fusion refs", () => {
     const result = validateFusionRecipe({
       ...baseRecipe,
