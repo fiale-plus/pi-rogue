@@ -147,7 +147,7 @@ describe("binary gate model", () => {
 import { predictWithModel } from "./router.js";
 import type { BinaryGateModel, StackedGateModel } from "./router.js";
 import { trajectoryFeatureVector, TRAJECTORY_FEATURE_NAMES } from "./binary-gate-eval.js";
-import { applyPreflightGatePrediction, applyReviewGatePrediction } from "./extension.js";
+import { applyPreflightGatePrediction, applyReviewGatePrediction, shouldRunAdvisorReview } from "./extension.js";
 
 // A minimal v2 model with no features: scores are just `bias`, so the escalate
 // logit is bias[1]-bias[0]. Lets us assert calibration + threshold behavior directly.
@@ -217,6 +217,49 @@ describe("binary gate v2 calibrated predictions", () => {
       expect(applyPreflightGatePrediction(preflight, prediction)).toEqual(preflight);
       expect(applyReviewGatePrediction(review, prediction)).toEqual(review);
     }
+  });
+
+  it("turns a trusted review escalation into an actionable no-material route", () => {
+    const heuristic = heuristicRoute({ phase: "review", text: "looks okay" });
+    const prediction = {
+      decision: "escalate" as const,
+      confidence: 0.91,
+      probability: 0.91,
+      threshold: 0.5,
+      source: "model-v2" as const,
+      trusted: true,
+    };
+
+    const applied = applyReviewGatePrediction(heuristic, prediction);
+    expect(applied).toMatchObject({
+      label: "course_correct",
+      review: "strict",
+      escalate: true,
+      source: "model",
+      reason: "local gate predicts review",
+      confidence: 0.91,
+    });
+    expect(shouldRunAdvisorReview("strict", { isAgentEnd: false, fileChanged: false, failed: false }, applied, 1)).toBe(true);
+  });
+
+  it("keeps trusted continue and fail-safe review overrides unchanged", () => {
+    const heuristic = heuristicRoute({ phase: "review", text: "looks okay" });
+    const continuePrediction = {
+      decision: "continue" as const,
+      confidence: 0.9,
+      probability: 0.1,
+      threshold: 0.5,
+      source: "model-v2" as const,
+      trusted: true,
+    };
+    const untrustedEscalation = { ...continuePrediction, decision: "escalate" as const, probability: 0.9, trusted: false };
+    const trustedEscalation = { ...untrustedEscalation, trusted: true };
+
+    expect(applyReviewGatePrediction(heuristic, continuePrediction)).toMatchObject({ label: "abstain", review: "off", escalate: false });
+    expect(applyReviewGatePrediction(heuristic, untrustedEscalation)).toEqual(heuristic);
+    expect(applyReviewGatePrediction({ ...heuristic, safety: true }, trustedEscalation)).toEqual({ ...heuristic, safety: true });
+    expect(applyReviewGatePrediction(heuristic, trustedEscalation, true)).toEqual(heuristic);
+    expect(shouldRunAdvisorReview("off", { isAgentEnd: true, fileChanged: true, failed: true }, applyReviewGatePrediction(heuristic, trustedEscalation), 3)).toBe(false);
   });
 
   it("v1 assets keep the legacy trust gate (low confidence is not trusted)", () => {
