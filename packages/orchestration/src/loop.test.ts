@@ -11,6 +11,12 @@ type LoopState = {
   generation: number;
 };
 
+const advisorCheckinHarness = vi.hoisted(() => ({ request: vi.fn() }));
+
+vi.mock("@fiale-plus/pi-rogue-advisor", () => ({
+  requestAdvisorLoopCheckin: advisorCheckinHarness.request,
+}));
+
 const loopHarness = vi.hoisted(() => ({
   state: {
     enabled: false,
@@ -42,6 +48,7 @@ afterEach(() => {
     generation: 0,
   };
   loopHarness.reads = [];
+  advisorCheckinHarness.request.mockReset();
   vi.unstubAllEnvs();
   vi.resetModules();
 });
@@ -207,6 +214,20 @@ describe("loop tick guards", () => {
     await vi.advanceTimersByTimeAsync(60_000);
     expect(sends).toHaveLength(2);
     expect(sends[1]).toContain("replacement work");
+    clearLoop(ctx);
+  });
+
+  it("contains a rejected detached advisor check-in tick", async () => {
+    const { clearLoop, startLoop, triggerLoopTick } = await loadLoopModule();
+    const ctx = createContext("contained-advisor-checkin");
+    advisorCheckinHarness.request.mockRejectedValue(new Error("check-in rejected"));
+    const pi = { sendUserMessage: () => undefined, on: () => undefined };
+
+    startLoop(pi as any, ctx, "1m", "inspect safely");
+    expect(triggerLoopTick(pi as any, ctx)).toBe(true);
+    await vi.waitFor(() => {
+      expect(ctx.notifications).toContain("Advisor check-in tick failed; it will retry on a later loop event.");
+    });
     clearLoop(ctx);
   });
 

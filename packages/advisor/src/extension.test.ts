@@ -16,6 +16,8 @@ import {
   disableAdvisorBoardProfile,
   completeWithHigherAdvisorModel,
   completeWithModelFallback,
+  DEFAULT_ADVISOR_WORK_TIMEOUT_MS,
+  registerAdvisor,
   contentText,
   formatAdvisorBinaryGateStatus,
   isGuardedPostureConfig,
@@ -183,20 +185,24 @@ describe("advisor model authentication fallback", () => {
     }
   });
 
-  it("preserves cancellation instead of falling through", async () => {
-    const aborted = Object.assign(new Error("cancelled"), { name: "AbortError" });
+  it("falls through a provider-thrown AbortError when work was not cancelled", async () => {
+    const providerAbort = Object.assign(new Error("provider interrupted request"), { name: "AbortError" });
+    const first = { provider: "openai-codex", id: "gpt-5.5", input: ["text"] };
     const second = { provider: "anthropic", id: "claude-opus-4-6", input: ["text"] };
-    const getApiKeyAndHeaders = vi.fn(async () => { throw aborted; });
+    const getApiKeyAndHeaders = vi.fn(async (model: typeof first) => {
+      if (model === first) throw providerAbort;
+      return { ok: true, apiKey: "second-token" };
+    });
     const ctx = {
       modelRegistry: {
-        find: (provider: string, id: string) => provider === "openai-codex" && id === "gpt-5.5" ? { provider, id, input: ["text"] } : second,
+        find: (provider: string, id: string) => provider === first.provider && id === first.id ? first : second,
         getAvailable: () => [],
         getApiKeyAndHeaders,
       },
     };
 
-    await expect(resolveModelCandidates(ctx, normalizeAdvisorConfig({}), { allowRegularFallback: false })).rejects.toBe(aborted);
-    expect(getApiKeyAndHeaders).toHaveBeenCalledTimes(1);
+    await expect(resolveModelCandidates(ctx, normalizeAdvisorConfig({}), { allowRegularFallback: false })).resolves.toMatchObject([{ model: second }]);
+    expect(getApiKeyAndHeaders).toHaveBeenCalledTimes(2);
   });
 });
 
@@ -691,6 +697,18 @@ describe("advisor completion fallback behavior", () => {
     expect(completeSimpleMock.mock.calls[0]?.[0]?.id).toBe("provider/text-light");
   });
 
+  it("returns null when all automatic check-in candidates fail ordinarily", async () => {
+    const completeSimpleMock = vi.mocked(completeSimple as any);
+    completeSimpleMock.mockReset();
+    completeSimpleMock.mockRejectedValue(new Error("provider unavailable"));
+
+    const cfg = normalizeAdvisorConfig({ mode: "auto", review: "light" });
+    const result = await completeWithHigherAdvisorModel(mkCtx(true, false), cfg, "system", [{ role: "user", content: "x" }], { maxTokens: 128, reasoning: "low" as const });
+
+    expect(result).toBeNull();
+    expect(completeSimpleMock).toHaveBeenCalled();
+  });
+
   it("uses regular fallback for non-checkin completion", async () => {
     const completeSimpleMock = vi.mocked(completeSimple as any);
     completeSimpleMock.mockReset();
@@ -704,8 +722,131 @@ describe("advisor completion fallback behavior", () => {
     expect(completeSimpleMock).toHaveBeenCalledTimes(1);
     expect(completeSimpleMock.mock.calls[0]?.[0]?.id).toBe("provider/text-light");
   });
+
+  it("falls back after a provider-thrown AbortError when the work signal is live", async () => {
+    const completeSimpleMock = vi.mocked(completeSimple as any);
+    completeSimpleMock.mockReset();
+    completeSimpleMock
+      .mockRejectedValueOnce(Object.assign(new Error("provider interrupted request"), { name: "AbortError" }))
+      .mockResolvedValueOnce({ content: [{ type: "text", text: "recovered" }] });
+
+    const cfg = normalizeAdvisorConfig({ mode: "auto", review: "light" });
+    const result = await completeWithModelFallback(mkCtx(true, false), cfg, "system", [{ role: "user", content: "x" }], { maxTokens: 128, reasoning: "low" as const });
+
+    expect(result?.text).toBe("recovered");
+    expect(completeSimpleMock).toHaveBeenCalledTimes(2);
+    expect(completeSimpleMock.mock.calls[1]?.[0]?.id).toBe("anthropic/claude-opus-4-6");
+  });
 });
 
+
+describe("advisor work ownership", () => {
+  function workCtx() {
+    const high = { id: "openai-codex/gpt-5.5", provider: "openai-codex", input: ["text"] };
+    return {
+      modelRegistry: {
+        find: (provider: string, model: string) => provider === "openai-codex" && model === "gpt-5.5" ? high : null,
+        getAvailable: () => [],
+        getApiKeyAndHeaders: async () => ({ ok: true, apiKey: "k", headers: {} }),
+      },
+      sessionManager: { getSessionFile: () => join(tmpdir(), "advisor-work-owner.jsonl") },
+      ui: { setStatus: () => undefined, notify: () => undefined },
+    } as any;
+  }
+
+  function ownerPi(handlers: Record<string, Array<(event: any, ctx: any) => any>>) {
+    return {
+      on: (name: string, handler: (event: any, ctx: any) => any) => { handlers[name] = [...(handlers[name] ?? []), handler]; },
+      registerMessageRenderer: () => undefined,
+      registerTool: () => undefined,
+      registerCommand: () => undefined,
+    } as any;
+  }
+
+  it("bounds a never-settling completion and aborts its provider signal", async () => {
+    vi.useFakeTimers();
+    const completeSimpleMock = vi.mocked(completeSimple as any);
+    completeSimpleMock.mockReset();
+    let providerSignal: AbortSignal | undefined;
+    completeSimpleMock.mockImplementation((_model: unknown, _context: unknown, options: { signal?: AbortSignal }) => {
+      providerSignal = options.signal;
+      return new Promise(() => undefined);
+    });
+
+    const cfg = normalizeAdvisorConfig({ mode: "auto", review: "light" });
+    const pending = completeWithModelFallback(workCtx(), cfg, "system", [{ role: "user", content: "x" }], { maxTokens: 128, reasoning: "low" as const });
+    await vi.advanceTimersByTimeAsync(DEFAULT_ADVISOR_WORK_TIMEOUT_MS);
+
+    await expect(pending).resolves.toBeNull();
+    expect(providerSignal?.aborted).toBe(true);
+    vi.useRealTimers();
+  });
+
+  it("propagates caller-owned cancellation instead of falling back", async () => {
+    const completeSimpleMock = vi.mocked(completeSimple as any);
+    completeSimpleMock.mockReset();
+    completeSimpleMock.mockImplementation(() => new Promise(() => undefined));
+    const controller = new AbortController();
+    const cfg = normalizeAdvisorConfig({ mode: "auto", review: "light" });
+    const pending = completeWithModelFallback(workCtx(), cfg, "system", [{ role: "user", content: "x" }], {
+      maxTokens: 128,
+      reasoning: "low" as const,
+      signal: controller.signal,
+    });
+    controller.abort(new Error("user cancelled"));
+
+    await expect(pending).rejects.toThrow("user cancelled");
+    expect(completeSimpleMock).not.toHaveBeenCalled();
+  });
+
+  it("observes an already-created provider promise before rejecting a pre-aborted call", async () => {
+    const controller = new AbortController();
+    controller.abort(new Error("user cancelled before work"));
+    let rejectProvider!: (error: Error) => void;
+    const providerPromise = new Promise<never>((_resolve, reject) => { rejectProvider = reject; });
+    const providerThen = vi.spyOn(providerPromise, "then");
+    const ctx = {
+      ...workCtx(),
+      modelRegistry: {
+        ...workCtx().modelRegistry,
+        getApiKeyAndHeaders: () => providerPromise,
+      },
+    };
+    const cfg = normalizeAdvisorConfig({ mode: "auto", review: "light" });
+
+    await expect(completeWithModelFallback(ctx, cfg, "system", [{ role: "user", content: "x" }], {
+      maxTokens: 128,
+      reasoning: "low" as const,
+      signal: controller.signal,
+    })).rejects.toThrow("user cancelled before work");
+    expect(providerThen).toHaveBeenCalled();
+
+    // This late rejection is handled by awaitAdvisorWork rather than becoming unhandled.
+    rejectProvider(new Error("provider rejected after cancellation"));
+    await Promise.resolve();
+  });
+
+  it("aborts owned model work on session shutdown", async () => {
+    const completeSimpleMock = vi.mocked(completeSimple as any);
+    completeSimpleMock.mockReset();
+    completeSimpleMock.mockImplementation(() => new Promise(() => undefined));
+    const handlers: Record<string, Array<(event: any, ctx: any) => any>> = {};
+    const pi = ownerPi(handlers);
+    registerAdvisor(pi);
+    const ctx = {
+      ...workCtx(),
+      sessionManager: { getSessionFile: () => join(tmpdir(), "advisor-shutdown-owned-work.jsonl") },
+      ui: { setStatus: () => undefined, notify: () => undefined },
+    } as any;
+    const cfg = normalizeAdvisorConfig({ mode: "auto", review: "light" });
+    const pending = completeWithModelFallback(ctx, cfg, "system", [{ role: "user", content: "x" }], { maxTokens: 128, reasoning: "low" as const });
+    for (let i = 0; i < 10 && completeSimpleMock.mock.calls.length === 0; i += 1) await Promise.resolve();
+    expect(completeSimpleMock).toHaveBeenCalledTimes(1);
+    handlers.session_shutdown?.[0]?.({}, ctx);
+
+    await expect(pending).resolves.toBeNull();
+  });
+});
 
 describe("Pi-Rogue posture presets", () => {
   function withHome<T>(fn: (home: string) => T): T {

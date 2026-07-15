@@ -282,6 +282,106 @@ describe("state versioning and recovery", () => {
     expect(setup.sendMessage).toHaveBeenCalled();
   });
 
+  it("releases the review lock after a bounded completion deadline", async () => {
+    vi.useFakeTimers();
+    const setup = makeHandlers();
+    registerAdvisor(setup.pi);
+    const ctx = mkCtx();
+    writeFileSync(ADVISOR_CONFIG_PATH, JSON.stringify({ mode: "auto", review: "strict", checkins: "off", checkinIntervalMinutes: 30 }), "utf8");
+    writeFileSync(ADVISOR_STATE_PATH, JSON.stringify({
+      turns: 1, lastTask: "review lock ownership", notes: ["initial progress"], files: [], errors: [], advisorCalls: 0, cacheHits: 0,
+      followUp: "", router: {}, checkin: {}, reviewControl: { status: "idle", pending: false, consumed: true, running: false },
+    }), "utf8");
+    completeSimpleMock.mockReset();
+    completeSimpleMock.mockImplementation(() => new Promise(() => undefined));
+    try {
+      const first = setup.handlers.turn_end?.[0]?.({ toolResults: [{ toolName: "edit" }], message: { content: [{ type: "text", text: "first review delta" }] } }, ctx);
+      await vi.advanceTimersByTimeAsync(60_000);
+      await first;
+
+      completeSimpleMock.mockReset();
+      completeSimpleMock.mockResolvedValue({ content: [{ type: "text", text: JSON.stringify({ verdict: "on_track", reason: "ok", summary: "ok", taskActions: [], advisorySignals: [] }) }] } as any);
+      await setup.handlers.turn_end?.[0]?.({ toolResults: [{ toolName: "edit" }], message: { content: [{ type: "text", text: "second distinct review delta" }] } }, ctx);
+      expect(completeSimpleMock).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("contains a rejected detached advisor check-in without another async failure", async () => {
+    const setup = makeHandlers();
+    registerAdvisor(setup.pi);
+    const ctx = mkCtx();
+    let statusCalls = 0;
+    ctx.ui.setStatus = () => {
+      statusCalls += 1;
+      if (statusCalls === 2) throw new Error("check-in status failure");
+    };
+    writeFileSync(ADVISOR_CONFIG_PATH, JSON.stringify({ mode: "auto", review: "light", checkins: "mid-hour", checkinIntervalMinutes: 30, checkinStartedAt: Date.now() - 31 * 60_000 }), "utf8");
+    writeFileSync(ADVISOR_STATE_PATH, JSON.stringify({
+      turns: 0, lastTask: "keep check-ins contained", notes: ["progress"], files: [], errors: [], advisorCalls: 0, cacheHits: 0,
+      followUp: "", router: {}, checkin: { lastTurn: 0 }, reviewControl: { status: "idle", pending: false, consumed: true, running: false },
+    }), "utf8");
+    completeSimpleMock.mockReset();
+    completeSimpleMock.mockResolvedValue({ content: [{ type: "text", text: "Status: on_track - ok\nNudge: continue" }] } as any);
+    const diagnostics = join(testHome, "detached-checkin.jsonl");
+    const previousDiagnostics = process.env.PI_ROGUE_ADVISOR_DIAGNOSTICS_PATH;
+    process.env.PI_ROGUE_ADVISOR_DIAGNOSTICS_PATH = diagnostics;
+    try {
+      await setup.handlers.turn_end?.[0]?.({ toolResults: [], message: { content: [{ type: "text", text: "done" }] } }, ctx);
+      await vi.waitFor(() => {
+        expect(readFileSync(diagnostics, "utf8")).toContain("advisor_checkin_detached_failure");
+      });
+    } finally {
+      if (previousDiagnostics === undefined) delete process.env.PI_ROGUE_ADVISOR_DIAGNOSTICS_PATH;
+      else process.env.PI_ROGUE_ADVISOR_DIAGNOSTICS_PATH = previousDiagnostics;
+    }
+  });
+
+  it("does not let a shutdown continuation start a review or check-in, then reopens on session start", async () => {
+    const setup = makeHandlers();
+    registerAdvisor(setup.pi);
+    const ctx = mkCtx("shutdown-race-stable-session");
+    const sessionStatePath = advisorSessionStatePath(ctx);
+    mkdirSync(dirname(sessionStatePath), { recursive: true });
+    writeFileSync(ADVISOR_CONFIG_PATH, JSON.stringify({
+      mode: "auto", review: "strict", checkins: "mid-hour", checkinIntervalMinutes: 10,
+      checkinStartedAt: Date.now() - 11 * 60_000,
+    }), "utf8");
+    writeFileSync(sessionStatePath, JSON.stringify({
+      turns: 0, lastTask: "preserve shutdown ownership", notes: ["review this change"], files: [], errors: [], advisorCalls: 0, cacheHits: 0,
+      followUp: "", router: {}, checkin: { lastTurn: 0 }, reviewControl: { status: "idle", pending: false, consumed: true, running: false },
+    }), "utf8");
+    completeSimpleMock.mockReset();
+    completeSimpleMock.mockImplementation(() => new Promise(() => undefined));
+
+    const first = setup.handlers.turn_end?.[0]?.({
+      toolResults: [{ toolName: "edit" }],
+      message: { content: [{ type: "text", text: "first review race delta" }] },
+    }, ctx);
+    await vi.waitFor(() => expect(completeSimpleMock).toHaveBeenCalledTimes(1));
+    setup.handlers.session_shutdown?.[0]?.({}, ctx);
+    await first;
+
+    // The continuation after the aborted review reaches the check-in path, but it
+    // must not launch another completion. New post-shutdown events are also inert.
+    await setup.handlers.turn_end?.[0]?.({
+      toolResults: [{ toolName: "edit" }],
+      message: { content: [{ type: "text", text: "post-shutdown review delta" }] },
+    }, ctx);
+    expect(completeSimpleMock).toHaveBeenCalledTimes(1);
+
+    // A resumed/reloaded session uses the same stable identity and explicitly reopens it.
+    setup.handlers.session_start?.[0]?.({}, ctx);
+    writeFileSync(ADVISOR_CONFIG_PATH, JSON.stringify({ mode: "auto", review: "strict", checkins: "off", checkinIntervalMinutes: 10 }), "utf8");
+    completeSimpleMock.mockResolvedValue({ content: [{ type: "text", text: JSON.stringify({ verdict: "on_track", reason: "ok", summary: "ok", taskActions: [], advisorySignals: [] }) }] } as any);
+    await setup.handlers.turn_end?.[0]?.({
+      toolResults: [{ toolName: "edit" }],
+      message: { content: [{ type: "text", text: "resumed review delta" }] },
+    }, ctx);
+    expect(completeSimpleMock).toHaveBeenCalledTimes(2);
+  });
+
   it("keeps mutable advisor state isolated by session", async () => {
     const setup = makeHandlers();
     const { handlers: h, pi } = setup;
