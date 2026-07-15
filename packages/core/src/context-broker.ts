@@ -22,6 +22,8 @@ export interface ContextArtifactInput {
   ttlMs?: number;
   pinned?: boolean;
   parentIds?: string[];
+  /** Stable producer identifier used for idempotent durable ingestion. */
+  sourceId?: string;
   createdAt?: number;
 }
 
@@ -44,6 +46,8 @@ export interface ContextArtifact {
   expiresAt?: number;
   pinned: boolean;
   parentIds: string[];
+  /** Explicit producer identifier, retained separately from parentIds when supplied. */
+  sourceId?: string;
 }
 
 export interface ContextLookupQuery {
@@ -98,6 +102,16 @@ export interface ContextBrokerOptions {
   briefBytes?: number;
 }
 
+export interface ContextPublishBatchResult {
+  /** Artifacts written or still retained for duplicate sources, in input order where available. */
+  artifacts: ContextArtifact[];
+  scanned: number;
+  duplicateSources: number;
+  published: number;
+  /** Number removed by the one post-batch prune, when the backend can report it. */
+  pruned?: number;
+}
+
 export interface ContextPurgeOptions {
   sessionId?: string;
   keepPinned?: boolean;
@@ -105,6 +119,9 @@ export interface ContextPurgeOptions {
 
 export interface BoundedContextBroker {
   publish(input: ContextArtifactInput): ContextArtifact;
+  /** Bounded, idempotent ingestion. Durable backends retain source provenance after artifact pruning. */
+  publishBatch(inputs: ContextArtifactInput[]): ContextPublishBatchResult;
+  sourceSeen(sessionId: string, sourceId: string): boolean;
   lookup(query?: ContextLookupQuery): ContextArtifact[];
   pin(idOrHandle: string, pinned?: boolean): ContextArtifact | null;
   prune(now?: number): ContextBrokerStatus;

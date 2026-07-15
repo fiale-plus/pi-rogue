@@ -31,6 +31,117 @@ const DEFAULT_SUMMARY_BYTES = 320;
 const DEFAULT_BRIEF_BYTES = 2_000;
 const TIER_ORDER: Record<ContextArtifactTier, number> = { hot: 0, warm: 1, cold: 2 };
 const TIER_REMOVAL_ORDER: Record<ContextArtifactTier, number> = { cold: 0, warm: 1, hot: 2 };
+export const MAX_CONTEXT_SOURCE_ID_BYTES = 512;
+/**
+ * Provenance must comfortably outlive the 64-eligible/512-raw-entry resume
+ * window, but cannot grow without bound when artifacts are pruned.
+ */
+export const MAX_CONTEXT_SOURCES_PER_SESSION = 4_096;
+/**
+ * Across all sessions, provenance retains the newest 65,536 ingestion entries.
+ * This deliberately exceeds the per-session cap so active sessions retain their
+ * full tail, while preventing a large number of sessions from growing durable
+ * ledgers without bound.
+ */
+export const MAX_CONTEXT_SOURCES_GLOBAL = 65_536;
+
+/** Source ids share a key separator with their session id and must be bounded before persistence. */
+export function sourceIdFor(input: ContextArtifactInput): string | undefined {
+  const sourceId = input.sourceId ?? input.parentIds?.find(Boolean);
+  if (sourceId === undefined) return undefined;
+  if (typeof sourceId !== "string" || !sourceId.trim() || sourceId.includes("\u0000") || Buffer.byteLength(sourceId, "utf8") > MAX_CONTEXT_SOURCE_ID_BYTES) {
+    throw new Error(`Invalid context broker sourceId (must be non-empty, contain no NUL, and be <= ${MAX_CONTEXT_SOURCE_ID_BYTES} UTF-8 bytes)`);
+  }
+  return sourceId;
+}
+
+export function sourceKey(sessionId: string, sourceId: string): string {
+  return `${sessionId}\u0000${sourceId}`;
+}
+
+/**
+ * Record provenance in ingestion order, retaining the newest per-session and
+ * global tails. Map iteration order is the durable ingestion order used by the
+ * JSONL/checkpoint backend; duplicate observations do not become new ingests.
+ */
+const sourceCounts = new WeakMap<Map<string, string>, Map<string, number>>();
+
+function countsForSources(sources: Map<string, string>): Map<string, number> {
+  let counts = sourceCounts.get(sources);
+  if (counts) return counts;
+  counts = new Map<string, number>();
+  for (const key of sources.keys()) {
+    const separator = key.indexOf("\u0000");
+    const sessionId = key.slice(0, separator);
+    counts.set(sessionId, (counts.get(sessionId) ?? 0) + 1);
+  }
+  sourceCounts.set(sources, counts);
+  return counts;
+}
+
+function forgetSource(sources: Map<string, string>, counts: Map<string, number>, key: string): void {
+  if (!sources.delete(key)) return;
+  const separator = key.indexOf("\u0000");
+  const sessionId = key.slice(0, separator);
+  const count = (counts.get(sessionId) ?? 1) - 1;
+  if (count > 0) counts.set(sessionId, count);
+  else counts.delete(sessionId);
+}
+
+export function rememberSource(sources: Map<string, string>, sessionId: string, sourceId: string, handle: string): void {
+  const key = sourceKey(sessionId, sourceId);
+  const counts = countsForSources(sources);
+  if (sources.has(key)) {
+    sources.set(key, handle);
+    return;
+  }
+  sources.set(key, handle);
+  const sessionCount = (counts.get(sessionId) ?? 0) + 1;
+  counts.set(sessionId, sessionCount);
+  if (sessionCount > MAX_CONTEXT_SOURCES_PER_SESSION) {
+    const prefix = `${sessionId}\u0000`;
+    for (const candidate of sources.keys()) {
+      if (candidate.startsWith(prefix)) {
+        forgetSource(sources, counts, candidate);
+        break;
+      }
+    }
+  }
+  while (sources.size > MAX_CONTEXT_SOURCES_GLOBAL) {
+    const oldest = sources.keys().next().value as string | undefined;
+    if (oldest === undefined) break;
+    forgetSource(sources, counts, oldest);
+  }
+}
+
+/**
+ * `publish` predates batched duplicate reporting and must still return an
+ * artifact. When a source ledger entry survives payload retention, return a
+ * deterministic, non-persisted reference instead of silently republishing.
+ * Live ingestion uses publishBatch and handles this case as no artifact.
+ */
+export function sourceTombstoneArtifact(input: ContextArtifactInput, sourceId: string, persistedHandle?: string): ContextArtifact {
+  const identity = createHash("sha256").update(sourceKey(input.sessionId, sourceId)).digest("hex");
+  const id = `ctx-source-${identity.slice(0, 24)}`;
+  return {
+    id,
+    handle: persistedHandle || `ctx://session/${safeName(input.sessionId || "session")}/source-tombstone/${identity.slice(0, 24)}`,
+    sessionId: input.sessionId,
+    kind: input.kind,
+    createdAt: 0,
+    updatedAt: 0,
+    bytes: 0,
+    sha256: createHash("sha256").update("").digest("hex"),
+    payload: "",
+    summary: "[Duplicate source retained as provenance only; artifact payload was pruned.]",
+    tags: [],
+    paths: [],
+    tier: "cold",
+    pinned: false,
+    parentIds: [sourceId],
+    sourceId,
+  };
+}
 
 function optionMs(value: number | undefined): number {
   return typeof value === "number" && Number.isFinite(value) && value > 0 ? Math.floor(value) : Number.POSITIVE_INFINITY;
@@ -162,6 +273,8 @@ export function createInMemoryContextBroker(options: ContextBrokerOptions = {}, 
   const defaultBriefBytes = Math.max(64, Math.floor(options.briefBytes ?? DEFAULT_BRIEF_BYTES));
   let artifacts: Array<ContextArtifact & { sequence: number; baseTier: ContextArtifactTier }> = [];
   let sequence = 0;
+  // Provenance deliberately outlives artifact retention so resume/backfill is idempotent.
+  const sources = new Map<string, string>();
 
   function cooledTier(artifact: ContextArtifact & { baseTier: ContextArtifactTier }, now = Date.now()): ContextArtifactTier {
     if (artifact.pinned) return "hot";
@@ -299,7 +412,7 @@ export function createInMemoryContextBroker(options: ContextBrokerOptions = {}, 
     return currentStatus();
   }
 
-  function publish(input: ContextArtifactInput): ContextArtifact {
+  function publishOne(input: ContextArtifactInput): ContextArtifact {
     const now = input.createdAt ?? Date.now();
     const payload = payloadText(input.payload);
     const sha256 = hashPayload(input.payload);
@@ -333,6 +446,7 @@ export function createInMemoryContextBroker(options: ContextBrokerOptions = {}, 
       expiresAt: ttlMs > 0 ? now + ttlMs : undefined,
       pinned: Boolean(input.pinned),
       parentIds: normalizeList(input.parentIds),
+      sourceId: input.sourceId,
       sequence: artifactSequence,
       baseTier,
     };
@@ -340,6 +454,60 @@ export function createInMemoryContextBroker(options: ContextBrokerOptions = {}, 
     artifacts = [artifact, ...artifacts];
     if (internal.autoPruneOnPublish !== false) prune(Date.now(), new Set([artifact.id]));
     return artifact;
+  }
+
+  function publish(input: ContextArtifactInput): ContextArtifact {
+    // Validate and consult provenance before changing the bounded artifact set.
+    const sourceId = sourceIdFor(input);
+    if (sourceId) {
+      const key = sourceKey(input.sessionId, sourceId);
+      const persistedHandle = sources.get(key);
+      if (persistedHandle !== undefined) {
+        const existing = artifacts.find((artifact) => artifact.handle === persistedHandle);
+        return existing ?? sourceTombstoneArtifact(input, sourceId, persistedHandle);
+      }
+    }
+    const artifact = publishOne(input);
+    if (sourceId) rememberSource(sources, input.sessionId, sourceId, artifact.handle);
+    return artifact;
+  }
+
+  function publishBatch(inputs: ContextArtifactInput[]): import("@fiale-plus/pi-core").ContextPublishBatchResult {
+    const priorArtifacts = artifacts;
+    const priorSequence = sequence;
+    const priorSources = new Map(sources);
+    const artifactsBefore = artifacts.length;
+    const result: ContextArtifact[] = [];
+    let duplicateSources = 0;
+    const oldAutoPrune = internal.autoPruneOnPublish;
+    internal.autoPruneOnPublish = false;
+    try {
+      for (const input of inputs) {
+        const sourceId = sourceIdFor(input);
+        const key = sourceId ? sourceKey(input.sessionId, sourceId) : undefined;
+        if (key && sources.has(key)) {
+          duplicateSources += 1;
+          const existing = lookup({ handle: sources.get(key), limit: 1 })[0];
+          if (existing) result.push(existing);
+          continue;
+        }
+        const artifact = publishOne(input);
+        result.push(artifact);
+        if (sourceId) rememberSource(sources, input.sessionId, sourceId, artifact.handle);
+      }
+      const beforePrune = artifacts.length;
+      prune();
+      return { artifacts: result.filter((artifact) => artifacts.some((current) => current.id === artifact.id)), scanned: inputs.length, duplicateSources, published: inputs.length - duplicateSources, pruned: Math.max(0, beforePrune - artifacts.length) };
+    } catch (error) {
+      artifacts = priorArtifacts;
+      sequence = priorSequence;
+      sources.clear();
+      sourceCounts.delete(sources);
+      for (const [key, value] of priorSources) sources.set(key, value);
+      throw error;
+    } finally {
+      internal.autoPruneOnPublish = oldAutoPrune;
+    }
   }
 
   function lookup(query: ContextLookupQuery = {}): ContextArtifact[] {
@@ -393,6 +561,8 @@ export function createInMemoryContextBroker(options: ContextBrokerOptions = {}, 
 
   return {
     publish,
+    publishBatch,
+    sourceSeen: (sessionId: string, sourceId: string) => sources.has(sourceKey(sessionId, sourceIdFor({ sessionId, sourceId, kind: "tool_output", payload: "" })!)),
     lookup,
     pin,
     prune,

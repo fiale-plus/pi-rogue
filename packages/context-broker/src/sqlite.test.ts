@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { describe, expect, it, vi } from "vitest";
 import { createSqliteContextBroker, isSqliteCorruptionError, isSqliteLockedError } from "./sqlite.js";
+import { MAX_CONTEXT_SOURCES_GLOBAL, MAX_CONTEXT_SOURCES_PER_SESSION } from "./index.js";
 
 describe("createSqliteContextBroker", () => {
   it("classifies lock, corruption, extended, and unknown startup errors", () => {
@@ -31,6 +32,31 @@ describe("createSqliteContextBroker", () => {
       expect(reloadedCold?.pinned).toBe(true);
       expect(reloadedCold?.tier).toBe("hot");
       expect(broker.renderBrief({ sessionId: "s" })).toContain(cold.handle);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("retains explicit source identity independently from parent lineage across reopen", () => {
+    const dir = mkdtempSync(join(tmpdir(), "ctx-sqlite-source-id-"));
+    try {
+      const path = join(dir, "artifacts.sqlite");
+      const broker = createSqliteContextBroker({ path, defaultTtlMs: 0 });
+      const published = broker.publish({
+        sessionId: "s",
+        kind: "tool_output",
+        payload: "producer payload",
+        sourceId: "producer-a",
+        parentIds: ["logical-parent"],
+      });
+
+      const reopened = createSqliteContextBroker({ path, defaultTtlMs: 0 });
+      expect(reopened.lookup({ handle: published.handle })[0]).toMatchObject({
+        sourceId: "producer-a",
+        parentIds: ["logical-parent"],
+      });
+      expect(reopened.sourceSeen("s", "producer-a")).toBe(true);
+      expect(reopened.sourceSeen("s", "logical-parent")).toBe(false);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -105,7 +131,7 @@ describe("createSqliteContextBroker", () => {
     }
   });
 
-  it("republishes expired replayed sources instead of returning dead handles", () => {
+  it("returns a deterministic source tombstone for an expired replayed source", () => {
     const dir = mkdtempSync(join(tmpdir(), "ctx-sqlite-test-"));
     try {
       const path = join(dir, "artifacts.sqlite");
@@ -116,8 +142,10 @@ describe("createSqliteContextBroker", () => {
       broker = createSqliteContextBroker({ path, defaultTtlMs: 1 });
       const replayed = broker.publish({ sessionId: "s", kind: "tool_output", payload: "fresh replayed payload", parentIds: ["tool-call-1"], createdAt: 1, ttlMs: Date.now() + 60_000 });
 
-      expect(replayed.handle).not.toBe(expired.handle);
-      expect(broker.lookup({ handle: replayed.handle })[0]?.payload).toBe("fresh replayed payload");
+      expect(replayed.handle).toBe(expired.handle);
+      expect(replayed.payload).toBe("");
+      expect(broker.lookup({ handle: replayed.handle })).toEqual([]);
+      expect(broker.status().records).toBe(0);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -271,6 +299,149 @@ describe("createSqliteContextBroker", () => {
       }
     } finally {
       nowSpy.mockRestore();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("migrates legacy artifact parent IDs into the source ledger before pruning", () => {
+    const dir = mkdtempSync(join(tmpdir(), "ctx-sqlite-legacy-"));
+    try {
+      const path = join(dir, "artifacts.sqlite");
+      const legacy = new DatabaseSync(path);
+      legacy.exec(`
+        CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+        CREATE TABLE artifacts (
+          id TEXT PRIMARY KEY, handle TEXT NOT NULL UNIQUE, sessionId TEXT NOT NULL, kind TEXT NOT NULL,
+          createdAt INTEGER NOT NULL, updatedAt INTEGER NOT NULL, bytes INTEGER NOT NULL, sha256 TEXT NOT NULL,
+          payload TEXT NOT NULL, summary TEXT NOT NULL, tagsJson TEXT NOT NULL, pathsJson TEXT NOT NULL,
+          command TEXT, branch TEXT, tier TEXT NOT NULL, baseTier TEXT NOT NULL, sequence INTEGER NOT NULL DEFAULT 0,
+          expiresAt INTEGER, pinned INTEGER NOT NULL DEFAULT 0, parentIdsJson TEXT NOT NULL
+        );
+        -- Simulate a database written before source-ledger ingestion order was
+        -- persisted separately from the source event timestamp.
+        CREATE TABLE source_ledger (
+          sessionId TEXT NOT NULL, sourceId TEXT NOT NULL, handle TEXT, createdAt INTEGER NOT NULL,
+          PRIMARY KEY(sessionId, sourceId)
+        );
+      `);
+      legacy.prepare(`INSERT INTO artifacts VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+        .run("legacy-id", "ctx://legacy", "s", "tool_output", 1, 1, 3, "hash", "old", "old", "[]", "[]", null, null, "hot", "hot", 1, null, 0, '["legacy-source"]');
+      legacy.close();
+
+      const broker = createSqliteContextBroker({ path, defaultTtlMs: 0, maxRecords: 1 });
+      expect(broker.sourceSeen("s", "legacy-source")).toBe(true);
+      const migrated = new DatabaseSync(path);
+      expect(migrated.prepare("PRAGMA table_info(source_ledger)").all().map((row) => (row as { name: string }).name)).toContain("ingestedAt");
+      expect(migrated.prepare("SELECT value FROM meta WHERE key = 'source-ledger-artifact-migration-v1'").get()).toMatchObject({ value: "1" });
+      migrated.close();
+      broker.prune();
+      expect(broker.publishBatch([{ sessionId: "s", kind: "tool_output", payload: "replayed", sourceId: "legacy-source" }]))
+        .toMatchObject({ published: 0, duplicateSources: 1 });
+
+      // A later cap/eviction must survive reopen; the historical artifact is
+      // not allowed to import it back into the ledger a second time.
+      const evicted = new DatabaseSync(path);
+      evicted.prepare("DELETE FROM source_ledger WHERE sessionId = ? AND sourceId = ?").run("s", "legacy-source");
+      evicted.close();
+      const reopened = createSqliteContextBroker({ path, defaultTtlMs: 0, maxRecords: 1 });
+      expect(reopened.sourceSeen("s", "legacy-source")).toBe(false);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps a durable source ledger while an atomic batch prunes to its newest tail", () => {
+    const dir = mkdtempSync(join(tmpdir(), "ctx-sqlite-test-"));
+    try {
+      const path = join(dir, "artifacts.sqlite");
+      const now = Date.now();
+      let broker = createSqliteContextBroker({ path, defaultTtlMs: 0, maxRecords: 64 });
+      const inputs = Array.from({ length: 96 }, (_, index) => ({
+        sessionId: "s", kind: "tool_output" as const, payload: `payload-${index}`, sourceId: `source-${index}`, createdAt: now + index,
+      }));
+      const first = broker.publishBatch(inputs);
+      expect(first).toMatchObject({ scanned: 96, published: 96, duplicateSources: 0 });
+      expect(broker.status().records).toBe(64);
+      expect(broker.lookup({ sessionId: "s", limit: 64 }).at(-1)?.payload).toBe("payload-32");
+      broker = createSqliteContextBroker({ path, defaultTtlMs: 0, maxRecords: 64 });
+      expect(broker.sourceSeen("s", "source-0")).toBe(true);
+      const replay = broker.publishBatch(inputs);
+      expect(replay).toMatchObject({ scanned: 96, published: 0, duplicateSources: 96 });
+      expect(broker.status().records).toBe(64);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("caps SQLite provenance by ingestion order when a new backfill has an old timestamp", () => {
+    const dir = mkdtempSync(join(tmpdir(), "ctx-sqlite-source-cap-"));
+    try {
+      const path = join(dir, "artifacts.sqlite");
+      const broker = createSqliteContextBroker({ path, defaultTtlMs: 0, maxRecords: 1 });
+      broker.publishBatch(Array.from({ length: MAX_CONTEXT_SOURCES_PER_SESSION }, (_, index) => ({
+        sessionId: "s", kind: "tool_output" as const, payload: `payload-${index}`, sourceId: `source-${index}`, createdAt: Date.now() + index,
+      })));
+      // A historical event arriving now must retain provenance as the newest
+      // ingestion, rather than being evicted by its source-created timestamp.
+      broker.publish({ sessionId: "s", kind: "tool_output", payload: "old event arriving now", sourceId: "late-old-source", createdAt: 1 });
+
+      const reloaded = createSqliteContextBroker({ path, defaultTtlMs: 0, maxRecords: 1 });
+      expect(reloaded.sourceSeen("s", "source-0")).toBe(false);
+      expect(reloaded.sourceSeen("s", "late-old-source")).toBe(true);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }, 15_000);
+
+  it("globally caps SQLite provenance across sessions by oldest ingestion", () => {
+    const dir = mkdtempSync(join(tmpdir(), "ctx-sqlite-global-source-cap-"));
+    try {
+      const path = join(dir, "artifacts.sqlite");
+      const seeded = new DatabaseSync(path);
+      seeded.exec(`
+        CREATE TABLE source_ledger (
+          sessionId TEXT NOT NULL,
+          sourceId TEXT NOT NULL,
+          handle TEXT,
+          createdAt INTEGER NOT NULL,
+          ingestedAt INTEGER NOT NULL,
+          PRIMARY KEY(sessionId, sourceId)
+        );
+        BEGIN IMMEDIATE;
+      `);
+      const insert = seeded.prepare("INSERT INTO source_ledger(sessionId, sourceId, handle, createdAt, ingestedAt) VALUES (?, ?, ?, ?, ?)");
+      for (let index = 0; index <= MAX_CONTEXT_SOURCES_GLOBAL; index += 1) {
+        insert.run(`s-${index % 32}`, `source-${index}`, `ctx://source/${index}`, index, index + 1);
+      }
+      seeded.exec("COMMIT");
+      seeded.close();
+
+      const broker = createSqliteContextBroker({ path, defaultTtlMs: 0, maxRecords: 1 });
+      expect(broker.status().records).toBe(0);
+      expect(broker.sourceSeen("s-0", "source-0")).toBe(false);
+      expect(broker.sourceSeen(`s-${MAX_CONTEXT_SOURCES_GLOBAL % 32}`, `source-${MAX_CONTEXT_SOURCES_GLOBAL}`)).toBe(true);
+      const db = new DatabaseSync(path);
+      expect(Number((db.prepare("SELECT COUNT(*) AS count FROM source_ledger").get() as { count: number }).count)).toBe(MAX_CONTEXT_SOURCES_GLOBAL);
+      db.close();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }, 15_000);
+
+  it("runs one post-commit WAL checkpoint for a pruning batch", () => {
+    const dir = mkdtempSync(join(tmpdir(), "ctx-sqlite-batch-wal-"));
+    try {
+      const path = join(dir, "artifacts.sqlite");
+      const broker = createSqliteContextBroker({ path, defaultTtlMs: 0, maxRecords: 1 });
+      const batch = broker.publishBatch([
+        { sessionId: "s", kind: "tool_output", payload: "old", createdAt: 1 },
+        { sessionId: "s", kind: "tool_output", payload: "new", createdAt: 2 },
+      ]);
+      expect(batch.pruned).toBe(1);
+      expect(broker.status().records).toBe(1);
+      const walPath = `${path}-wal`;
+      expect(existsSync(walPath) ? statSync(walPath).size : 0).toBe(0);
+    } finally {
       rmSync(dir, { recursive: true, force: true });
     }
   });

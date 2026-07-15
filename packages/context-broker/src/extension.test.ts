@@ -12,7 +12,7 @@ vi.mock("./sqlite.js", async () => {
   };
 });
 
-import { registerContextBrokerBeta, shouldEnableContextBrokerBeta } from "./extension.js";
+import { registerContextBrokerBeta, rememberNewestSource, shouldEnableContextBrokerBeta } from "./extension.js";
 import { createSqliteContextBroker } from "./sqlite.js";
 
 function createPiMock() {
@@ -64,6 +64,22 @@ async function runHandlers(handlers: Map<string, any[]>, name: string, event: an
 }
 
 describe("context broker extension enablement", () => {
+  it("retains the newest 64 source cache entries per session", () => {
+    const seen = new Set<string>();
+    const handles = new Map<string, string>();
+    for (let index = 0; index < 65; index += 1) {
+      const key = `session\u0000source-${index}`;
+      handles.set(key, `ctx://${index}`);
+      rememberNewestSource(seen, handles, key);
+    }
+
+    expect(seen).toHaveLength(64);
+    expect(seen.has("session\u0000source-0")).toBe(false);
+    expect(handles.has("session\u0000source-0")).toBe(false);
+    expect(seen.has("session\u0000source-64")).toBe(true);
+    expect(handles.get("session\u0000source-64")).toBe("ctx://64");
+  });
+
   const oldEnv = process.env.PI_CONTEXT_BROKER_ENABLED;
 
   afterEach(() => {
@@ -133,6 +149,174 @@ describe("context broker extension enablement", () => {
     expect(notifications[1].message).toContain("Backfilled 0/2");
     expect(notifications.find((entry) => entry.message.includes("Context broker: enabled"))?.message).toContain("records=2");
     expect(notifications.at(-1)?.message).toContain("README.md");
+  });
+
+  it("keeps an older live result when its single publish triggers the record cap", async () => {
+    const { pi, handlers } = createPiMock();
+    registerContextBrokerBeta(pi, { maxRecords: 1, rewriteThresholdBytes: 1 });
+    const { ctx } = createCtx();
+    const now = Date.now();
+
+    await runHandlers(handlers, "session_start", { type: "session_start" }, ctx);
+    await runHandlers(handlers, "tool_result", {
+      type: "tool_result", toolCallId: "newer", toolName: "bash", content: [{ type: "text", text: "newer live result" }], isError: false, timestamp: now,
+    }, ctx);
+    await runHandlers(handlers, "tool_result", {
+      type: "tool_result", toolCallId: "older", toolName: "bash", content: [{ type: "text", text: "older live result" }], isError: false, timestamp: now - 1,
+    }, ctx);
+
+    const broker = (pi as any).__piRogueContextBroker;
+    expect(broker.lookup({ text: "older live result" }, ctx)).toHaveLength(1);
+    expect(broker.lookup({ text: "newer live result" }, ctx)).toEqual([]);
+  });
+
+  it("skips a malformed persisted source without rejecting valid backfill candidates", async () => {
+    const { pi, handlers } = createPiMock();
+    registerContextBrokerBeta(pi, { rewriteThresholdBytes: 1 });
+    const { ctx, notifications } = createCtx([
+      { type: "message", id: "bad-entry", message: { role: "toolResult", toolCallId: "x".repeat(513), toolName: "bash", content: [{ type: "text", text: "bad" }], isError: false } },
+      { type: "message", id: "good-entry", message: { role: "toolResult", toolCallId: "good-source", toolName: "bash", content: [{ type: "text", text: "good" }], isError: false } },
+    ]);
+
+    await runHandlers(handlers, "session_start", { type: "session_start" }, ctx);
+
+    expect(notifications[0]?.message).toContain("Backfilled 1/2");
+    expect(notifications[0]?.message).toContain("1 malformed skipped");
+    expect((pi as any).__piRogueContextBroker.status().records).toBe(1);
+  });
+
+  it("bounds resume backfill and does not republish a pruned active tail", async () => {
+    const { pi, handlers, commands } = createPiMock();
+    registerContextBrokerBeta(pi, { maxRecords: 16, rewriteThresholdBytes: 1 });
+    const entries = Array.from({ length: 80 }, (_, index) => ({
+      type: "message",
+      id: `tool-entry-${index}`,
+      message: {
+        role: "toolResult",
+        toolCallId: `tool-call-${index}`,
+        toolName: "bash",
+        content: [{ type: "text", text: `bounded payload ${index}` }],
+        isError: false,
+      },
+    }));
+    const { ctx, notifications } = createCtx(entries);
+
+    await runHandlers(handlers, "session_start", { type: "session_start" }, ctx);
+    expect(notifications[0]?.message).toContain("Backfilled 64/64");
+    expect((pi as any).__piRogueContextBroker.status().records).toBe(16);
+
+    // The unchanged second resume is bounded and performs no new publishes,
+    // despite cap pruning having removed 48 of the active-tail artifacts.
+    await runHandlers(handlers, "session_start", { type: "session_start" }, ctx);
+    expect(notifications[1]?.message).toContain("Backfilled 0/64");
+    expect((pi as any).__piRogueContextBroker.status().records).toBe(16);
+
+    // Compaction removes the retained records, but it must not force a full
+    // synchronous replay of the unchanged pre-compaction branch on resume.
+    await runHandlers(handlers, "session_compact", { type: "session_compact" }, ctx);
+    expect((pi as any).__piRogueContextBroker.status().records).toBe(0);
+    await runHandlers(handlers, "session_start", { type: "session_start" }, ctx);
+    expect(notifications.at(-1)?.message).toContain("Backfilled 0/64");
+    expect((pi as any).__piRogueContextBroker.status().records).toBe(0);
+
+    await commands.get("pi-rogue-context").handler("status", ctx);
+    const telemetry = notifications.at(-1)?.message ?? "";
+    expect(telemetry).toContain("backfill scans=192 limit=64 skippedSeen=0 added=64 errors=0");
+    expect(telemetry).toContain("branchEntriesScanned=240");
+    expect(telemetry).toContain("candidateSourceIds=192");
+    expect(telemetry).toContain("duplicateSources=128");
+    expect(telemetry).toContain("actualPublished=64");
+    expect(telemetry).toContain("actualPruned=48");
+    expect(telemetry).toContain("batchCommits=3");
+  });
+
+  it("caps sparse huge-branch startup scans by raw-entry budget", async () => {
+    const { pi, handlers, commands } = createPiMock();
+    registerContextBrokerBeta(pi, { rewriteThresholdBytes: 1 });
+    const entries: any[] = Array.from({ length: 2_000 }, (_, index) => ({
+      type: "message",
+      id: `noise-${index}`,
+      message: { role: "assistant", content: [{ type: "text", text: "unrelated history" }] },
+    }));
+    // The newest raw-entry window has sparse eligible results. The older half
+    // must not be examined merely to collect tool-call input metadata.
+    for (let index = 1_488; index < 2_000; index += 8) {
+      entries[index] = {
+        type: "message",
+        id: `sparse-tool-${index}`,
+        message: { role: "toolResult", toolCallId: `sparse-call-${index}`, toolName: "bash", content: [{ type: "text", text: `sparse ${index}` }] },
+      };
+    }
+    const { ctx, notifications } = createCtx(entries);
+
+    await runHandlers(handlers, "session_start", { type: "session_start" }, ctx);
+    expect(notifications[0]?.message).toContain("Backfilled 64/64");
+    await commands.get("pi-rogue-context").handler("status", ctx);
+    expect(notifications.at(-1)?.message).toContain("branchEntriesScanned=512");
+    expect(notifications.at(-1)?.message).toContain("backfill scans=64 limit=64");
+  });
+
+  it("uses one durable backfill batch and preserves provenance across fresh registration after compaction", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "ctx-extension-durable-tail-"));
+    try {
+      const entries = Array.from({ length: 80 }, (_, index) => ({
+        type: "message",
+        id: `entry-${index}`,
+        message: { role: "toolResult", toolCallId: `call-${index}`, toolName: "bash", content: [{ type: "text", text: `payload ${index}` }] },
+      }));
+      const first = createPiMock();
+      const firstRun = createCtx(entries);
+      await registerContextBrokerBeta(first.pi, { durable: true, storeDir: dir, maxRecords: 16, rewriteThresholdBytes: 1 });
+      await runHandlers(first.handlers, "session_start", { type: "session_start" }, firstRun.ctx);
+      expect((first.pi as any).__piRogueContextBroker.status().records).toBe(16);
+      await first.commands.get("pi-rogue-context").handler("status", firstRun.ctx);
+      expect(firstRun.notifications.at(-1)?.message).toContain("batchCommits=1");
+      await runHandlers(first.handlers, "session_compact", { type: "session_compact" }, firstRun.ctx);
+
+      const second = createPiMock();
+      const secondRun = createCtx(entries);
+      await registerContextBrokerBeta(second.pi, { durable: true, storeDir: dir, maxRecords: 16, rewriteThresholdBytes: 1 });
+      await runHandlers(second.handlers, "session_start", { type: "session_start" }, secondRun.ctx);
+      expect(secondRun.notifications[0]?.message).toContain("Backfilled 0/64");
+      expect((second.pi as any).__piRogueContextBroker.status().records).toBe(0);
+      await second.commands.get("pi-rogue-context").handler("status", secondRun.ctx);
+      expect(secondRun.notifications.at(-1)?.message).toContain("actualPublished=0");
+      expect(secondRun.notifications.at(-1)?.message).toContain("batchCommits=1");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("hydrates only explicit source identity, not parent lineage", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "ctx-extension-source-lineage-"));
+    try {
+      const { pi, handlers } = createPiMock();
+      const { ctx } = createCtx();
+      await registerContextBrokerBeta(pi, { durable: true, storeDir: dir, rewriteThresholdBytes: 1 });
+      const bridge = (pi as any).__piRogueContextBroker;
+      bridge.publish({
+        kind: "tool_output",
+        payload: "producer payload",
+        sourceId: "producer-a",
+        parentIds: ["logical-parent"],
+      }, ctx);
+
+      await runHandlers(handlers, "session_start", { type: "session_start" }, ctx);
+      await runHandlers(handlers, "tool_result", {
+        type: "tool_result",
+        toolCallId: "logical-parent",
+        toolName: "bash",
+        content: [{ type: "text", text: "logical parent result" }],
+        isError: false,
+      }, ctx);
+
+      const artifacts = bridge.lookup({}, ctx);
+      expect(artifacts).toHaveLength(2);
+      expect(artifacts.find((artifact: any) => artifact.sourceId === "producer-a")).toMatchObject({ parentIds: ["logical-parent"] });
+      expect(artifacts.find((artifact: any) => artifact.sourceId === "logical-parent")?.payload).toContain("logical parent result");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it("purges unpinned broker artifacts after session compaction", async () => {
@@ -982,7 +1166,7 @@ maxRecords: 1,
     expect(notifications.at(-1)?.message).toContain("[REDACTED");
   });
 
-  it("re-publishes stale source handles instead of restoring raw prompt payloads", async () => {
+  it("preserves a current raw result when its durable source handle was pruned", async () => {
     const { pi, handlers, commands } = createPiMock();
     registerContextBrokerBeta(pi, { maxRecords: 1, rewriteThresholdBytes: 20 });
     const { ctx } = createCtx();
@@ -1014,8 +1198,8 @@ maxRecords: 1,
       messages: [{ role: "toolResult", toolCallId: "stale-call", toolName: "bash", content: [{ type: "text", text: raw }], isError: false, timestamp: 1 }],
     }, ctx);
 
-    expect(result.messages[0].content[0].text).toContain("Context broker artifact: ctx://");
-    expect(result.messages[0].content[0].text).not.toContain(raw);
+    // An unchanged context hook result preserves Pi's current raw message.
+    expect(result).toBeUndefined();
   });
 
   it("can reload artifacts and pin state from durable blob storage", async () => {
