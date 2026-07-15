@@ -1232,6 +1232,26 @@ maxRecords: 1,
     expect(result).toBeUndefined();
   });
 
+  it("keeps source-id deduplication isolated across sessions", async () => {
+    const { pi, handlers, commands } = createPiMock();
+    registerContextBrokerBeta(pi, { rewriteThresholdBytes: 1 });
+    const first = createCtx([{ type: "message", id: "entry-a", message: { role: "toolResult", toolCallId: "shared-call", toolName: "bash", content: [{ type: "text", text: "payload-from-A" }], isError: false } }]);
+    first.ctx.sessionManager.getSessionFile = () => "/sessions/a.jsonl";
+    const second = createCtx([{ type: "message", id: "entry-b", message: { role: "toolResult", toolCallId: "shared-call", toolName: "bash", content: [{ type: "text", text: "payload-from-B" }], isError: false } }]);
+    second.ctx.sessionManager.getSessionFile = () => "/sessions/b.jsonl";
+
+    await runHandlers(handlers, "session_start", { type: "session_start" }, first.ctx);
+    await runHandlers(handlers, "session_start", { type: "session_start" }, first.ctx);
+    expect(first.notifications[0]?.message).toContain("Backfilled 1/1");
+    expect(first.notifications[1]?.message).toContain("Backfilled 0/1");
+
+    await runHandlers(handlers, "session_start", { type: "session_start" }, second.ctx);
+    await commands.get("pi-rogue-context").handler("lookup payload-from-B", second.ctx);
+
+    expect(second.notifications.at(-1)?.message).toContain("payload-from-B");
+    expect(second.notifications.at(-1)?.message).not.toContain("payload-from-A");
+  });
+
   it("injects a bounded broker brief without raw payload text", async () => {
     const { pi, handlers } = createPiMock();
     registerContextBrokerBeta(pi, {

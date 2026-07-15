@@ -59,7 +59,8 @@ function withStoreLock<T>(dir: string, operation: () => T): T {
 }
 
 function stableSource(input: ContextArtifactInput): string | undefined {
-  return input.parentIds?.find(Boolean);
+  const sourceId = input.parentIds?.find(Boolean);
+  return sourceId ? `${input.sessionId}\u0000${sourceId}` : undefined;
 }
 
 function readStoredRecords(dir: string): StoredRecord[] {
@@ -242,7 +243,8 @@ export function createFileContextBroker(options: FileContextBrokerOptions = {}):
       ensureBlob(dir, artifact);
       keptSha256.add(artifact.sha256);
       const persistedHandle = freshPersistedByCurrent.get(artifact.handle) ?? artifact.handle;
-      for (const parentId of artifact.parentIds) nextSources.set(parentId, artifact.handle);
+      const source = stableSource(artifact);
+      if (source) nextSources.set(source, artifact.handle);
       nextAliases.set(persistedHandle, artifact.handle);
       if (!nextAliases.has(artifact.handle)) nextAliases.set(artifact.handle, artifact.handle);
       nextPersistedByCurrent.set(artifact.handle, persistedHandle);
@@ -299,7 +301,8 @@ export function createFileContextBroker(options: FileContextBrokerOptions = {}):
         nextIdAliases.set(persistedId, replayed.id);
         if (!nextIdAliases.has(replayed.id)) nextIdAliases.set(replayed.id, replayed.id);
         nextPersistedIdByCurrent.set(replayed.id, persistedId);
-        for (const parentId of replayed.parentIds) nextSources.set(parentId, replayed.handle);
+        const source = stableSource(replayed);
+        if (source) nextSources.set(source, replayed.handle);
       }
       const applyFreshState = () => {
         broker = fresh;
