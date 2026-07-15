@@ -300,6 +300,45 @@ describe("goal processing", () => {
     expect(setAdvisorCheckinDemandMock).toHaveBeenCalledWith(ctx, "goal", true);
   });
 
+  it("releases goal-owned advisor check-ins on shutdown without clearing persisted goal state", () => {
+    const handlers: Record<string, Array<(event: any, ctx: any) => Promise<void> | void>> = {};
+    const pi = {
+      on: (name: string, handler: (event: any, ctx: any) => Promise<void> | void) => {
+        handlers[name] = [...(handlers[name] ?? []), handler];
+      },
+      registerCommand: () => undefined,
+      sendUserMessage: () => undefined,
+    } as any;
+    const ctx = fakeCtx();
+    registerGoal(pi);
+    setGoal(ctx, "resume after shutdown");
+    setAdvisorCheckinDemandMock.mockClear();
+
+    expect(() => handlers.session_shutdown?.[0]?.({}, ctx)).not.toThrow();
+    expect(setAdvisorCheckinDemandMock).toHaveBeenCalledWith(ctx, "goal", false);
+    expect(activeGoal(ctx)).toBe("resume after shutdown");
+  });
+
+  it("contains shutdown demand-release failures and preserves the goal", () => {
+    const handlers: Record<string, Array<(event: any, ctx: any) => Promise<void> | void>> = {};
+    const notifications: string[] = [];
+    const pi = {
+      on: (name: string, handler: (event: any, ctx: any) => Promise<void> | void) => {
+        handlers[name] = [...(handlers[name] ?? []), handler];
+      },
+      registerCommand: () => undefined,
+      sendUserMessage: () => undefined,
+    } as any;
+    const ctx = { ...fakeCtx(), ui: { setStatus: () => undefined, notify: (message: string) => notifications.push(message) } };
+    registerGoal(pi);
+    setGoal(ctx, "preserve on release failure");
+    setAdvisorCheckinDemandMock.mockImplementationOnce(() => { throw new Error("registry unavailable"); });
+
+    expect(() => handlers.session_shutdown?.[0]?.({}, ctx)).not.toThrow();
+    expect(notifications.at(-1)).toContain("persisted goal state was preserved");
+    expect(activeGoal(ctx)).toBe("preserve on release failure");
+  });
+
   it("disables advisor check-ins when orchestration goal clear stops the loop", async () => {
     const pi = { sendUserMessage: () => undefined } as any;
     const ctx = fakeCtx();
