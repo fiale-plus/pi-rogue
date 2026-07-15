@@ -272,6 +272,9 @@ function syncLoopTimer(pi: ExtensionAPI, ctx: any): void {
   setAdvisorCheckinDemand(ctx, "loop", true);
   const generation = state.generation;
   const tick = () => {
+    // A timer tick is a heartbeat for the persisted demand lease. Resumable state
+    // still protects a loop across a process restart when no tick can run.
+    setAdvisorCheckinDemand(ctx, "loop", true);
     const currentIntervalMs = parseIntervalMs(readLoopState(ctx).interval);
     if (currentIntervalMs === null || currentIntervalMs !== intervalMs) {
       syncLoopTimer(pi, ctx);

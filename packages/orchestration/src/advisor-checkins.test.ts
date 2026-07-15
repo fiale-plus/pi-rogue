@@ -1,8 +1,9 @@
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
+import { spawn } from "node:child_process";
 import { afterEach, describe, expect, it } from "vitest";
-import { resetAdvisorSessionContext, setAdvisorCheckinDemand, setAdvisorCheckinsEnabled } from "./advisor-checkins.js";
+import { advisorCheckinDemandStatus, resetAdvisorSessionContext, setAdvisorCheckinDemand, setAdvisorCheckinsEnabled } from "./advisor-checkins.js";
 
 const dirs: string[] = [];
 
@@ -16,6 +17,15 @@ function tempConfig() {
 
 function demandCtx(name: string) {
   return { sessionManager: { getSessionFile: () => join(tmpdir(), `${name}.jsonl`) } };
+}
+
+function tempDemandStorage() {
+  const file = tempConfig();
+  return {
+    config: file,
+    demand: join(dirname(file), "checkin-demand.json"),
+    sessions: join(dirname(dirname(file)), "orchestration"),
+  };
 }
 
 function tempState() {
@@ -111,6 +121,90 @@ describe("advisor check-in lifecycle bridge", () => {
     expect(transferred.checkins).toBe("mid-hour");
     expect(transferred.checkinStartedAt).toBe(loopEnabled.checkinStartedAt);
     expect(setAdvisorCheckinDemand(ctx, "goal", false, file, demand).checkins).toBe("off");
+  });
+
+  it("expires an old orphan while another session starts and stops", () => {
+    const { config, demand, sessions } = tempDemandStorage();
+    writeFileSync(demand, JSON.stringify({
+      version: 1,
+      sessions: {
+        "v2-pi-rogue-race-orphan-0123456789abcdef": { goal: true, updatedAt: new Date(Date.now() - 5 * 60 * 60_000).toISOString() },
+      },
+    }), "utf8");
+    const other = demandCtx("lease-other-session");
+
+    setAdvisorCheckinDemand(other, "loop", true, config, demand, sessions);
+    const stopped = setAdvisorCheckinDemand(other, "loop", false, config, demand, sessions);
+
+    expect(stopped.checkins).toBe("off");
+    expect(JSON.parse(readFileSync(demand, "utf8")).sessions).toEqual({});
+  });
+
+  it("retains an old owner backed by resumable goal state and reports it concisely", () => {
+    const { config, demand, sessions } = tempDemandStorage();
+    const owner = "v2-resumable-goal-0123456789abcdef";
+    mkdirSync(join(sessions, owner), { recursive: true });
+    writeFileSync(join(sessions, owner, "goal.md"), "resume after restart\n", "utf8");
+    writeFileSync(demand, JSON.stringify({
+      version: 1,
+      sessions: { [owner]: { goal: true, updatedAt: new Date(Date.now() - 5 * 60 * 60_000).toISOString() } },
+    }), "utf8");
+
+    const status = advisorCheckinDemandStatus(config, demand, sessions);
+
+    expect(status).toEqual({ enabled: true, owners: ["resumable-goal (goal)"] });
+    expect(JSON.parse(readFileSync(config, "utf8")).checkins).toBe("mid-hour");
+    expect(Date.parse(JSON.parse(readFileSync(demand, "utf8")).sessions[owner].updatedAt)).toBeGreaterThan(Date.now() - 5_000);
+  });
+
+  it("releases a gracefully stopped owner even when its goal remains resumable", () => {
+    const { config, demand, sessions } = tempDemandStorage();
+    const ctx = demandCtx("graceful-owner");
+    setAdvisorCheckinDemand(ctx, "goal", true, config, demand, sessions);
+    const key = Object.keys(JSON.parse(readFileSync(demand, "utf8")).sessions)[0];
+    mkdirSync(join(sessions, key), { recursive: true });
+    writeFileSync(join(sessions, key, "goal.md"), "resume later\n", "utf8");
+
+    const stopped = setAdvisorCheckinDemand(ctx, "goal", false, config, demand, sessions);
+
+    expect(stopped.checkins).toBe("off");
+    expect(JSON.parse(readFileSync(demand, "utf8")).sessions).toEqual({});
+  });
+
+  it("drops malformed and implausibly future leases without letting clock skew hold check-ins on", () => {
+    const { config, demand, sessions } = tempDemandStorage();
+    writeFileSync(demand, JSON.stringify({
+      version: 1,
+      sessions: {
+        "v2-malformed-time-0123456789abcdef": { goal: true, updatedAt: "not-a-date" },
+        "v2-future-time-0123456789abcdef": { loop: true, updatedAt: new Date(Date.now() + 24 * 60 * 60_000).toISOString() },
+      },
+    }), "utf8");
+
+    expect(advisorCheckinDemandStatus(config, demand, sessions)).toEqual({ enabled: false, owners: [] });
+    expect(JSON.parse(readFileSync(config, "utf8")).checkins).toBe("off");
+    expect(JSON.parse(readFileSync(demand, "utf8")).sessions).toEqual({});
+  });
+
+  it("serializes concurrent demand writers without dropping either owner", async () => {
+    const { config, demand, sessions } = tempDemandStorage();
+    const worker = join(dirname(demand), "concurrent-demand-writer.ts");
+    writeFileSync(worker, [
+      `import { setAdvisorCheckinDemand } from ${JSON.stringify(new URL("./advisor-checkins.ts", import.meta.url).href)};`,
+      'import { join } from "node:path";',
+      "const [config, demand, sessions, name] = process.argv.slice(2);",
+      'setAdvisorCheckinDemand({ sessionManager: { getSessionFile: () => join("/tmp", `${name}.jsonl`) } }, "goal", true, config, demand, sessions);',
+    ].join("\n"), "utf8");
+    const run = (name: string) => new Promise<void>((resolveRun, reject) => {
+      const child = spawn(process.execPath, ["--import", "tsx", worker, config, demand, sessions, name], { stdio: "ignore" });
+      child.once("error", reject);
+      child.once("exit", (code) => code === 0 ? resolveRun() : reject(new Error(`writer exited ${code}`)));
+    });
+
+    await Promise.all([run("concurrent-a"), run("concurrent-b")]);
+
+    expect(Object.keys(JSON.parse(readFileSync(demand, "utf8")).sessions)).toHaveLength(2);
+    expect(JSON.parse(readFileSync(config, "utf8")).checkins).toBe("mid-hour");
   });
 
   it("fails safely without overwriting config or top-level malformed demand", () => {
