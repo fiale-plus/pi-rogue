@@ -5,6 +5,7 @@ import { formatResearchState, readResearchState } from "./autoresearch-state.js"
 import { activeGoal, handleGoalCommand, registerGoal } from "./goal.js";
 import { formatLoopState, handleLoopCommand, readLoopState, registerLoop } from "./loop.js";
 import { registerNoveltyGuard } from "./novelty-guard.js";
+import { advisorCheckinDemandStatus } from "./advisor-checkins.js";
 
 type CompletionItem = { value: string; label: string; description?: string };
 
@@ -37,11 +38,21 @@ function orchestrationCompletions(prefix: string): CompletionItem[] | null {
 
 function orchestrationStatus(ctx: any): string {
   const goal = activeGoal(ctx);
+  let checkins = "off";
+  try {
+    const demand = advisorCheckinDemandStatus();
+    const owners = demand.owners.slice(0, 3);
+    const more = demand.owners.length - owners.length;
+    checkins = demand.enabled ? `mid-hour — ${owners.join(", ")}${more > 0 ? ` (+${more} more)` : ""}` : "off";
+  } catch {
+    checkins = "unavailable (demand registry invalid)";
+  }
   return [
     "Pi-Rogue orchestration:",
     `goal: ${goal || "none"}`,
     `loop: ${formatLoopState(readLoopState(ctx))}`,
     `research: ${formatResearchState(readResearchState(ctx))}`,
+    `check-ins: ${checkins}`,
   ].join("\n");
 }
 

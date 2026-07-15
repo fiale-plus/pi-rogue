@@ -1,5 +1,5 @@
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { dirname, join, relative, resolve } from "node:path";
 import { homedir } from "node:os";
 import { sessionKey, sessionScopedDir } from "@fiale-plus/pi-core";
 
@@ -40,6 +40,16 @@ const ADVISOR_DIR = join(homedir(), ".pi", "agent", "pi-rogue", "advisor");
 const ADVISOR_CONFIG_PATH = join(homedir(), ".pi", "agent", "pi-rogue", "advisor", "config.json");
 const ADVISOR_STATE_PATH = join(ADVISOR_DIR, "state.json");
 const CHECKIN_DEMAND_PATH = join(ADVISOR_DIR, "checkin-demand.json");
+const ORCHESTRATION_SESSIONS_DIR = join(homedir(), ".pi", "agent", "fiale-plus", "orchestration");
+
+/**
+ * Demand writes are heartbeats. A lease spans at least two check-in cadences,
+ * but is capped so a crashed owner without resumable orchestration state cannot
+ * keep check-ins on indefinitely.
+ */
+const MIN_DEMAND_LEASE_MS = 30 * 60_000;
+const MAX_DEMAND_LEASE_MS = 4 * 60 * 60_000;
+const MAX_CLOCK_SKEW_MS = 5 * 60_000;
 
 export function advisorSessionStatePath(ctx: any): string {
   return join(sessionScopedDir(join(ADVISOR_DIR, "sessions"), ctx), "state.json");
@@ -141,6 +151,102 @@ function demandRegistry(path: string): CheckinDemandRegistry {
   return { version: 1, sessions };
 }
 
+function demandLeaseMs(configPath: string): number {
+  const interval = Number(readJson<Record<string, unknown>>(configPath).checkinIntervalMinutes);
+  const cadenceMs = Number.isFinite(interval) && interval > 0 ? interval * 60_000 : MIN_DEMAND_LEASE_MS;
+  return Math.min(MAX_DEMAND_LEASE_MS, Math.max(MIN_DEMAND_LEASE_MS, cadenceMs * 2));
+}
+
+function isSessionPathInside(root: string, key: string): boolean {
+  if (!key || key.includes("\0")) return false;
+  const resolvedRoot = resolve(root);
+  const candidate = resolve(resolvedRoot, key);
+  const rel = relative(resolvedRoot, candidate);
+  return Boolean(rel) && !rel.startsWith("..") && !rel.includes(`..${process.platform === "win32" ? "\\" : "/"}`);
+}
+
+function resumableDemandSources(key: string, orchestrationSessionsDir: string): { goal: boolean; loop: boolean } {
+  if (!isSessionPathInside(orchestrationSessionsDir, key)) return { goal: false, loop: false };
+  const sessionDir = join(orchestrationSessionsDir, key);
+  let goal = false;
+  let loop = false;
+  try {
+    goal = readFileSync(join(sessionDir, "goal.md"), "utf8").trim().length > 0;
+  } catch {
+    // A missing or unreadable session file cannot prove resumable demand.
+  }
+  try {
+    const raw = JSON.parse(readFileSync(join(sessionDir, "loop.json"), "utf8")) as Record<string, unknown>;
+    loop = raw.enabled === true && typeof raw.instruction === "string" && raw.instruction.trim().length > 0;
+  } catch {
+    // A malformed loop state cannot prove resumable demand.
+  }
+  return { goal, loop };
+}
+
+/** Reconcile stale heartbeats while retaining demand backed by resumable session state. Must run under withDemandLock. */
+function reconcileDemandRegistry(
+  registry: CheckinDemandRegistry,
+  configPath: string,
+  orchestrationSessionsDir: string,
+  now = Date.now(),
+): boolean {
+  let changed = false;
+  const leaseMs = demandLeaseMs(configPath);
+  for (const [key, entry] of Object.entries(registry.sessions)) {
+    const resumable = resumableDemandSources(key, orchestrationSessionsDir);
+    const updatedAtMs = Date.parse(entry.updatedAt);
+    const futureBy = Number.isFinite(updatedAtMs) ? updatedAtMs - now : Number.POSITIVE_INFINITY;
+    // A small future skew is treated as "now"; a large future date is never allowed to extend a lease.
+    const validLease = Number.isFinite(updatedAtMs)
+      && futureBy <= MAX_CLOCK_SKEW_MS
+      && now - Math.min(updatedAtMs, now) <= leaseMs;
+    const next = {
+      ...(entry.goal === true && (resumable.goal || validLease) ? { goal: true as const } : {}),
+      ...(entry.loop === true && (resumable.loop || validLease) ? { loop: true as const } : {}),
+      updatedAt: entry.updatedAt,
+    };
+    if (resumable.goal || resumable.loop) {
+      // Durable active state is an explicit proof that this owner can resume, not an age-only exemption.
+      next.updatedAt = new Date(now).toISOString();
+    } else if (Number.isFinite(updatedAtMs) && updatedAtMs > now) {
+      next.updatedAt = new Date(now).toISOString();
+    }
+    if (next.goal === true || next.loop === true) {
+      if (next.goal !== entry.goal || next.loop !== entry.loop || next.updatedAt !== entry.updatedAt) {
+        registry.sessions[key] = next;
+        changed = true;
+      }
+    } else {
+      delete registry.sessions[key];
+      changed = true;
+    }
+  }
+  return changed;
+}
+
+export type AdvisorCheckinDemandStatus = { enabled: boolean; owners: string[] };
+
+function ownerDescription(key: string, entry: CheckinDemandRegistry["sessions"][string]): string {
+  const label = key.replace(/^v2-/, "").replace(/-[a-f0-9]{16}$/i, "");
+  const sources = [entry.goal ? "goal" : "", entry.loop ? "loop" : ""].filter(Boolean).join("+");
+  return `${label} (${sources})`;
+}
+
+export function advisorCheckinDemandStatus(
+  configPath = ADVISOR_CONFIG_PATH,
+  demandPath = configPath === ADVISOR_CONFIG_PATH ? CHECKIN_DEMAND_PATH : join(dirname(configPath), "checkin-demand.json"),
+  orchestrationSessionsDir = ORCHESTRATION_SESSIONS_DIR,
+): AdvisorCheckinDemandStatus {
+  return withDemandLock(demandPath, () => {
+    const registry = demandRegistry(demandPath);
+    if (reconcileDemandRegistry(registry, configPath, orchestrationSessionsDir)) atomicWriteJson(demandPath, registry);
+    const owners = Object.entries(registry.sessions).map(([key, entry]) => ownerDescription(key, entry));
+    applyAggregateConfig(owners.length > 0, configPath);
+    return { enabled: owners.length > 0, owners };
+  });
+}
+
 function applyAggregateConfig(enabled: boolean, configPath: string): AdvisorConfig {
   const current = cleanAdvisorConfig(readJson<AdvisorConfig>(configPath));
   const next: AdvisorConfig = {
@@ -165,6 +271,7 @@ export function setAdvisorCheckinDemand(
   enabled: boolean,
   configPath = ADVISOR_CONFIG_PATH,
   demandPath = configPath === ADVISOR_CONFIG_PATH ? CHECKIN_DEMAND_PATH : join(dirname(configPath), "checkin-demand.json"),
+  orchestrationSessionsDir = ORCHESTRATION_SESSIONS_DIR,
 ): AdvisorConfig {
   return withDemandLock(demandPath, () => {
     const registry = demandRegistry(demandPath);
@@ -173,6 +280,8 @@ export function setAdvisorCheckinDemand(
     const next = { ...current, [source]: enabled ? true : undefined, updatedAt: new Date().toISOString() };
     if (next.goal === true || next.loop === true) registry.sessions[key] = next;
     else delete registry.sessions[key];
+    // Reconcile after recording this writer's heartbeat so creating state just after claiming demand is safe.
+    reconcileDemandRegistry(registry, configPath, orchestrationSessionsDir);
     atomicWriteJson(demandPath, registry);
     return applyAggregateConfig(Object.keys(registry.sessions).length > 0, configPath);
   });
