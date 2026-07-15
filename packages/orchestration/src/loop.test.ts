@@ -220,6 +220,61 @@ describe("loop tick guards", () => {
     clearLoop(ctx);
   });
 
+  it("clears failed goal enqueue state so a later loop tick retries", async () => {
+    const { clearLoop, startLoop, triggerLoopTick } = await loadLoopModule();
+    const { setGoal } = await import("./goal.js");
+    const { endGoalCheck, hasGoalCheckPending } = await import("./goal-resolution.js");
+    const ctx = createContext("goal-enqueue-retry");
+    const sends: string[] = [];
+    let attempts = 0;
+    const pi = {
+      sendUserMessage: (message: string) => {
+        attempts += 1;
+        if (attempts === 1) throw new Error("transient enqueue failure");
+        sends.push(message);
+      },
+      on: () => undefined,
+    };
+
+    setGoal(ctx, "retry the goal delivery");
+    startLoop(pi as any, ctx, "1m", "re-check the goal");
+    expect(triggerLoopTick(pi as any, ctx)).toBe(false);
+    expect(hasGoalCheckPending(ctx)).toBe(false);
+    expect(ctx.notifications.at(-1)).toContain("will retry");
+
+    expect(triggerLoopTick(pi as any, ctx)).toBe(true);
+    expect(hasGoalCheckPending(ctx)).toBe(true);
+    expect(sends).toHaveLength(1);
+    endGoalCheck(ctx);
+    clearLoop(ctx);
+  });
+
+  it("retries a goal loop after an undelivered enqueue lease expires", async () => {
+    vi.useFakeTimers();
+    const { clearLoop, startLoop, triggerLoopTick } = await loadLoopModule();
+    const { setGoal } = await import("./goal.js");
+    const { endGoalCheck, GOAL_CHECK_DELIVERY_LEASE_MS, hasGoalCheckPending } = await import("./goal-resolution.js");
+    const ctx = createContext("goal-hidden-enqueue-retry");
+    let attempts = 0;
+    const pi = {
+      sendUserMessage: () => {
+        attempts += 1;
+        void Promise.reject(new Error("hidden async enqueue failure")).catch(() => undefined);
+      },
+      on: () => undefined,
+    };
+
+    setGoal(ctx, "retry hidden loop delivery");
+    startLoop(pi as any, ctx, "1m", "re-check the goal");
+    expect(triggerLoopTick(pi as any, ctx)).toBe(true);
+    expect(hasGoalCheckPending(ctx)).toBe(true);
+    vi.setSystemTime(Date.now() + GOAL_CHECK_DELIVERY_LEASE_MS);
+    expect(triggerLoopTick(pi as any, ctx)).toBe(true);
+    expect(attempts).toBe(2);
+    endGoalCheck(ctx);
+    clearLoop(ctx);
+  });
+
   it("does not leave goal check pending when a goal tick is superseded", async () => {
     const { clearLoop, startLoop, triggerLoopTick } = await loadLoopModule();
     const { setGoal } = await import("./goal.js");

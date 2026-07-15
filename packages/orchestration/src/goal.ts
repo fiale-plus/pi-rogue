@@ -3,7 +3,7 @@ import { Type } from "typebox";
 import { appendText, featureFile, readText, sessionFile, truncate, writeText } from "./internal.js";
 import { clearResearchStateForGoal, readResearchState, writeResearchState, type ResearchState } from "./autoresearch-state.js";
 import { hasResearchCompletionEvidence, researchCompletionBlock } from "./autoresearch-completion.js";
-import { beginGoalCheck, buildGoalCheckPrompt, consumeDeliveredGoalCheck, currentDeliveredGoalCheck, endGoalCheck, goalCheckResult, hasGoalCheckPending, invalidateGoalChecks, markGoalCheckDelivered } from "./goal-resolution.js";
+import { beginGoalCheck, buildGoalCheckPrompt, cancelGoalCheck, consumeDeliveredGoalCheck, currentDeliveredGoalCheck, endGoalCheck, goalCheckResult, hasGoalCheckPending, invalidateGoalChecks, markGoalCheckDelivered } from "./goal-resolution.js";
 import { clearLoop, triggerLoopTick } from "./loop.js";
 import { clearNoProgressRecovery } from "./novelty-guard.js";
 import { resetAdvisorSessionContext, setAdvisorCheckinDemand } from "./advisor-checkins.js";
@@ -193,18 +193,24 @@ export function startGoalProcessing(pi: ExtensionAPI, ctx: any, goal: string): G
     return "loop";
   }
 
-  const request = beginGoalCheck(ctx, goal);
+  const deliverAsFollowUp = ctx.isIdle?.() === false;
+  const request = beginGoalCheck(ctx, goal, deliverAsFollowUp ? "followUp" : "immediate");
   const prompt = buildGoalCheckPrompt(
     goal,
     "Start processing the goal immediately. Take the first concrete step now: inspect, run, edit, or ask only if a specific blocker prevents action.",
     request,
   );
-  if (ctx.isIdle?.() === false) {
-    pi.sendUserMessage(prompt, { deliverAs: "followUp" });
-  } else {
-    pi.sendUserMessage(prompt);
+  try {
+    if (deliverAsFollowUp) {
+      pi.sendUserMessage(prompt, { deliverAs: "followUp" });
+    } else {
+      pi.sendUserMessage(prompt);
+    }
+    return "standalone";
+  } catch (error) {
+    cancelGoalCheck(ctx, request);
+    throw error;
   }
-  return "standalone";
 }
 
 export function registerGoal(pi: ExtensionAPI): void {

@@ -2,6 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { sessionKey, truncate } from "./internal.js";
 
 const GOAL_CHECK_MARKER_VERSION = "v1";
+export const GOAL_CHECK_DELIVERY_LEASE_MS = 5 * 60 * 1000;
 const goalChecks = new Map<string, GoalCheckRequest>();
 const goalGenerations = new Map<string, number>();
 
@@ -10,6 +11,8 @@ export type GoalCheckRequest = {
   generation: number;
   goalIdentity: string;
   goal: string;
+  createdAt: number;
+  delivery: "immediate" | "followUp";
   delivered?: boolean;
 };
 
@@ -45,7 +48,14 @@ function deliveredRequestMatches(event: any, pending: GoalCheckRequest): boolean
 }
 
 export function hasGoalCheckPending(ctx: any): boolean {
-  return goalChecks.has(sessionKey(ctx));
+  const key = sessionKey(ctx);
+  const pending = goalChecks.get(key);
+  const followUpStillQueued = pending?.delivery === "followUp" && ctx.hasPendingMessages?.() === true;
+  if (pending && !pending.delivered && !followUpStillQueued && Date.now() - pending.createdAt >= GOAL_CHECK_DELIVERY_LEASE_MS) {
+    goalChecks.delete(key);
+    return false;
+  }
+  return Boolean(pending);
 }
 
 export function currentDeliveredGoalCheck(ctx: any, activeGoal: string): GoalCheckRequest | undefined {
@@ -62,12 +72,14 @@ export function markGoalCheckDelivered(ctx: any, prompt: unknown): GoalCheckRequ
   return pending;
 }
 
-export function beginGoalCheck(ctx: any, goal: string): GoalCheckRequest {
+export function beginGoalCheck(ctx: any, goal: string, delivery: GoalCheckRequest["delivery"] = "immediate"): GoalCheckRequest {
   const request = {
     requestId: randomUUID(),
     generation: generationFor(ctx),
     goalIdentity: goalIdentity(goal),
     goal,
+    createdAt: Date.now(),
+    delivery,
   };
   goalChecks.set(sessionKey(ctx), request);
   return request;
@@ -82,6 +94,12 @@ export function consumeDeliveredGoalCheck(ctx: any, event: any, activeGoal: stri
   if (pending.generation !== generationFor(ctx)) return undefined;
   if (pending.goal !== activeGoal || pending.goalIdentity !== goalIdentity(activeGoal)) return undefined;
   return pending;
+}
+
+export function cancelGoalCheck(ctx: any, request: Pick<GoalCheckRequest, "requestId">): boolean {
+  const key = sessionKey(ctx);
+  if (goalChecks.get(key)?.requestId !== request.requestId) return false;
+  return goalChecks.delete(key);
 }
 
 export function endGoalCheck(ctx: any): void {

@@ -3,7 +3,7 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { appendText, featureFile, readText, sessionFile, sessionKey, truncate } from "./internal.js";
 import { clearResearchState, hasActiveResearch } from "./autoresearch-state.js";
 import { setAdvisorCheckinDemand } from "./advisor-checkins.js";
-import { buildGoalCheckPrompt, beginGoalCheck, hasGoalCheckPending } from "./goal-resolution.js";
+import { buildGoalCheckPrompt, beginGoalCheck, cancelGoalCheck, hasGoalCheckPending } from "./goal-resolution.js";
 import { clearNoProgressRecovery } from "./novelty-guard.js";
 import { readSessionJson, writeSessionJson } from "./state.js";
 
@@ -215,21 +215,24 @@ function runLoopTick(pi: ExtensionAPI, ctx: any, generation?: number): boolean {
     return false;
   }
 
-  const request = goal ? beginGoalCheck(ctx, goal) : undefined;
+  const deliverAsFollowUp = ctx.isIdle?.() === false;
+  const request = goal ? beginGoalCheck(ctx, goal, deliverAsFollowUp ? "followUp" : "immediate") : undefined;
   const tick = goal ? undefined : { generation: activeGeneration, requestId: randomUUID() };
   const prompt = request
     ? buildGoalCheckPrompt(goal, current.instruction, request)
     : plainTickPrompt(current.instruction, tick!);
   if (tick) outstandingTicks.set(key, tick);
   try {
-    if (ctx.isIdle?.() === false) {
+    if (deliverAsFollowUp) {
       pi.sendUserMessage(prompt, { deliverAs: "followUp" });
     } else {
       pi.sendUserMessage(prompt);
     }
-  } catch (error) {
+  } catch {
     if (tick) outstandingTicks.delete(key);
-    throw error;
+    if (request) cancelGoalCheck(ctx, request);
+    ctx.ui.notify("Loop tick enqueue failed; pending delivery was cleared and the loop will retry.", "warning");
+    return false;
   }
 
   ctx.ui.notify(goal ? `🎯 Goal check: ${truncate(goal, 80)}` : `↻ Loop tick: ${truncate(current.instruction, 80)}`, "info");
