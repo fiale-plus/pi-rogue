@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 import { homedir } from "node:os";
@@ -35,11 +36,13 @@ type Handler = (event: any, ctx: any) => any;
 
 type HandlerMap = Record<string, Handler[]>;
 type CommandMap = Record<string, { handler: (args: string, ctx: any) => any }>;
+type ToolMap = Record<string, { execute: (id: string, params: any, signal: AbortSignal, onUpdate: any, ctx: any) => any }>;
 type MessageRendererMap = Record<string, (message: any, options: { expanded?: boolean }, theme: any) => any>;
 
 function makeHandlers() {
   const handlers: HandlerMap = {};
   const commands: CommandMap = {};
+  const tools: ToolMap = {};
   const messageRenderers: MessageRendererMap = {};
   const sendMessage = vi.fn();
 
@@ -54,7 +57,9 @@ function makeHandlers() {
     registerCommand: (name: string, command: { handler: (args: string, ctx: any) => any }) => {
       commands[name] = command;
     },
-    registerTool: vi.fn(),
+    registerTool: (tool: { name: string; execute: ToolMap[string]["execute"] }) => {
+      tools[tool.name] = tool;
+    },
     sendMessage,
     sendUserMessage: () => undefined,
     ui: {
@@ -63,7 +68,7 @@ function makeHandlers() {
     },
   };
 
-  return { handlers, commands, messageRenderers, pi: pi as any, sendMessage };
+  return { handlers, commands, tools, messageRenderers, pi: pi as any, sendMessage };
 }
 
 const ADVISOR_STATE_DIR = join(homedir(), ".pi", "agent", "pi-rogue", "advisor");
@@ -104,6 +109,7 @@ describe("advisor two-agent convergence", () => {
   let ctx: any;
   let handlers: HandlerMap;
   let commands: CommandMap;
+  let tools: ToolMap;
   let messageRenderers: MessageRendererMap;
   let sendMessageMock: ReturnType<typeof vi.fn>;
   let completeSimpleMock: ReturnType<typeof vi.fn>;
@@ -120,6 +126,7 @@ describe("advisor two-agent convergence", () => {
     const setup = makeHandlers();
     handlers = setup.handlers;
     commands = setup.commands;
+    tools = setup.tools;
     messageRenderers = setup.messageRenderers;
     sendMessageMock = setup.sendMessage;
     piMock = setup.pi;
@@ -425,6 +432,85 @@ describe("advisor two-agent convergence", () => {
         }),
       }),
     );
+  });
+
+  it("keys manual answers by normalized scope and every prompt-affecting option", async () => {
+    completeSimpleMock
+      .mockResolvedValueOnce({ content: [{ type: "text", text: "architecture answer" }] })
+      .mockResolvedValueOnce({ content: [{ type: "text", text: "security answer" }] })
+      .mockResolvedValueOnce({ content: [{ type: "text", text: "security answer with recent work" }] });
+    const signal = new AbortController().signal;
+    const ask = (scope: string, includeRecentWork: boolean) => tools.advisor.execute(
+      "advisor-cache-test",
+      { question: "Choose the boundary", scope, includeRecentWork },
+      signal,
+      undefined,
+      ctx,
+    );
+
+    const architecture = await ask(" Architecture ", false);
+    const security = await ask("security", false);
+    const cachedSecurity = await ask(" SECURITY ", false);
+    const withRecentWork = await ask("security", true);
+    const cachedWithRecentWork = await ask("security", true);
+
+    expect(architecture.content[0].text).toBe("architecture answer");
+    expect(security.content[0].text).toBe("security answer");
+    expect(cachedSecurity.details.cached).toBe(true);
+    expect(withRecentWork.content[0].text).toBe("security answer with recent work");
+    expect(cachedWithRecentWork.details.cached).toBe(true);
+    expect(completeSimpleMock).toHaveBeenCalledTimes(3);
+  });
+
+  it("ignores cache entries written under the legacy unscoped identity", async () => {
+    const question = "Should this boundary move?";
+    const legacyKey = createHash("sha256")
+      .update(["adv", "auto", question, "", ""].join("||"))
+      .digest("hex")
+      .slice(0, 16);
+    writeFileSync(ADVISOR_CACHE_PATH, JSON.stringify({ [legacyKey]: "legacy unscoped answer" }), "utf8");
+    completeSimpleMock.mockResolvedValueOnce({ content: [{ type: "text", text: "fresh scoped answer" }] });
+
+    const result = await tools.advisor.execute(
+      "legacy-cache-test",
+      { question, scope: "architecture", includeRecentWork: false },
+      new AbortController().signal,
+      undefined,
+      ctx,
+    );
+
+    expect(result.content[0].text).toBe("fresh scoped answer");
+    expect(result.details.cached).not.toBe(true);
+    expect(completeSimpleMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps delimiter-adversarial request tuples distinct", async () => {
+    completeSimpleMock
+      .mockResolvedValueOnce({ content: [{ type: "text", text: "first tuple" }] })
+      .mockResolvedValueOnce({ content: [{ type: "text", text: "second tuple" }] });
+    const signal = new AbortController().signal;
+
+    const first = await tools.advisor.execute("delimiter-a", { question: "a||b", scope: "c", includeRecentWork: false }, signal, undefined, ctx);
+    const second = await tools.advisor.execute("delimiter-b", { question: "a", scope: "b||c", includeRecentWork: false }, signal, undefined, ctx);
+
+    expect(first.content[0].text).toBe("first tuple");
+    expect(second.content[0].text).toBe("second tuple");
+    expect(completeSimpleMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("hashes the complete question instead of colliding on a shared prefix", async () => {
+    const prefix = "x".repeat(310);
+    completeSimpleMock
+      .mockResolvedValueOnce({ content: [{ type: "text", text: "tail A answer" }] })
+      .mockResolvedValueOnce({ content: [{ type: "text", text: "tail B answer" }] });
+    const signal = new AbortController().signal;
+
+    const first = await tools.advisor.execute("question-a", { question: `${prefix}A`, scope: "planning", includeRecentWork: false }, signal, undefined, ctx);
+    const second = await tools.advisor.execute("question-b", { question: `${prefix}B`, scope: "planning", includeRecentWork: false }, signal, undefined, ctx);
+
+    expect(first.content[0].text).toBe("tail A answer");
+    expect(second.content[0].text).toBe("tail B answer");
+    expect(completeSimpleMock).toHaveBeenCalledTimes(2);
   });
 
   it("emits one controlled failure only after every auth candidate is exhausted", async () => {
