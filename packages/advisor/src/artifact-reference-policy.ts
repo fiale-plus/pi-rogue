@@ -1,0 +1,108 @@
+const NODE_MODULES_PATH_RE = /(?:^|\/)node_modules(?:\/|$)/;
+const IMPERATIVE_VERBS = "read|open|review|check|inspect|see|use|load";
+const EXTENSIONS = "md|json|txt|yaml|yml|toml|ts|js|tsx|jsx";
+const ARTIFACT_TOKEN_RE = new RegExp(
+  String.raw`[\`'\"]?(?:(?:~|\.{1,2})?/)?(?:@?[A-Za-z0-9._-]+/)*[A-Za-z0-9._-]+\.(?:${EXTENSIONS})[\`'\"]?`,
+  "gi",
+);
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function refPattern(ref: string): string {
+  return String.raw`[\`'\"]?${escapeRegExp(ref)}[\`'\"]?`;
+}
+
+function imperativeListContainsRef(raw: string, ref: string): boolean {
+  const command = new RegExp(String.raw`\b(?:${IMPERATIVE_VERBS})\b`, "gi");
+  const target = new RegExp(`${refPattern(ref)}(?![A-Za-z0-9._/-])`, "i");
+  let match: RegExpExecArray | null;
+  while ((match = command.exec(raw)) !== null) {
+    let clause = raw.slice(command.lastIndex, command.lastIndex + 500);
+    const boundary = clause.search(/(?:[!?](?=\s)|\.(?=\s)|[;\n])/);
+    if (boundary >= 0) clause = clause.slice(0, boundary);
+    if (!target.test(clause)) continue;
+
+    const residue = clause
+      .replace(ARTIFACT_TOKEN_RE, " ")
+      .replace(/\b(?:the|these|following|required|both|all|file|files|artifact|artifacts|path|paths|bundle|bundles|change|changes|in|as|well|and|or|before|continuing|proceed|proceeding|review|first|then|next|please)\b/gi, " ")
+      .replace(/[\s,:()[\]`'"-]+/g, "");
+    if (!residue) return true;
+  }
+  return false;
+}
+
+function markdownListBlock(text: string): string {
+  const list: string[] = [];
+  let started = false;
+  for (const line of text.split("\n")) {
+    if (/^\s*(?:[-*]|\d+[.)])\s+/.test(line)) {
+      started = true;
+      list.push(line);
+      continue;
+    }
+    if (started && (!line.trim() || /^\s{2,}\S/.test(line))) {
+      list.push(line);
+      continue;
+    }
+    break;
+  }
+  return list.join("\n");
+}
+
+function imperativeMultilineListContainsRef(raw: string, ref: string): boolean {
+  const header = new RegExp(
+    String.raw`\b(?:${IMPERATIVE_VERBS})\b\s+(?:(?:(?:the|these|following|required|both|all)\s+){0,4}(?:files?|artifacts?|paths?|bundles?)|the\s+following)\s*:\s*\n`,
+    "gi",
+  );
+  const target = new RegExp(`${refPattern(ref)}(?![A-Za-z0-9._/-])`, "i");
+  let match: RegExpExecArray | null;
+  while ((match = header.exec(raw)) !== null) {
+    if (target.test(markdownListBlock(raw.slice(header.lastIndex)))) return true;
+  }
+  return false;
+}
+
+function labeledListContainsRef(raw: string, ref: string): boolean {
+  const header = /\b(?:required\s+)?(?:files?|artifacts?|paths?|bundles?)\s*:[ \t]*/gi;
+  const target = new RegExp(`${refPattern(ref)}(?![A-Za-z0-9._/-])`, "i");
+  let match: RegExpExecArray | null;
+  while ((match = header.exec(raw)) !== null) {
+    const remainder = raw.slice(header.lastIndex, header.lastIndex + 500);
+    if (remainder.startsWith("\n")) {
+      if (target.test(markdownListBlock(remainder.slice(1)))) return true;
+      continue;
+    }
+    const boundary = remainder.search(/(?:[!?](?=\s)|\.(?=\s)|[;\n])/);
+    const clause = boundary >= 0 ? remainder.slice(0, boundary) : remainder;
+    if (target.test(clause)) return true;
+  }
+  return false;
+}
+
+export function isNodeModulesPath(ref: string): boolean {
+  return NODE_MODULES_PATH_RE.test(ref);
+}
+
+export function barePathLooksRequired(raw: string, ref: string): boolean {
+  const quoted = refPattern(ref);
+  const structuredRead = new RegExp(
+    String.raw`\[\s*(?:read(?:\s+from)?|input|artifact|file|path|bundle)\s*:\s*${quoted}\s*\]`,
+    "i",
+  );
+  const directImperative = new RegExp(
+    String.raw`\b(?:${IMPERATIVE_VERBS})\s+(?:(?:the|both|all)\s+)?${quoted}(?![A-Za-z0-9._/-])`,
+    "i",
+  );
+  const artifactLabel = new RegExp(
+    String.raw`\b(?:artifact|file|path|bundle)\s*(?::\s+|at\s+|is\s+|=\s+)${quoted}(?![A-Za-z0-9._/-])`,
+    "i",
+  );
+  return structuredRead.test(raw)
+    || directImperative.test(raw)
+    || artifactLabel.test(raw)
+    || labeledListContainsRef(raw, ref)
+    || imperativeListContainsRef(raw, ref)
+    || imperativeMultilineListContainsRef(raw, ref);
+}

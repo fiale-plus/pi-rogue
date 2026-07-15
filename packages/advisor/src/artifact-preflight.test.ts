@@ -21,8 +21,61 @@ describe("artifact preflight", () => {
   });
 
   it("ignores diff-like path prefixes and url paths", () => {
-    const refs = extractArtifactReferences("compare b/packages/advisor/src/extension.ts and packages/advisor/src/extension.ts; see https://example.com/docs/fusion.md");
+    const refs = extractArtifactReferences("compare b/packages/advisor/src/extension.ts. Inspect packages/advisor/src/extension.ts; see https://example.com/docs/fusion.md");
     expect(refs).toEqual(["packages/advisor/src/extension.ts"]);
+  });
+
+  it("ignores scoped npm package paths without extracting an unscoped suffix", () => {
+    const text = "Pi docs: @earendil-works/pi-coding-agent/docs/settings.md and `@earendil-works/pi-coding-agent/README.md`";
+    expect(extractArtifactReferences(text)).toEqual([]);
+    expect(findMissingArtifactReferences(process.cwd(), text)).toEqual([]);
+  });
+
+  it("ignores passive ambiguous bare paths", () => {
+    const text = "Read docs/setup.md before continuing. The package file earendil-works/pi-coding-agent/README.md is installed globally; source summary mentions packages/core/src/index.ts";
+    expect(extractArtifactReferences(text)).toEqual(["docs/setup.md"]);
+  });
+
+  it("does not extend an imperative across passive prose", () => {
+    const text = "Read docs/setup.md before continuing, package documentation mentions earendil-works/pi-coding-agent/README.md. The review notes package documentation at packages/core/progress.md";
+    expect(extractArtifactReferences(text)).toEqual(["docs/setup.md"]);
+  });
+
+  it("recognizes directly introduced imperatives regardless of clause prefix", () => {
+    expect(extractArtifactReferences("Before continuing, read docs/setup.md")).toEqual(["docs/setup.md"]);
+    expect(extractArtifactReferences("Can you check packages/core/src/index.ts?")).toEqual(["packages/core/src/index.ts"]);
+    expect(extractArtifactReferences("Review changes in packages/core/src/index.ts")).toEqual(["packages/core/src/index.ts"]);
+    expect(extractArtifactReferences("Read docs/a.md as well as packages/core/b.ts")).toEqual(["docs/a.md", "packages/core/b.ts"]);
+  });
+
+  it("extracts required paths from inline and multiline imperative lists", () => {
+    expect(extractArtifactReferences("Read both docs/a.md and packages/core/b.ts before review")).toEqual(["docs/a.md", "packages/core/b.ts"]);
+
+    const text = "Read the following:\n1) docs/setup.md\n2. packages/core/src/index.ts\n- Read docs/extra.md";
+    expect(extractArtifactReferences(text)).toEqual(["docs/setup.md", "packages/core/src/index.ts", "docs/extra.md"]);
+  });
+
+  it("extracts inline and multiline required artifact labels", () => {
+    expect(extractArtifactReferences("Required artifacts: docs/plan.md and packages/core/progress.md")).toEqual(["docs/plan.md", "packages/core/progress.md"]);
+    expect(extractArtifactReferences("Required files:\n- docs/setup.md\n  setup context\n\n- packages/core/src/index.ts")).toEqual(["docs/setup.md", "packages/core/src/index.ts"]);
+  });
+
+  it("does not treat passive review headings as imperative lists", () => {
+    const text = "Review notes:\n- package documentation: earendil-works/pi-coding-agent/README.md\n- source summary: packages/core/progress.md";
+    expect(extractArtifactReferences(text)).toEqual([]);
+  });
+
+  it("checks required and explicitly relative project paths", () => {
+    const refs = extractArtifactReferences(
+      "Read packages/core/src/input.ts before review. [Read from: docs/context.json] Passive explicit path: ./packages/core/src/index.ts",
+    );
+    expect(refs).toEqual(expect.arrayContaining(["packages/core/src/input.ts", "docs/context.json", "./packages/core/src/index.ts"]));
+  });
+
+  it("ignores paths containing a node_modules segment", () => {
+    const text = "Package docs: node_modules/ripgrep/README.md, ./node_modules/pkg/docs/settings.json, and /tmp/node_modules/pkg/docs/config.yaml";
+    expect(extractArtifactReferences(text)).toEqual([]);
+    expect(findMissingArtifactReferences(process.cwd(), text)).toEqual([]);
   });
 
   it("preserves and resolves home-relative artifact references", () => {
