@@ -140,8 +140,27 @@ const DEFAULT_RATE_LIMIT_BACKOFF_SECONDS = 15 * 60;
 const MIN_CHECKIN_INTERVAL_MINUTES = 10;
 const MAX_CHECKIN_INTERVAL_MINUTES = 240;
 const STATE_VERSION = 1;
+/** Maximum wall-clock time for one advisor model-resolution/completion work item. */
+export const DEFAULT_ADVISOR_WORK_TIMEOUT_MS = 60_000;
 const checkinLocks = new Set<string>();
 const reviewLocks = new Set<string>();
+/** Sessions that have shut down; prevents already-running event continuations from starting new work. */
+const closedAdvisorSessions = new Set<string>();
+
+type AdvisorWork = {
+  controller: AbortController;
+  deadlineAt: number;
+};
+
+/** One owned model operation per session; newer work safely supersedes older work. */
+const advisorWorks = new Map<string, AdvisorWork>();
+
+class AdvisorWorkAbortError extends Error {
+  constructor(readonly reason: "deadline" | "superseded" | "session_shutdown") {
+    super(`Advisor work ${reason}`);
+    this.name = "AbortError";
+  }
+}
 
 const REVIEW_TASK_ACTIONS_LIMIT = 2;
 const ADVISORY_SIGNALS_LIMIT = 4;
@@ -1505,6 +1524,85 @@ function appendAdvisorDiagnostic(event: string, details: Record<string, unknown>
   }
 }
 
+function abortError(signal: AbortSignal): Error {
+  if (signal.reason instanceof Error) return signal.reason;
+  const error = new Error("Advisor work aborted");
+  error.name = "AbortError";
+  return error;
+}
+
+/** Race a possibly non-cooperative registry call against the owned work signal. */
+function awaitAdvisorWork<T>(promise: PromiseLike<T> | T, signal: AbortSignal): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    let settled = false;
+    const settle = (callback: (value: any) => void, value: unknown) => {
+      if (settled) return;
+      settled = true;
+      signal.removeEventListener("abort", onAbort);
+      callback(value);
+    };
+    const onAbort = () => settle(reject, abortError(signal));
+
+    // Always observe the supplied promise first. In particular, a caller may have
+    // already created a promise that rejects after its signal has been aborted.
+    Promise.resolve(promise).then(
+      (value) => settle(resolve, value),
+      (error) => settle(reject, error),
+    );
+    signal.addEventListener("abort", onAbort, { once: true });
+    if (signal.aborted) onAbort();
+  });
+}
+
+function abortAdvisorWork(ctx: any, reason: "superseded" | "session_shutdown"): void {
+  const key = sessionKey(ctx);
+  const work = advisorWorks.get(key);
+  if (!work) return;
+  advisorWorks.delete(key);
+  if (!work.controller.signal.aborted) work.controller.abort(new AdvisorWorkAbortError(reason));
+}
+
+async function withAdvisorWork<T>(ctx: any, externalSignal: AbortSignal | undefined, operation: (signal: AbortSignal, deadlineAt: number) => Promise<T>): Promise<T | null> {
+  const key = sessionKey(ctx);
+  abortAdvisorWork(ctx, "superseded");
+  const controller = new AbortController();
+  const deadlineAt = Date.now() + DEFAULT_ADVISOR_WORK_TIMEOUT_MS;
+  const work: AdvisorWork = { controller, deadlineAt };
+  advisorWorks.set(key, work);
+  const onExternalAbort = () => controller.abort(externalSignal?.reason);
+  if (externalSignal?.aborted) onExternalAbort();
+  else externalSignal?.addEventListener("abort", onExternalAbort, { once: true });
+  const deadline = setTimeout(() => controller.abort(new AdvisorWorkAbortError("deadline")), DEFAULT_ADVISOR_WORK_TIMEOUT_MS);
+  try {
+    return await operation(controller.signal, deadlineAt);
+  } catch (error) {
+    // Preserve caller-owned cancellation (notably the explicit /advisor tool signal).
+    if (externalSignal?.aborted) throw error;
+    if (controller.signal.aborted) {
+      const reason = controller.signal.reason;
+      if (reason instanceof AdvisorWorkAbortError && reason.reason === "deadline") {
+        appendAdvisorDiagnostic("advisor_work_deadline", { timeoutMs: DEFAULT_ADVISOR_WORK_TIMEOUT_MS });
+      }
+      return null;
+    }
+    throw error;
+  } finally {
+    clearTimeout(deadline);
+    externalSignal?.removeEventListener("abort", onExternalAbort);
+    if (advisorWorks.get(key) === work) advisorWorks.delete(key);
+  }
+}
+
+/** Contain event-handler fire-and-forget check-ins without scheduling more work. */
+function containAdvisorCheckin(promise: Promise<unknown>, source: string): void {
+  void promise.catch((error) => {
+    appendAdvisorDiagnostic("advisor_checkin_detached_failure", {
+      source,
+      error: error instanceof Error ? error.message : String(error),
+    });
+  });
+}
+
 function noteText(note: unknown): string {
   const text = contentText(note);
   if (/^\[object Object\](,\[object Object\])*$/.test(text)) return "";
@@ -2431,7 +2529,7 @@ export async function requestAdvisorLoopCheckin(pi: ExtensionAPI, ctx: any, sour
 
 async function maybeAdvisorCheckin(pi: ExtensionAPI, ctx: any, source: string): Promise<boolean> {
   const key = sessionKey(ctx);
-  if (checkinLocks.has(key)) return false;
+  if (closedAdvisorSessions.has(key) || checkinLocks.has(key)) return false;
 
   const config = loadConfig();
   const state = loadState(ctx);
@@ -3056,18 +3154,13 @@ export function parsePiRoguePosture(value: unknown): PiRoguePostureId | null {
 
 async function strongAdvisorForGuarded(ctx: any, current: AdvisorConfig): Promise<string> {
   const preferred = SOTA_CHAIN.map((item) => `${item.provider}/${item.model}`);
-  const ordered = [...(current.model && preferred.includes(current.model) ? [current.model] : []), ...preferred];
-  for (const ref of [...new Set(ordered)]) {
-    const [provider, ...modelParts] = ref.split("/");
-    const model = ctx.modelRegistry?.find?.(provider, modelParts.join("/"));
-    if (!model || !model.input?.includes?.("text")) continue;
-    try {
-      const auth = await ctx.modelRegistry?.getApiKeyAndHeaders?.(model);
-      if (auth?.ok && typeof auth.apiKey === "string" && auth.apiKey) return ref;
-    } catch {
-      // A broken provider must not prevent trying the next policy-approved strong model.
-    }
-  }
+  // Reuse the owned, deadline-bounded resolver; guarded posture never considers regular fallback models.
+  const candidates = await resolveModelCandidates(ctx, {
+    ...current,
+    model: current.model && preferred.includes(current.model) ? current.model : undefined,
+  }, { allowRegularFallback: false });
+  const strong = candidates.find((candidate) => preferred.includes(piRogueModelId(candidate.model) ?? ""));
+  if (strong) return piRogueModelId(strong.model) ?? strong.label;
   throw new Error("Guarded posture requires an authenticated strong advisor model. Configure credentials for openai-codex/gpt-5.5 or another supported strong model, then retry; no files were changed.");
 }
 
@@ -3364,7 +3457,7 @@ type ResolvedAdvisorModel = { model: any; auth: any; label: string; fallback?: b
 type ModelResolutionOptions = { allowRegularFallback?: boolean; maxAttempts?: number };
 type AdvisorCompletionResult = { text: string; model: string; fallback?: boolean; rateLimited?: boolean; retryAfterSeconds?: number };
 
-export async function resolveModelCandidates(ctx: any, config: AdvisorConfig, options: ModelResolutionOptions = {}): Promise<ResolvedAdvisorModel[]> {
+async function resolveModelCandidatesWithinWork(ctx: any, config: AdvisorConfig, options: ModelResolutionOptions, signal: AbortSignal): Promise<ResolvedAdvisorModel[]> {
   const { allowRegularFallback = true } = options;
   const candidates: ResolvedAdvisorModel[] = [];
   const seen = new Set<string>();
@@ -3375,9 +3468,11 @@ export async function resolveModelCandidates(ctx: any, config: AdvisorConfig, op
     seen.add(key);
     let auth: any;
     try {
-      auth = await ctx.modelRegistry?.getApiKeyAndHeaders(found);
+      auth = await awaitAdvisorWork(ctx.modelRegistry?.getApiKeyAndHeaders(found), signal);
     } catch (error) {
-      if (error instanceof Error && error.name === "AbortError") throw error;
+      // Providers can use AbortError for ordinary request failures. Only the work
+      // signal establishes cancellation; otherwise continue through the fallback chain.
+      if (signal.aborted) throw error;
       appendAdvisorDiagnostic("model_auth_resolution_failed", {
         model: key,
         provider: String(found.provider || "unknown"),
@@ -3388,86 +3483,93 @@ export async function resolveModelCandidates(ctx: any, config: AdvisorConfig, op
     if (auth?.ok && auth.apiKey) candidates.push({ model: found, auth, label, fallback });
   };
 
-  // Try configured higher/advanced advisor model first.
   if (config.model && config.model.includes("/")) {
     const [p, ...m] = config.model.split("/");
     await add(ctx.modelRegistry?.find(p, m.join("/")), p + "/" + m.join("/"));
   }
-
-  // Fall through SOTA chain.
-  for (const sota of SOTA_CHAIN) {
-    await add(ctx.modelRegistry?.find(sota.provider, sota.model), sota.label);
-  }
-
+  for (const sota of SOTA_CHAIN) await add(ctx.modelRegistry?.find(sota.provider, sota.model), sota.label);
   if (allowRegularFallback) {
-    // Final fallback: any configured text model, i.e. the regular session-capable model.
-    for (const m of (ctx.modelRegistry?.getAvailable() ?? []).filter((model: any) => model.input?.includes?.("text"))) {
-      await add(m, m.id || "regular model", true);
+    for (const model of (ctx.modelRegistry?.getAvailable() ?? []).filter((candidate: any) => candidate.input?.includes?.("text"))) {
+      await add(model, model.id || "regular model", true);
     }
   }
-
   return candidates;
+}
+
+export async function resolveModelCandidates(ctx: any, config: AdvisorConfig, options: ModelResolutionOptions = {}): Promise<ResolvedAdvisorModel[]> {
+  return (await withAdvisorWork(ctx, undefined, (signal) => resolveModelCandidatesWithinWork(ctx, config, options, signal))) ?? [];
 }
 
 async function resolveModel(ctx: any, config: AdvisorConfig): Promise<ResolvedAdvisorModel | null> {
   return (await resolveModelCandidates(ctx, config))[0] ?? null;
 }
 
-export async function completeWithModelFallback(ctx: any, config: AdvisorConfig, systemPrompt: string, messages: any[], options: { maxTokens: number; reasoning: ThinkingLevel; maxAttempts?: number }): Promise<AdvisorCompletionResult | null> {
-  let lastError = "";
-  let lastRateLimit: AdvisorRateLimitInfo | undefined;
-  let attempts = 0;
-  for (const resolved of await resolveModelCandidates(ctx, config)) {
-    if (options.maxAttempts !== undefined && attempts >= options.maxAttempts) break;
-    attempts += 1;
-    try {
-      const resp = await completeSimple(resolved.model, { systemPrompt, messages }, {
-        apiKey: resolved.auth.apiKey,
-        headers: resolved.auth.headers,
-        maxTokens: options.maxTokens,
-        reasoning: options.reasoning,
-      });
-      return { text: responseText(resp) || "(empty)", model: resolved.label, fallback: resolved.fallback };
-    } catch (error) {
-      lastError = error instanceof Error ? error.message : String(error);
-      lastRateLimit = parseAdvisorRateLimit(error) ?? lastRateLimit;
-    }
-  }
-  if (lastRateLimit) {
-    return { text: lastRateLimit.reason, model: "none", rateLimited: true, retryAfterSeconds: lastRateLimit.retryAfterSeconds };
-  }
-  return lastError ? { text: `No advisor/check-in model completed successfully (${lastError}).`, model: "none" } : null;
-}
+type AdvisorCompletionOptions = {
+  maxTokens: number;
+  reasoning: ThinkingLevel;
+  allowRegularFallback?: boolean;
+  maxAttempts?: number;
+  /** Caller-owned cancellation is propagated rather than treated as fallback failure. */
+  signal?: AbortSignal;
+};
 
-export async function completeWithHigherAdvisorModel(
+async function completeAdvisorWork(
   ctx: any,
   config: AdvisorConfig,
   systemPrompt: string,
   messages: any[],
-  options: { maxTokens: number; reasoning: ThinkingLevel; allowRegularFallback?: boolean; maxAttempts?: number },
+  options: AdvisorCompletionOptions,
+  includeFallbackFlag: boolean,
 ): Promise<AdvisorCompletionResult | null> {
-  const { allowRegularFallback = true, maxAttempts } = options;
-  let attempts = 0;
-  let lastRateLimit: AdvisorRateLimitInfo | undefined;
-  for (const resolved of await resolveModelCandidates(ctx, config, { allowRegularFallback })) {
-    if (maxAttempts !== undefined && attempts >= maxAttempts) break;
-    attempts += 1;
-    try {
-      const resp = await completeSimple(resolved.model, { systemPrompt, messages }, {
-        apiKey: resolved.auth.apiKey,
-        headers: resolved.auth.headers,
-        maxTokens: options.maxTokens,
-        reasoning: options.reasoning,
-      });
-      return { text: responseText(resp) || "(empty)", model: resolved.label };
-    } catch (error) {
-      lastRateLimit = parseAdvisorRateLimit(error) ?? lastRateLimit;
+  return withAdvisorWork(ctx, options.signal, async (signal, deadlineAt) => {
+    let lastError = "";
+    let lastRateLimit: AdvisorRateLimitInfo | undefined;
+    let attempts = 0;
+    const candidates = await resolveModelCandidatesWithinWork(ctx, config, options, signal);
+    for (const resolved of candidates) {
+      if (options.maxAttempts !== undefined && attempts >= options.maxAttempts) break;
+      attempts += 1;
+      try {
+        const timeoutMs = Math.max(1, deadlineAt - Date.now());
+        const resp = await awaitAdvisorWork(completeSimple(resolved.model, { systemPrompt, messages }, {
+          apiKey: resolved.auth.apiKey,
+          headers: resolved.auth.headers,
+          maxTokens: options.maxTokens,
+          reasoning: options.reasoning,
+          timeoutMs,
+          signal,
+        }), signal);
+        return {
+          text: responseText(resp) || "(empty)",
+          model: resolved.label,
+          ...(includeFallbackFlag ? { fallback: resolved.fallback } : {}),
+        };
+      } catch (error) {
+        // A provider-thrown AbortError is not cancellation unless our signal says so.
+        if (signal.aborted) throw error;
+        lastError = error instanceof Error ? error.message : String(error);
+        lastRateLimit = parseAdvisorRateLimit(error) ?? lastRateLimit;
+      }
     }
-  }
-  return lastRateLimit ? { text: lastRateLimit.reason, model: "none", rateLimited: true, retryAfterSeconds: lastRateLimit.retryAfterSeconds } : null;
+    if (lastRateLimit) return { text: lastRateLimit.reason, model: "none", rateLimited: true, retryAfterSeconds: lastRateLimit.retryAfterSeconds };
+    // Manual Advisor calls surface the aggregate failure, while automatic
+    // higher-model check-ins retain their historical null-on-failure contract
+    // so callers do not record an error string as a successful check-in.
+    return lastError && includeFallbackFlag
+      ? { text: `No advisor/check-in model completed successfully (${lastError}).`, model: "none" }
+      : null;
+  });
 }
 
-async function askAdvisor(pi: ExtensionAPI, ctx: any, question: string, scope: string, includeWork: boolean) {
+export async function completeWithModelFallback(ctx: any, config: AdvisorConfig, systemPrompt: string, messages: any[], options: AdvisorCompletionOptions): Promise<AdvisorCompletionResult | null> {
+  return completeAdvisorWork(ctx, config, systemPrompt, messages, options, true);
+}
+
+export async function completeWithHigherAdvisorModel(ctx: any, config: AdvisorConfig, systemPrompt: string, messages: any[], options: AdvisorCompletionOptions): Promise<AdvisorCompletionResult | null> {
+  return completeAdvisorWork(ctx, config, systemPrompt, messages, options, false);
+}
+
+async function askAdvisor(pi: ExtensionAPI, ctx: any, question: string, scope: string, includeWork: boolean, signal?: AbortSignal) {
   const config = loadConfig();
   const state = loadState(ctx);
   const normalizedQuestion = sanitizeAdvisorText(question).trim();
@@ -3497,7 +3599,7 @@ async function askAdvisor(pi: ExtensionAPI, ctx: any, question: string, scope: s
     ].filter(Boolean).join("\n"), timestamp: new Date().toISOString() },
   ] as any[];
 
-  const completed = await completeWithModelFallback(ctx, config, ADVISOR_SYSTEM, msgs, { maxTokens: 600, reasoning: "medium" as ThinkingLevel });
+  const completed = await completeWithModelFallback(ctx, config, ADVISOR_SYSTEM, msgs, { maxTokens: 600, reasoning: "medium" as ThinkingLevel, signal });
   if (!completed) return { text: "No model available. Install one via pi config.", error: "no_model" };
   if (completed.rateLimited) {
     recordRateLimit(state, ctx, { reason: completed.text || "advisor rate limit (429)", retryAfterSeconds: completed.retryAfterSeconds });
@@ -3515,13 +3617,14 @@ async function askAdvisor(pi: ExtensionAPI, ctx: any, question: string, scope: s
 }
 
 async function doReview(pi: ExtensionAPI, ctx: any, trigger: string, delta: string, meta: ReviewMaterialMeta) {
+  if (closedAdvisorSessions.has(sessionKey(ctx))) return;
   const config = loadConfig();
   if (config.review === "off") return;
   const state = loadState(ctx);
   const reviewLockKey = statePathFor(state);
   if (reviewLocks.has(reviewLockKey)) return;
   reviewLocks.add(reviewLockKey);
-
+  try {
   const phase: AdvisorRouteInput["phase"] = meta.isAgentEnd ? "closeout" : "review";
   const trajectory = buildTrajectoryContext(ctx, {
     phase,
@@ -3539,7 +3642,6 @@ async function doReview(pi: ExtensionAPI, ctx: any, trigger: string, delta: stri
   const reviewHeuristic = { ...heuristicRoute(reviewInput), trajectory };
   const signature = reviewMaterialSignature(state, delta, meta);
   if (state.reviewControl.running) {
-    reviewLocks.delete(reviewLockKey);
     return;
   }
   const terminalReason = mergedTerminalWorkflowReason(state);
@@ -3547,7 +3649,6 @@ async function doReview(pi: ExtensionAPI, ctx: any, trigger: string, delta: stri
     clearResolvedReviewWarning(state, ctx, terminalReason);
     markReviewApplied(state, signature, trigger, "continue", terminalReason, true);
     persistReviewState(state, true);
-    reviewLocks.delete(reviewLockKey);
     return;
   }
   const rateLimitReason = activeRateLimitReason(state);
@@ -3555,13 +3656,11 @@ async function doReview(pi: ExtensionAPI, ctx: any, trigger: string, delta: stri
     clearRateLimitedReviewReplay(state, ctx, rateLimitReason);
     markReviewApplied(state, signature, trigger, "defer", rateLimitReason, true);
     persistReviewState(state, true);
-    reviewLocks.delete(reviewLockKey);
     return;
   }
   if (shouldSkipReview(state, signature) && !reviewHeuristic.safety && !meta.failed) {
     markReviewSkipped(state, signature, trigger);
     persistReviewState(state, false);
-    reviewLocks.delete(reviewLockKey);
     return;
   }
 
@@ -3796,6 +3895,9 @@ async function doReview(pi: ExtensionAPI, ctx: any, trigger: string, delta: stri
       markReviewApplied(state, signature, trigger, finalDecision, finalReason, false);
       persistReviewState(state, true);
     }
+  }
+  } finally {
+    // Covers early review gates and failures before the review-finalization block.
     reviewLocks.delete(reviewLockKey);
   }
 }
@@ -3852,6 +3954,9 @@ export function registerAdvisor(pi: ExtensionAPI): void {
 
   pi.on("session_start", (_event, ctx) => {
     const key = sessionKey(ctx);
+    // session_start also covers a resumed/reloaded session and reopens its stable key.
+    closedAdvisorSessions.delete(key);
+    abortAdvisorWork(ctx, "superseded");
     checkinLocks.delete(key);
     const state = loadState(ctx);
     recoverReviewControl(state);
@@ -3863,6 +3968,8 @@ export function registerAdvisor(pi: ExtensionAPI): void {
 
   pi.on("session_shutdown", (_event, ctx) => {
     const key = sessionKey(ctx);
+    closedAdvisorSessions.add(key);
+    abortAdvisorWork(ctx, "session_shutdown");
     checkinLocks.delete(key);
     ctx.ui.setStatus("pi-rogue", undefined);
   });
@@ -3901,8 +4008,8 @@ export function registerAdvisor(pi: ExtensionAPI): void {
       scope: Type.Optional(Type.String({ description: "architecture|implementation|debug|review|planning" })),
       includeRecentWork: Type.Optional(Type.Boolean({ description: "default: true" })),
     }),
-    async execute(_id, params, _signal, onUpdate, ctx) {
-      const r = await askAdvisor(pi, ctx, String(params.question || ""), String(params.scope || ""), params.includeRecentWork !== false);
+    async execute(_id, params, signal, onUpdate, ctx) {
+      const r = await askAdvisor(pi, ctx, String(params.question || ""), String(params.scope || ""), params.includeRecentWork !== false, signal);
       onUpdate?.({ content: [{ type: "text", text: r.cached ? "(cached)" : r.model ? `Consulting ${r.model}…` : "" }], details: {} });
       return { content: [{ type: "text", text: r.text }], details: { cached: r.cached, error: r.error } };
     },
@@ -4006,7 +4113,7 @@ export function registerAdvisor(pi: ExtensionAPI): void {
 
     const post = loadState(ctx);
     if (cfg.mode === "auto" && !isAdvisorAutoRunSuppressed(post, post.turns)) {
-      void maybeAdvisorCheckin(pi, ctx, "turn_end");
+      containAdvisorCheckin(maybeAdvisorCheckin(pi, ctx, "turn_end"), "turn_end");
     }
   });
 
@@ -4030,7 +4137,7 @@ export function registerAdvisor(pi: ExtensionAPI): void {
       recordBoardShadowIfEnabled(ctx, cfg, state, "agent_end", msgs);
       saveState(state);
       if (cfg.mode === "auto" && !suppressed) {
-        void maybeAdvisorCheckin(pi, ctx, "agent_end");
+        containAdvisorCheckin(maybeAdvisorCheckin(pi, ctx, "agent_end"), "agent_end");
       }
       return;
     }
@@ -4045,7 +4152,7 @@ export function registerAdvisor(pi: ExtensionAPI): void {
 
     const post = loadState(ctx);
     if (!isAdvisorAutoRunSuppressed(post, post.turns)) {
-      void maybeAdvisorCheckin(pi, ctx, "agent_end");
+      containAdvisorCheckin(maybeAdvisorCheckin(pi, ctx, "agent_end"), "agent_end");
     }
   });
 

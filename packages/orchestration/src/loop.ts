@@ -154,6 +154,17 @@ async function runAdvisorCheckinTick(pi: ExtensionAPI, ctx: any): Promise<void> 
   await advisorLoopCheckinFn(pi, ctx, "loop_tick");
 }
 
+/** Contain detached advisor work; diagnostics are fixed-size and never enqueue another tick. */
+function containAdvisorCheckinTick(ctx: any, promise: Promise<unknown>): void {
+  void promise.catch(() => {
+    try {
+      ctx.ui?.notify?.("Advisor check-in tick failed; it will retry on a later loop event.", "warning");
+    } catch {
+      // Diagnostics must not become another detached failure path.
+    }
+  });
+}
+
 function plainTickPrompt(instruction: string, tick: OutstandingTick): string {
   return `[PI_ROGUE_LOOP_TICK v1 request=${tick.requestId} generation=${tick.generation}]\n${instruction}`;
 }
@@ -205,7 +216,7 @@ function runLoopTick(pi: ExtensionAPI, ctx: any, generation?: number): boolean {
   const goal = activeGoal(ctx);
   if (goal && hasGoalCheckPending(ctx)) {
     if (activeGeneration !== current.generation) return false;
-    void runAdvisorCheckinTick(pi, ctx);
+    containAdvisorCheckinTick(ctx, runAdvisorCheckinTick(pi, ctx));
     return false;
   }
   if (!goal && (ctx.isIdle?.() === false || ctx.hasPendingMessages?.() === true)) return false;
@@ -236,7 +247,7 @@ function runLoopTick(pi: ExtensionAPI, ctx: any, generation?: number): boolean {
   }
 
   ctx.ui.notify(goal ? `🎯 Goal check: ${truncate(goal, 80)}` : `↻ Loop tick: ${truncate(current.instruction, 80)}`, "info");
-  void runAdvisorCheckinTick(pi, ctx);
+  containAdvisorCheckinTick(ctx, runAdvisorCheckinTick(pi, ctx));
   return true;
 }
 

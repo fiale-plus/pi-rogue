@@ -55,9 +55,10 @@ npm install --workspace packages/advisor
 - `checkins`: `off` (orchestration turns them on when a goal or loop is active)
 - `checkinIntervalMinutes`: `30`
 - `model`: not set (auto-detected)
+- Advisor model resolution/completion work: bounded to `60_000ms` per session-owned work item (not user-configurable)
 - Successful `on_track` review verdicts are recorded silently instead of displayed as follow-up messages.
 
-Check-ins gate on session activity and `checkinIntervalMinutes`, avoid overlapping calls, and use higher/advanced advisor models first with regular model fallback enabled by default. They are lifecycle-managed by orchestration: activating a goal or `/pi-rogue-orchestration loop` enables them, and clearing either disables them.
+Check-ins gate on session activity and `checkinIntervalMinutes`, avoid overlapping calls, and use higher/advanced advisor models first with regular model fallback enabled by default. Model work has one per-session owner: newer work supersedes stale work, shutdown aborts it, and the fixed 60-second deadline prevents a non-settling provider or credential lookup from holding a review/check-in lock. Explicit user cancellation is passed through unchanged. Check-ins are lifecycle-managed by orchestration: activating a goal or `/pi-rogue-orchestration loop` enables them, and clearing either disables them.
 
 ## Stability guarantees
 
