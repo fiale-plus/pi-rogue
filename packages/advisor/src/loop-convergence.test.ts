@@ -1044,12 +1044,125 @@ describe("advisor two-agent convergence", () => {
     const current = readFileSync(ADVISOR_CURRENT_PATH, "utf8");
     expect(completeSimpleMock).not.toHaveBeenCalled();
     expect(resolved.reviewControl.lastDecision).toBe("continue");
-    expect(resolved.reviewControl.lastReason).toBe("terminal workflow state");
+    expect(resolved.reviewControl.lastReason).toContain("terminal");
     expect(resolved.reviewControl.terminalEvidence).toEqual(expect.objectContaining({ kind: "tests_and_merge", task }));
     expect(resolved.followUp).toBe("");
     expect(resolved.reviewSignals).toEqual([]);
     expect(current).toContain("advisor:llm: continue");
     expect(current).not.toContain("tests are still failing");
+  });
+
+  it("suppresses repeated review retries after terminal closeout evidence is still authoritative", async () => {
+    const turnEnd = handlers.turn_end;
+    const preflight = handlers.before_agent_start;
+    expect(turnEnd?.length).toBe(1);
+    expect(preflight?.length).toBe(1);
+
+    await handlers.session_start?.[0]?.({}, ctx);
+
+    await preflight![0]({
+      systemPrompt: "SYS",
+      prompt: "Finalize issue 217 and summarize findings",
+    }, ctx);
+
+    const staleTask = "Finalize issue 217 and summarize findings";
+    const stale = readAdvisorState();
+    stale.lastTask = staleTask;
+    stale.reviewControl.terminalEvidence = {
+      kind: "tests",
+      task: staleTask,
+      reason: "terminal clean closeout evidence",
+      at: "2026-06-25T19:00:00.000Z",
+    };
+    stale.followUp = "Closeout still has gaps.";
+    stale.followUpTask = staleTask;
+    stale.reviewSignals = ["The previous summary was incomplete."];
+    stale.reviewSignalsTask = staleTask;
+    stale.evidenceLedger = [
+      {
+        kind: "validation",
+        sha: "test-sha",
+        command: "npm test",
+        source: "turn_end",
+        result: "pass",
+        timestamp: "2026-06-25T18:59:00.000Z",
+        exitCode: 0,
+      },
+    ];
+    writeFileSync(ADVISOR_STATE_PATH, JSON.stringify(stale, null, 2), "utf8");
+
+    await turnEnd![0]({
+      toolResults: [{
+        toolName: "write",
+      }],
+      message: { role: "assistant", content: "Filed tickets #347-#353 and completed the audit." },
+    }, ctx);
+
+    expect(completeSimpleMock).toHaveBeenCalledTimes(0);
+    const resolved = readAdvisorState();
+    expect(resolved.followUp).toBe("");
+    expect(resolved.reviewSignals).toEqual([]);
+    expect(resolved.reviewControl.lastDecision).toBe("continue");
+    expect(resolved.reviewControl.lastReason).toBe("terminal clean closeout evidence");
+    const current = readFileSync(ADVISOR_CURRENT_PATH, "utf8");
+    expect(current).toContain("advisor:llm: continue");
+  });
+
+  it("reopens review when a newer blocking evidence entry appears after terminal closeout", async () => {
+    const turnEnd = handlers.turn_end;
+    const preflight = handlers.before_agent_start;
+    expect(turnEnd?.length).toBe(1);
+    expect(preflight?.length).toBe(1);
+
+    await handlers.session_start?.[0]?.({}, ctx);
+    await preflight![0]({
+      systemPrompt: "SYS",
+      prompt: "Reopen issue 217 for follow-up validation",
+    }, ctx);
+
+    const staleTask = "Reopen issue 217 for follow-up validation";
+    const stale = readAdvisorState();
+    stale.lastTask = staleTask;
+    stale.reviewControl.terminalEvidence = {
+      kind: "tests",
+      task: staleTask,
+      reason: "terminal clean closeout evidence",
+      at: "2026-06-25T18:00:00.000Z",
+    };
+    stale.evidenceLedger = [
+      {
+        kind: "validation",
+        sha: "test-sha",
+        command: "npm test",
+        source: "turn_end",
+        result: "pass",
+        timestamp: "2026-06-25T18:01:00.000Z",
+        exitCode: 0,
+      },
+      {
+        kind: "validation",
+        sha: "test-sha",
+        command: "npm test",
+        source: "turn_end",
+        result: "fail",
+        timestamp: "2026-06-25T19:30:00.000Z",
+        exitCode: 1,
+        details: "regression after closeout",
+      },
+    ];
+    writeFileSync(ADVISOR_STATE_PATH, JSON.stringify(stale, null, 2), "utf8");
+
+    await turnEnd![0]({
+      toolResults: [{
+        toolName: "write",
+      }],
+      message: { role: "assistant", content: "Additional quick follow-up check was requested." },
+    }, ctx);
+
+    expect(completeSimpleMock).toHaveBeenCalledTimes(1);
+    const resolved = readAdvisorState();
+    expect(resolved.reviewControl.lastDecision).toBe("review");
+    expect(resolved.followUp).toContain("Closeout is incomplete");
   });
 
   it("clears stale advisor warnings for clean closeout without material changes", async () => {
