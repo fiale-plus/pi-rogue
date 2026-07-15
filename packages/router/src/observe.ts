@@ -1,7 +1,13 @@
+import { statSync } from "node:fs";
+import { resolve } from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { appendRouteEvent, buildRouteEvent } from "./ledger.js";
 import { decideRoute } from "./decision.js";
-import { checkpointWithDiffStats, streamCheckpointsFromSessionPath } from "./checkpoints.js";
+import {
+  checkpointWithDiffStats,
+  streamCheckpointsFromSessionPathWithReplay,
+  type CheckpointReplayInput,
+} from "./checkpoints.js";
 import {
   activeProfile,
   loadRouterConfig,
@@ -158,10 +164,120 @@ export function summarizeRouterDecision(checkpoint: RouterCheckpoint, decision: 
   };
 }
 
-export async function latestCheckpointFromSession(sessionPath: string): Promise<RouterCheckpoint | null> {
-  let latest: RouterCheckpoint | null = null;
-  for await (const checkpoint of streamCheckpointsFromSessionPath(sessionPath)) latest = checkpoint;
-  return latest;
+function sessionFingerprint(path: string) {
+  try {
+    const normalized = resolve(path);
+    const stats = statSync(normalized);
+    return {
+      path: normalized,
+      size: stats.size,
+      mtimeMs: stats.mtimeMs,
+      ino: stats.ino,
+    };
+  } catch {
+    return null;
+  }
+}
+
+function isReplayStateValid(current: ReturnType<typeof sessionFingerprint>, state?: RouterState["checkpointReplay"]): boolean {
+  if (!current || !state) return false;
+  if (state.sessionPath !== current.path) return false;
+  if (state.fileFingerprint?.size == null || state.fileFingerprint.size > current.size) return false;
+  if (state.fileFingerprint.ino !== undefined && current.ino !== undefined && state.fileFingerprint.ino !== current.ino) return false;
+  if (state.fileFingerprint.size === current.size && state.fileFingerprint.mtimeMs !== current.mtimeMs) return false;
+  if (state.fileFingerprint.size === current.size && state.nextByteOffset === current.size && state.checkpoint === undefined) return false;
+  if (state.fileFingerprint.size > current.size) return false;
+  return true;
+}
+
+async function latestCheckpointFromSession(sessionPath: string, priorState: RouterState): Promise<{ checkpoint: RouterCheckpoint | null; parseCount: number }> {
+  const current = sessionFingerprint(sessionPath);
+  if (!current) return { checkpoint: null, parseCount: 0 };
+
+  const cached = priorState.checkpointReplay;
+  const hasCached = isReplayStateValid(current, cached);
+
+  if (hasCached && cached && current.size === cached.fileFingerprint.size) {
+    return {
+      checkpoint: cached.checkpoint ?? null,
+      parseCount: 0,
+    };
+  }
+
+  if (cached && hasCached && current.size > cached.fileFingerprint.size) {
+    const replayInput: CheckpointReplayInput = {
+      fromByteStart: cached.nextByteOffset,
+      fromEventIndex: cached.nextEventIndex,
+      sessionCwd: cached.sessionCwd,
+      buildState: cached.buildState,
+      replayRefs: cached.replayRefs,
+    };
+    const replay = await streamCheckpointsFromSessionPathWithReplay(sessionPath, replayInput);
+    if (replay.parsedEventCount === 0) {
+      return {
+        checkpoint: cached.checkpoint ?? null,
+        parseCount: 0,
+      };
+    }
+
+    const next = replay.latestCheckpoint ?? cached.checkpoint;
+    priorState.checkpointReplay = {
+      sessionId: cached.sessionId,
+      sessionPath: current.path,
+      sessionCwd: replay.sessionCwd ?? cached.sessionCwd,
+      fileFingerprint: {
+        size: current.size,
+        mtimeMs: current.mtimeMs,
+        ino: current.ino,
+      },
+      nextByteOffset: replay.nextByteOffset,
+      nextEventIndex: replay.nextEventIndex,
+      buildState: replay.buildState,
+      replayRefs: replay.replayRefs,
+      checkpoint: next,
+    };
+    priorState.lastCheckpointReplayParse = {
+      parsedEventCount: replay.parsedEventCount,
+      source: "replay",
+    };
+
+    return {
+      checkpoint: next ?? null,
+      parseCount: replay.parsedEventCount,
+    };
+  }
+
+  const fullReplay = await streamCheckpointsFromSessionPathWithReplay(sessionPath, {
+    fromByteStart: 0,
+    fromEventIndex: 0,
+  });
+
+  const next = fullReplay.latestCheckpoint;
+  priorState.checkpointReplay = {
+    sessionId: next?.sessionId ?? current.path,
+    sessionPath: current.path,
+    sessionCwd: fullReplay.sessionCwd,
+    fileFingerprint: {
+      size: current.size,
+      mtimeMs: current.mtimeMs,
+      ino: current.ino,
+    },
+    nextByteOffset: fullReplay.nextByteOffset,
+    nextEventIndex: fullReplay.nextEventIndex,
+    buildState: fullReplay.buildState,
+    replayRefs: fullReplay.replayRefs,
+    checkpoint: next,
+  };
+
+  priorState.lastCheckpointReplayParse = {
+    parsedEventCount: fullReplay.parsedEventCount,
+    source: "full",
+  };
+
+  return {
+    checkpoint: next ?? null,
+    parseCount: fullReplay.parsedEventCount,
+  };
 }
 
 function findConfiguredModel(ctx: any, target: string, currentProvider?: string): { model: any; matchedBy: "qualified" | "id" } | undefined {
@@ -367,10 +483,17 @@ export async function observeRouterTurn(ctx: any, pi?: Pick<ExtensionAPI, "setMo
   if (!config.enabled) return null;
   const sessionPath = ctx?.sessionManager?.getSessionFile?.();
   if (!sessionPath) return null;
-  const checkpoint = await latestCheckpointFromSession(String(sessionPath));
-  if (!checkpoint) return null;
   const state = loadRouterState(ctx, String(sessionPath));
-  if (state.lastObservedCheckpointId === checkpoint.checkpointId) return null;
+  const { checkpoint, parseCount } = await latestCheckpointFromSession(String(sessionPath), state);
+  if (!checkpoint) return null;
+  if (state.lastObservedCheckpointId === checkpoint.checkpointId) {
+    state.lastCheckpointReplayParse = {
+      parsedEventCount: parseCount,
+      source: "none",
+    };
+    saveRouterState(ctx, state, String(sessionPath));
+    return null;
+  }
 
   const liveCheckpoint = checkpointWithDiffStats(checkpoint, ctx?.cwd, [
     String(sessionPath),

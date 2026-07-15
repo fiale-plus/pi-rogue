@@ -28,6 +28,11 @@ export interface PiSession {
   events: RawPiSessionEvent[];
 }
 
+export interface PiSessionReadOptions {
+  fromByteStart?: number;
+  startIndex?: number;
+}
+
 function asRecord(value: unknown): Record<string, unknown> | undefined {
   return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : undefined;
 }
@@ -179,11 +184,13 @@ export function parsePiSessionLine(line: string, index: number, byteStart: numbe
   };
 }
 
-export async function* streamPiSessionEvents(path: string): AsyncGenerator<RawPiSessionEvent> {
-  const input = createReadStream(resolve(path), { encoding: "utf8" });
+export async function* streamPiSessionEvents(path: string, options: PiSessionReadOptions = {}): AsyncGenerator<RawPiSessionEvent> {
+  const resolved = resolve(path);
+  const fromByteStart = Math.max(0, Math.floor(options.fromByteStart ?? 0));
+  const input = createReadStream(resolved, { encoding: "utf8", start: fromByteStart > 0 ? fromByteStart : undefined });
   const lines = createInterface({ input, crlfDelay: Infinity });
-  let index = 0;
-  let byteStart = 0;
+  let index = options.startIndex ?? 0;
+  let byteStart = fromByteStart;
   for await (const line of lines) {
     const byteEnd = byteStart + Buffer.byteLength(`${line}\n`);
     if (line.trim()) {

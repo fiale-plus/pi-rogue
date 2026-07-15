@@ -1,8 +1,14 @@
-import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { appendFileSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { buildCheckpoints, rebuildCheckpointsFromSession, streamCheckpointsFromSessionPath, writeCheckpointsJsonl } from "./checkpoints.js";
+import {
+  buildCheckpoints,
+  rebuildCheckpointsFromSession,
+  streamCheckpointsFromSessionPath,
+  streamCheckpointsFromSessionPathWithReplay,
+  writeCheckpointsJsonl,
+} from "./checkpoints.js";
 import { readPiSession } from "./session-reader.js";
 
 function writeFixture(lines: Array<Record<string, unknown>>): string {
@@ -68,6 +74,54 @@ describe("trajectory router checkpoint rebuild", () => {
     for await (const checkpoint of streamCheckpointsFromSessionPath(path)) streamed.push(checkpoint.checkpointId);
 
     expect(streamed).toEqual(sync);
+  });
+
+  it("replays checkpoint state from cached suffix without reprocessing unchanged session prefixes", async () => {
+    const path = fixtureSession();
+    const first = await streamCheckpointsFromSessionPathWithReplay(path, {
+      fromByteStart: 0,
+      fromEventIndex: 0,
+    });
+
+    expect(first.latestCheckpoint).not.toBeNull();
+    expect(first.parsedEventCount).toBe(7);
+    expect(first.nextByteOffset).toBeGreaterThan(0);
+
+    const unchanged = await streamCheckpointsFromSessionPathWithReplay(path, {
+      fromByteStart: first.nextByteOffset,
+      fromEventIndex: first.nextEventIndex,
+      sessionCwd: first.sessionCwd,
+      buildState: first.buildState,
+      replayRefs: first.replayRefs,
+    });
+
+    expect(unchanged.parsedEventCount).toBe(0);
+    expect(unchanged.latestCheckpoint).toBeNull();
+
+    appendFileSync(
+      path,
+      `${JSON.stringify({
+        type: "message",
+        id: "a3",
+        message: {
+          role: "assistant",
+          provider: "local",
+          model: "qwen-local",
+          content: [{ type: "text", text: "continue" }],
+        },
+      })}\n`,
+    );
+
+    const replayed = await streamCheckpointsFromSessionPathWithReplay(path, {
+      fromByteStart: first.nextByteOffset,
+      fromEventIndex: first.nextEventIndex,
+      sessionCwd: unchanged.sessionCwd,
+      buildState: unchanged.buildState,
+      replayRefs: unchanged.replayRefs,
+    });
+
+    expect(replayed.parsedEventCount).toBe(1);
+    expect(replayed.latestCheckpoint?.checkpointId).toBe("2026-06-12T00-00-00Z_fixture:event-7");
   });
 
   it("writes checkpoints as JSONL", () => {

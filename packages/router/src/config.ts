@@ -2,6 +2,8 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { hashText } from "./hash.js";
+import type { SerializedBuildState, SerializedReplayRefEvent } from "./checkpoints.js";
+import type { RouterCheckpoint } from "./types.js";
 
 export type RouterMode = "observe" | "auto_model";
 export type RouterPrintMode = "all" | "mismatch_only" | "off";
@@ -37,6 +39,22 @@ export interface RouterConfig {
   autoModel: RouterAutoModelPolicy;
 }
 
+export interface RouterCheckpointReplayState {
+  sessionId: string;
+  sessionPath: string;
+  sessionCwd?: string;
+  fileFingerprint: {
+    size: number;
+    mtimeMs: number;
+    ino?: number;
+  };
+  nextByteOffset: number;
+  nextEventIndex: number;
+  buildState: SerializedBuildState;
+  replayRefs: SerializedReplayRefEvent[];
+  checkpoint?: RouterCheckpoint | null;
+}
+
 export interface RouterState {
   lastObservedCheckpointId?: string;
   lastDecisionAction?: string;
@@ -45,6 +63,11 @@ export interface RouterState {
   autoModelPendingStreak?: number;
   autoModelLastSwitchAt?: string;
   autoModelSwitchHistory?: string[];
+  checkpointReplay?: RouterCheckpointReplayState;
+  lastCheckpointReplayParse?: {
+    parsedEventCount: number;
+    source: "full" | "replay" | "none";
+  };
 }
 
 export const DEFAULT_ROUTER_AUTO_MODEL_POLICY: RouterAutoModelPolicy = {
