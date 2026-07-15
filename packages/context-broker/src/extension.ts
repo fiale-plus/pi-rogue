@@ -768,6 +768,10 @@ export async function registerContextBrokerBeta(pi: ExtensionAPI, options: Conte
     return `Context broker routing telemetry: ${line.join(", ")}`;
   }
 
+  function sourceCacheKey(sourceId: string): string {
+    return `${activeSessionId}\u0000${sourceId}`;
+  }
+
   function publishToolArtifact(event: {
     toolName: string;
     input?: any;
@@ -780,18 +784,19 @@ export async function registerContextBrokerBeta(pi: ExtensionAPI, options: Conte
   }): ContextArtifact | null {
     if (!shouldBrokerToolName(event.toolName)) return null;
 
-    if (event.sourceId) {
-      const existingHandle = sourceHandles.get(event.sourceId);
+    const cacheKey = event.sourceId ? sourceCacheKey(event.sourceId) : undefined;
+    if (cacheKey) {
+      const existingHandle = sourceHandles.get(cacheKey);
       if (existingHandle) {
         const matches = safeBrokerLookup({ handle: existingHandle });
         if (matches === null) return null;
         const existing = matches[0];
         if (existing) return existing;
-        sourceHandles.delete(event.sourceId);
-        seenSourceIds.delete(event.sourceId);
+        sourceHandles.delete(cacheKey);
+        seenSourceIds.delete(cacheKey);
       }
-      if (seenSourceIds.has(event.sourceId)) seenSourceIds.delete(event.sourceId);
-      seenSourceIds.add(event.sourceId);
+      if (seenSourceIds.has(cacheKey)) seenSourceIds.delete(cacheKey);
+      seenSourceIds.add(cacheKey);
     }
 
     const sanitizedEvent = {
@@ -829,7 +834,7 @@ export async function registerContextBrokerBeta(pi: ExtensionAPI, options: Conte
       return null;
     }
     if (artifact) routingTelemetry.toolResultArtifacts += 1;
-    if (event.sourceId) sourceHandles.set(event.sourceId, artifact.handle);
+    if (cacheKey) sourceHandles.set(cacheKey, artifact.handle);
     return artifact;
   }
 
@@ -872,7 +877,8 @@ export async function registerContextBrokerBeta(pi: ExtensionAPI, options: Conte
           routingTelemetry.backfillScans += 1;
           const sourceId = typeof entry.message.toolCallId === "string" ? entry.message.toolCallId : entryId;
           const toolInput = sourceId ? toolInputs.get(sourceId) : undefined;
-          const alreadySeen = sourceId ? seenSourceIds.has(sourceId) || sourceHandles.has(sourceId) : false;
+          const sourceKey = sourceId ? sourceCacheKey(sourceId) : undefined;
+          const alreadySeen = sourceKey ? seenSourceIds.has(sourceKey) || sourceHandles.has(sourceKey) : false;
           if (publishToolArtifact({
             toolName: String(entry.message.toolName ?? toolInput?.toolName ?? "tool"),
             input: entry.message.input ?? toolInput?.input,
@@ -893,7 +899,8 @@ export async function registerContextBrokerBeta(pi: ExtensionAPI, options: Conte
           scanned += 1;
           routingTelemetry.backfillScans += 1;
           const sourceId = entryId;
-          const alreadySeen = sourceId ? seenSourceIds.has(sourceId) || sourceHandles.has(sourceId) : false;
+          const sourceKey = sourceId ? sourceCacheKey(sourceId) : undefined;
+          const alreadySeen = sourceKey ? seenSourceIds.has(sourceKey) || sourceHandles.has(sourceKey) : false;
           if (publishToolArtifact({
             toolName: "bash",
             input: { command: entry.message.command },

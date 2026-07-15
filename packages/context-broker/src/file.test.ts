@@ -51,6 +51,20 @@ describe("file context broker durable pruning", () => {
     expect(restarted.lookup({ id: second.id })).toHaveLength(1);
   });
 
+  it("deduplicates source IDs within a session but not across sessions", () => {
+    const dir = mkdtempSync(join(tmpdir(), "ctx-file-source-session-"));
+    const broker = createFileContextBroker({ dir, maxRecords: 10 });
+    const first = broker.publish({ ...input("session A payload"), sessionId: "session-a", parentIds: ["shared-call"] });
+    const replay = broker.publish({ ...input("session A replay"), sessionId: "session-a", parentIds: ["shared-call"] });
+    const second = broker.publish({ ...input("session B payload"), sessionId: "session-b", parentIds: ["shared-call"] });
+
+    expect(replay.handle).toBe(first.handle);
+    expect(second.handle).not.toBe(first.handle);
+    const restarted = createFileContextBroker({ dir, maxRecords: 10 });
+    expect(restarted.lookup({ sessionId: "session-a", text: "session A payload" })).toHaveLength(1);
+    expect(restarted.lookup({ sessionId: "session-b", text: "session B payload" })).toHaveLength(1);
+  });
+
   it("retains records appended by another broker instance before compaction", () => {
     const dir = mkdtempSync(join(tmpdir(), "ctx-file-prune-concurrent-"));
     const firstBroker = createFileContextBroker({ dir, maxRecords: 10 });
