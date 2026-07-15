@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.3.31
+
+### Summary
+
+This patch release delivers four critical fixes for context-broker session isolation, advisor artifact preflight accuracy, resume backfill persistence, and model work bounding.
+
+### Changes
+
+- Isolate context-broker state by session to prevent cross-session state leakage across extension, Fusion, and brain packages (#354).
+- Ignore ambient package artifact paths in advisor preflight and add explicit artifact list form handling to prevent false-positive artifact matches (#328).
+- Bound and persist resume backfill state in the context-broker to prevent lost recovery work across restarts (#355).
+- Bound and cancel advisor model work to prevent unbounded async operations and improve cancellation reliability (#357).
+
+### Validation
+
+- Full workspace TypeScript and validation-coverage checks passed.
+- Recursive Vitest suite passed on the release baseline.
+
 ## 0.3.30
 
 ### Summary
