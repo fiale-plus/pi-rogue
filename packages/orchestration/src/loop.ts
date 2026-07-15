@@ -326,6 +326,11 @@ export function registerLoop(pi: ExtensionAPI): void {
     writeLoopState(ctx, { generation: current.generation + 1 });
     stopLoopTimer(key);
     setLoopStatus(ctx, defaultLoopState());
+    try {
+      setAdvisorCheckinDemand(ctx, "loop", false);
+    } catch {
+      ctx.ui.notify("Unable to release loop-owned advisor check-ins during shutdown; persisted loop state was preserved.", "warning");
+    }
   });
 
 }

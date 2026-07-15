@@ -1,4 +1,4 @@
-import { mkdtempSync } from "node:fs";
+import { readFileSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -46,8 +46,11 @@ afterEach(() => {
   vi.resetModules();
 });
 
+let loadedHome = "";
+
 async function loadLoopModule() {
   const home = mkdtempSync(join(tmpdir(), "pi-rogue-loop-home-"));
+  loadedHome = home;
   vi.stubEnv("HOME", home);
   vi.resetModules();
   return import("./loop.js");
@@ -124,6 +127,31 @@ describe("loop tick guards", () => {
     handlers.agent_end?.[0]?.({ messages: [{ role: "user", content: [{ type: "text", text: sends[0] }] }] }, ctx);
     await vi.advanceTimersByTimeAsync(60_000);
     expect(sends).toHaveLength(2);
+  });
+
+  it("releases loop check-in demand on shutdown and reacquires it on resume", async () => {
+    vi.useFakeTimers();
+    const { readLoopState, registerLoop, startLoop } = await loadLoopModule();
+    const ctx = createContext("loop-shutdown-demand");
+    const handlers: Record<string, Array<(event: any, ctx: any) => void>> = {};
+    const pi = {
+      sendUserMessage: () => undefined,
+      on: (name: string, handler: (event: any, ctx: any) => void) => {
+        handlers[name] = [...(handlers[name] ?? []), handler];
+      },
+    };
+    const configPath = join(loadedHome, ".pi", "agent", "pi-rogue", "advisor", "config.json");
+
+    registerLoop(pi as any);
+    startLoop(pi as any, ctx, "1m", "resume this loop");
+    expect(JSON.parse(readFileSync(configPath, "utf8")).checkins).toBe("mid-hour");
+
+    handlers.session_shutdown?.[0]?.({}, ctx);
+    expect(JSON.parse(readFileSync(configPath, "utf8")).checkins).toBe("off");
+    expect(readLoopState(ctx)).toMatchObject({ enabled: true, instruction: "resume this loop" });
+
+    handlers.session_start?.[0]?.({}, ctx);
+    expect(JSON.parse(readFileSync(configPath, "utf8")).checkins).toBe("mid-hour");
   });
 
   it("skips ticks while a host message is pending", async () => {

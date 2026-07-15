@@ -227,6 +227,11 @@ export function registerGoal(pi: ExtensionAPI): void {
 
   pi.on("session_shutdown", (_event, ctx) => {
     invalidateGoalChecks(ctx);
+    try {
+      setAdvisorCheckinDemand(ctx, "goal", false);
+    } catch {
+      ctx.ui.notify("Unable to release goal-owned advisor check-ins during shutdown; persisted goal state was preserved.", "warning");
+    }
   });
 
   pi.on("agent_end", async (event, ctx) => {
