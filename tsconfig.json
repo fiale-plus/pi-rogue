@@ -20,9 +20,7 @@
       "@fiale-plus/pi-rogue-brain": ["./packages/lab/brain/src"],
       "@fiale-plus/pi-rogue-repo-arch": ["./packages/lab/repo-arch/src"],
       "@fiale-plus/pi-rogue-router": ["./packages/router/src"],
-      "@fiale-plus/pi-rogue-router/extension": ["./packages/router/src/extension.ts"],
-      "@fiale-plus/pi-rogue-fusion": ["./packages/fusion/src"],
-      "@fiale-plus/pi-rogue-fusion/extension": ["./packages/fusion/src/extension.ts"]
+      "@fiale-plus/pi-rogue-router/extension": ["./packages/router/src/extension.ts"]
     }
   },
   "include": [

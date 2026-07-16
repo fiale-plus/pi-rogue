@@ -16,12 +16,12 @@ afterEach(() => {
 
 describe("artifact preflight", () => {
   it("extracts explicit absolute and relative artifact references", () => {
-    const refs = extractArtifactReferences("review /tmp/issue175-review-bundle.txt, `plan.md`, and docs/fusion.md before continuing");
-    expect(refs).toEqual(expect.arrayContaining(["/tmp/issue175-review-bundle.txt", "plan.md", "docs/fusion.md"]));
+    const refs = extractArtifactReferences("review /tmp/issue175-review-bundle.txt, `plan.md`, and docs/routing-dataset.md before continuing");
+    expect(refs).toEqual(expect.arrayContaining(["/tmp/issue175-review-bundle.txt", "plan.md", "docs/routing-dataset.md"]));
   });
 
   it("ignores diff-like path prefixes and url paths", () => {
-    const refs = extractArtifactReferences("compare b/packages/advisor/src/extension.ts. Inspect packages/advisor/src/extension.ts; see https://example.com/docs/fusion.md");
+    const refs = extractArtifactReferences("compare b/packages/advisor/src/extension.ts. Inspect packages/advisor/src/extension.ts; see https://example.com/docs/routing-dataset.md");
     expect(refs).toEqual(["packages/advisor/src/extension.ts"]);
   });
 

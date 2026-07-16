@@ -2874,22 +2874,6 @@ function piRogueSubsystemRows(config: AdvisorConfig, state: SessionState, ctx: a
     ].join(" · "),
   };
 
-  const fusionPaths = fusionRecipeCandidatePaths(ctx, root);
-  const fusionPath = fusionPaths.find((path) => existsSync(path)) || fusionPaths[0];
-  const parsedFusion = fusionPath ? readJsonLoose(fusionPath) : undefined;
-  const fusionRecipes = Array.isArray(parsedFusion?.recipes) ? parsedFusion.recipes : [];
-  const fusionIds = fusionRecipes.map((recipe: any) => String(recipe?.id ?? "").trim()).filter(Boolean);
-  const fusionStatus: SubsystemStatusRow = {
-    subsystem: "fusion",
-    status: fusionIds.length > 0 ? "on" : "off",
-    details: [
-      `source=${fusionPaths[0] && fusionPaths[0] === String(process.env.PI_ROGUE_FUSION_RECIPES ?? "").trim() ? "env" : "user-root"}`,
-      `recipes=${fusionIds.length}`,
-      `ids=${fusionIds.length > 0 ? `${fusionIds.slice(0, 2).join(", ")}${fusionIds.length > 2 ? `, +${fusionIds.length - 2} more` : ""}` : "none"}`,
-      `file=${existsSync(fusionPath || "") ? "user-root" : "not-created"}`,
-    ].join(" · "),
-  };
-
   const contextEnabled = contextBrokerEnabledByDefault();
   const contextConfigPath = join(root, "context-broker", "config.json");
   const contextDbPath = join(root, "context-broker", "artifacts.sqlite");
@@ -2917,7 +2901,6 @@ function piRogueSubsystemRows(config: AdvisorConfig, state: SessionState, ctx: a
   return [
     advisorRow,
     routerStatus,
-    fusionStatus,
     contextRow,
     {
       subsystem: "orchestration",
@@ -2940,7 +2923,7 @@ function piRogueCockpitText(config: AdvisorConfig, state: SessionState, _current
     `posture: ${activePostureText()}`,
     formatSubsystemStatusRows(rows),
     "",
-    "Commands: /pi-rogue status · /pi-rogue-advisor|router|fusion|orchestration|context status",
+    "Commands: /pi-rogue status · /pi-rogue-advisor|router|orchestration|context status",
   ].filter(Boolean).join("\n");
 }
 
@@ -2958,14 +2941,12 @@ export interface PiRogueConfigurePlan {
   advisorModel: string;
   workerModel: string;
   smartModel: string;
-  activeRouterProfile: "balanced" | "fusion-smart";
-  fusionRecipeId?: string;
+  activeRouterProfile: "balanced";
   files: {
     summary: string;
     advisor: string;
     router: string;
     routerCards: string;
-    fusionRecipes: string;
     contextBroker: string;
   };
   warnings: string[];
@@ -3020,24 +3001,6 @@ function readJsonLoose(path: string): any | undefined {
   }
 }
 
-function fusionRecipeCandidatePaths(_ctx: any, root = piRogueRootDir()): string[] {
-  const configured = String(process.env.PI_ROGUE_FUSION_RECIPES ?? "").trim();
-  return [
-    configured,
-    join(root, "fusion", "recipes.json"),
-  ].filter(Boolean);
-}
-
-function configuredFusionRecipeIds(ctx: any, root = piRogueRootDir()): string[] {
-  for (const path of fusionRecipeCandidatePaths(ctx, root)) {
-    const parsed = readJsonLoose(path);
-    const recipes = Array.isArray(parsed?.recipes) ? parsed.recipes : [];
-    const ids = recipes.map((recipe: any) => String(recipe?.id ?? "").trim()).filter(Boolean);
-    if (ids.length > 0) return ids;
-  }
-  return [];
-}
-
 export function buildPiRogueConfigurePlan(ctx: any, mode: PiRogueConfigureMode = "status"): PiRogueConfigurePlan {
   const root = piRogueRootDir();
   const available = availableTextModels(ctx);
@@ -3047,27 +3010,23 @@ export function buildPiRogueConfigurePlan(ctx: any, mode: PiRogueConfigureMode =
     "openai-codex/gpt-5.4-mini",
     advisorModel,
   ].filter((id) => id && !id.startsWith("<"))) ?? advisorModel;
-  const fusionRecipeId = configuredFusionRecipeIds(ctx, root)[0];
-  const smartModel = fusionRecipeId ? `fusion/${fusionRecipeId}` : advisorModel;
+  const smartModel = advisorModel;
   return {
     mode,
     root,
     advisorModel,
     workerModel,
     smartModel,
-    activeRouterProfile: fusionRecipeId ? "fusion-smart" : "balanced",
-    fusionRecipeId,
+    activeRouterProfile: "balanced",
     files: {
       summary: join(root, "config.json"),
       advisor: CONFIG_PATH,
       router: join(root, "router", "config.json"),
       routerCards: join(root, "router", "model-cards.jsonl"),
-      fusionRecipes: join(root, "fusion", "recipes.json"),
       contextBroker: join(root, "context-broker", "artifacts.sqlite"),
     },
     warnings: [
       available.length === 0 ? "No text models were detected; configure a Pi model provider before applying." : "",
-      fusionRecipeId ? "" : "No fusion recipe was detected; router will use the strongest single model for smart/review roles.",
     ].filter(Boolean),
   };
 }
@@ -3320,14 +3279,12 @@ export async function buildPiRoguePosturePlan(ctx: any, postureValue: unknown, o
 function guardedRouterProfiles(advisorModel: string): Record<string, any> {
   const spark = "openai-codex/gpt-5.3-codex-spark";
   const local = "llamacpp-qwen-unsloth/qwen3.6-35b-a3b-ud-q4-k-m";
-  const fusion = "fusion/opencode-go-qwen-deepseek-gpt55";
   return {
     "all-smart": { worker: advisorModel, smart: advisorModel, teacher: advisorModel, reviewer: advisorModel, explore: advisorModel, debug_diagnose: advisorModel, review: advisorModel, verify: advisorModel },
     "spark-smart": { worker: spark, smart: advisorModel, teacher: advisorModel, reviewer: advisorModel, explore: spark, debug_diagnose: advisorModel, review: advisorModel, verify: spark },
     "local-smart": { worker: local, smart: advisorModel, teacher: advisorModel, reviewer: advisorModel, explore: local, debug_diagnose: advisorModel, review: advisorModel, verify: local },
     quick: { worker: spark, smart: spark, teacher: spark, reviewer: spark },
     balanced: { worker: spark, smart: advisorModel, teacher: advisorModel, reviewer: advisorModel },
-    "fusion-smart": { worker: fusion, smart: fusion, teacher: fusion, reviewer: fusion, explore: fusion, debug_diagnose: fusion, review: fusion, verify: fusion },
   };
 }
 
@@ -3377,7 +3334,6 @@ export function applyPiRoguePosturePlan(plan: PiRoguePosturePlan): PiRoguePostur
     advisor: { model: plan.advisorModel },
     context: { enabled: true, durable: true, store: join(plan.root, "context-broker", "artifacts.sqlite"), rewriteThresholdBytes: 2048 },
     router: { enabled: false, mode: "auto_model", activeProfile: "spark-smart", config: plan.files.router },
-    fusion: { enabled: false, recipeId: "opencode-go-qwen-deepseek-gpt55", recipes: join(plan.root, "fusion", "recipes.json") },
     storage: { root: plan.root },
   });
   writeJson(plan.files.router, {
@@ -3385,7 +3341,7 @@ export function applyPiRoguePosturePlan(plan: PiRoguePosturePlan): PiRoguePostur
     mode: "auto_model",
     print: "off",
     activeProfile: "spark-smart",
-    profileOrder: ["spark-smart", "local-smart", "balanced", "quick", "all-smart", "fusion-smart"],
+    profileOrder: ["spark-smart", "local-smart", "balanced", "quick", "all-smart"],
     profiles: guardedRouterProfiles(plan.advisorModel),
   });
   const existingContext = readJson<Record<string, unknown>>(plan.files.contextBrokerConfig, {});
@@ -3418,7 +3374,6 @@ function piRoguePostureText(result: PiRoguePostureApplyResult): string {
     `  advisor: mode=${result.advisor.mode}, review=${result.advisor.review}, model=${result.advisor.model ?? "auto"}`,
     `  board: ${result.advisor.board.mode}; head=${result.advisor.headOfBoard.mode}; specialists=${result.advisor.specialistDispatch.mode}/${result.advisor.specialistDispatch.maxCostTier}/maxCalls=${result.advisor.specialistDispatch.maxCallsPerSession}`,
     "  router: off; default profile=spark-smart",
-    "  fusion: off",
     "  context: on",
     "Verify: /pi-rogue status · /pi-rogue-advisor gate status",
   ].join("\n");
@@ -3437,7 +3392,6 @@ export function isGuardedPostureConfig(summary: any, advisor: AdvisorConfig, rou
     cfg.specialistDispatch.maxCallsPerSession === 3 &&
     summary?.router?.enabled === false &&
     summary?.router?.activeProfile === "spark-smart" &&
-    summary?.fusion?.enabled === false &&
     router?.enabled === false &&
     router?.activeProfile === "spark-smart";
 }
@@ -3474,7 +3428,6 @@ export function applyPiRogueConfigurePlan(plan: PiRogueConfigurePlan): void {
     advisor: { model: plan.advisorModel },
     context: { enabled: true, durable: true, store: plan.files.contextBroker },
     router: { enabled: true, mode: "observe", activeProfile: plan.activeRouterProfile, config: plan.files.router },
-    fusion: { enabled: true, recipeId: plan.fusionRecipeId, recipes: plan.files.fusionRecipes },
     storage: { root: plan.root },
   });
   const existingAdvisor = readJson<Partial<AdvisorConfig>>(plan.files.advisor, {});
@@ -3488,19 +3441,17 @@ export function applyPiRogueConfigurePlan(plan: PiRogueConfigurePlan): void {
   const quick = { worker: plan.workerModel, smart: plan.workerModel, teacher: plan.workerModel, reviewer: plan.workerModel };
   const balanced = { worker: plan.workerModel, smart: plan.advisorModel, teacher: plan.advisorModel, reviewer: plan.advisorModel };
   const profiles: Record<string, any> = { quick, balanced };
-  if (plan.fusionRecipeId) profiles["fusion-smart"] = { worker: plan.workerModel, smart: plan.smartModel, teacher: plan.smartModel, reviewer: plan.smartModel };
   writeJson(plan.files.router, {
     enabled: true,
     mode: "observe",
     print: "mismatch_only",
     activeProfile: plan.activeRouterProfile,
-    profileOrder: plan.fusionRecipeId ? ["fusion-smart", "balanced", "quick"] : ["balanced", "quick"],
+    profileOrder: ["balanced", "quick"],
     profiles,
   });
   upsertModelCards(plan.files.routerCards, [
     modelCardFor(plan.workerModel, ["worker", "quick"], now),
     modelCardFor(plan.advisorModel, ["advisor", "smart", "reviewer", "teacher"], now),
-    ...(plan.fusionRecipeId ? [modelCardFor(plan.smartModel, ["smart", "reviewer", "teacher", "fusion"], now)] : []),
   ]);
 }
 
@@ -3512,13 +3463,11 @@ function piRogueConfigText(): string {
     `  advisor: ${CONFIG_PATH}`,
     `  router: ${join(root, "router", "config.json")}`,
     `  router cards: ${join(root, "router", "model-cards.jsonl")}`,
-    `  fusion recipes: ${join(root, "fusion", "recipes.json")}`,
     `  context broker: ${join(root, "context-broker", "artifacts.sqlite")}`,
-    `  fusion traces: ${join(root, "fusion", "runs")}`,
     `  orchestration: ${ORCHESTRATION_DIR}`,
     "",
     "Layering: built-in defaults → user-root Pi-Rogue config → session state.",
-    "Use /pi-rogue-router status and /pi-rogue-fusion status to see the currently active subsystem paths.",
+    "Use /pi-rogue-router status to see the currently active router paths.",
   ].join("\n");
 }
 
@@ -3532,14 +3481,12 @@ function piRogueConfigureText(plan: PiRogueConfigurePlan): string {
     `  router profile: ${plan.activeRouterProfile}`,
     `  worker: ${plan.workerModel}`,
     `  smart/teacher/reviewer: ${plan.smartModel}`,
-    plan.fusionRecipeId ? `  fusion recipe: fusion/${plan.fusionRecipeId}` : "  fusion recipe: not detected",
     "",
     "Files:",
     `  summary: ${plan.files.summary}`,
     `  advisor: ${plan.files.advisor}`,
     `  router: ${plan.files.router}`,
     `  router cards: ${plan.files.routerCards}`,
-    `  fusion recipes: ${plan.files.fusionRecipes}`,
     `  context broker: ${plan.files.contextBroker}`,
     plan.warnings.length ? "" : "",
     ...plan.warnings.map((warning) => `Warning: ${warning}`),
@@ -3575,7 +3522,6 @@ function piRogueDoctorText(ctx: any): string {
     `${existsSync(join(root, "config.json")) ? "ok" : "info"}: global summary config ${join(root, "config.json")}`,
     `${existsSync(join(root, "router", "config.json")) ? "ok" : "info"}: global router config ${join(root, "router", "config.json")}`,
     `${existsSync(join(String(ctx?.cwd ?? process.cwd()), ".pi", "router", "config.json")) ? "info" : "ok"}: repo router override ${join(String(ctx?.cwd ?? process.cwd()), ".pi", "router", "config.json")}`,
-    `${existsSync(join(root, "fusion", "recipes.json")) || configuredFusionRecipeIds(ctx, root).length ? "ok" : "info"}: fusion recipes expose fusion/<recipe-id> models when present`,
   ];
   return [
     "Pi-Rogue doctor:",
@@ -4368,7 +4314,6 @@ export function registerAdvisor(pi: ExtensionAPI): void {
           "Subsystems:",
           `  /pi-rogue-advisor ${ADVISOR_CANONICAL_CONTROL_LEAVES.join("|")}`,
           "  /pi-rogue-router status||mode|profile|print|models|profiles|cycle|configure",
-          "  /pi-rogue-fusion status|reload|configure",
           "  /pi-rogue-orchestration status|goal|loop|autoresearch|lab",
           "",
           "No nested /pi-rogue router/status/config aliases are registered; use the subsystem roots above.",

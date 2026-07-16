@@ -7,7 +7,6 @@ const NODE_RANGE = ">=22.19.0";
 const peerManifests = [
   "packages/advisor/package.json",
   "packages/bundle/package.json",
-  "packages/fusion/package.json",
   "packages/lab/brain/package.json",
   "packages/lab/guardrails/package.json",
   "packages/lab/repo-arch/package.json",

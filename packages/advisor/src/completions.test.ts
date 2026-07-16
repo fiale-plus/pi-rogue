@@ -48,7 +48,7 @@ describe("pi-rogue cockpit completions", () => {
   it("offers only concise root management commands", () => {
     const values = piRogueArgumentCompletions("")?.map((i) => i.value);
     expect(values).toEqual(["status", "help", "doctor"]);
-    expect(values).not.toEqual(expect.arrayContaining(["config", "advisor", "router", "fusion", "orchestration"]));
+    expect(values).not.toEqual(expect.arrayContaining(["config", "advisor", "router", "orchestration"]));
   });
 
   it("does not fan out subsystem or deprecated configure choices", () => {

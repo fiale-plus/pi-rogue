@@ -2,7 +2,7 @@
   "name": "pi-rogue",
   "version": "0.1.0",
   "private": true,
-  "description": "Pi-Rogue advisor extension repo and internal workspaces.",
+  "description": "Pi-Rogue monorepo for the consolidated Pi extension and internal development workspaces.",
   "type": "module",
   "workspaces": [
     "packages/*",
@@ -39,7 +39,6 @@
     "router:dataset": "tsx packages/router/src/cli.ts dataset",
     "router:gate-train": "tsx packages/router/src/cli.ts gate-train",
     "router:report": "tsx packages/router/src/cli.ts report",
-    "fusion:bench": "tsx scripts/bench-fusion.ts",
     "router:sharpen": "tsx packages/router/src/cli.ts sharpen",
     "router:sharpen:auto": "tsx scripts/router-auto-sharpen.ts",
     "router:shadow": "tsx packages/router/src/cli.ts shadow",

@@ -932,7 +932,6 @@ describe("Pi-Rogue posture presets", () => {
     expect(secondSummaryText).toBe(firstSummaryText);
     expect(summary.posture).toBe("guarded");
     expect(summary.router).toMatchObject({ enabled: false, activeProfile: "spark-smart" });
-    expect(summary.fusion).toMatchObject({ enabled: false });
     expect(advisor).toMatchObject({ profile: "budget-board", mode: "auto", review: "light", model: "openai-codex/gpt-5.5", board: { mode: "shadow" } });
     expect(advisor.profileRestore).toMatchObject({ mode: "auto", review: "light", checkins: "off", profileMode: "auto", profileReview: "light" });
     expect(advisor.headOfBoard.mode).toBe("enabled");
@@ -1051,7 +1050,7 @@ describe("Pi-Rogue posture presets", () => {
   }));
 
   it("validates current config before reporting guarded posture", () => {
-    const summary = { posture: "guarded", router: { enabled: false, activeProfile: "spark-smart" }, fusion: { enabled: false } };
+    const summary = { posture: "guarded", router: { enabled: false, activeProfile: "spark-smart" } };
     const advisor = normalizeAdvisorConfig({
       profile: "budget-board",
       mode: "auto",
@@ -1170,30 +1169,22 @@ describe("Pi-Rogue configure planning", () => {
     } as any;
   }
 
-  it("derives advisor/router/fusion defaults from available models and recipes", () => {
+  it("derives advisor/router defaults from available models", () => {
     const oldHome = process.env.HOME;
-    const oldRecipes = process.env.PI_ROGUE_FUSION_RECIPES;
     const root = mkdtempSync(join(tmpdir(), "pi-rogue-configure-home-"));
     const cwd = mkdtempSync(join(tmpdir(), "pi-rogue-configure-cwd-"));
     try {
       process.env.HOME = root;
-      delete process.env.PI_ROGUE_FUSION_RECIPES;
-      const recipes = join(root, ".pi", "agent", "pi-rogue", "fusion", "recipes.json");
-      mkdirSync(join(root, ".pi", "agent", "pi-rogue", "fusion"), { recursive: true });
-      writeFileSync(recipes, JSON.stringify({ recipes: [{ id: "gpt55fused-53spark" }] }), "utf8");
-
       const plan = buildPiRogueConfigurePlan(ctx(cwd));
 
       expect(plan.mode).toBe("status");
       expect(plan.advisorModel).toBe("openai-codex/gpt-5.5");
       expect(plan.workerModel).toBe("openai-codex/gpt-5.3-codex-spark");
-      expect(plan.activeRouterProfile).toBe("fusion-smart");
-      expect(plan.smartModel).toBe("fusion/gpt55fused-53spark");
+      expect(plan.activeRouterProfile).toBe("balanced");
+      expect(plan.smartModel).toBe("openai-codex/gpt-5.5");
     } finally {
       if (oldHome === undefined) delete process.env.HOME;
       else process.env.HOME = oldHome;
-      if (oldRecipes === undefined) delete process.env.PI_ROGUE_FUSION_RECIPES;
-      else process.env.PI_ROGUE_FUSION_RECIPES = oldRecipes;
       rmSync(root, { recursive: true, force: true });
       rmSync(cwd, { recursive: true, force: true });
     }
@@ -1207,15 +1198,13 @@ describe("Pi-Rogue configure planning", () => {
         root,
         advisorModel: "openai-codex/gpt-5.5",
         workerModel: "openai-codex/gpt-5.3-codex-spark",
-        smartModel: "fusion/gpt55fused-53spark",
-        activeRouterProfile: "fusion-smart" as const,
-        fusionRecipeId: "gpt55fused-53spark",
+        smartModel: "openai-codex/gpt-5.5",
+        activeRouterProfile: "balanced" as const,
         files: {
           summary: join(root, "config.json"),
           advisor: join(root, "advisor", "config.json"),
           router: join(root, "router", "config.json"),
           routerCards: join(root, "router", "model-cards.jsonl"),
-          fusionRecipes: join(root, "fusion", "recipes.json"),
           contextBroker: join(root, "context-broker", "artifacts.sqlite"),
         },
         warnings: [],
@@ -1228,9 +1217,9 @@ describe("Pi-Rogue configure planning", () => {
       expect(advisor.mode).toBe("auto");
       expect(advisor.checkins).toBe("mid-hour");
       const router = JSON.parse(readFileSync(plan.files.router, "utf8"));
-      expect(router).toMatchObject({ enabled: true, mode: "observe", activeProfile: "fusion-smart" });
-      expect(router.profiles["fusion-smart"].smart).toBe("fusion/gpt55fused-53spark");
-      expect(readFileSync(plan.files.routerCards, "utf8")).toContain("gpt55fused-53spark");
+      expect(router).toMatchObject({ enabled: true, mode: "observe", activeProfile: "balanced" });
+      expect(router.profiles.balanced.smart).toBe("openai-codex/gpt-5.5");
+      expect(readFileSync(plan.files.routerCards, "utf8")).toContain('"modelId":"gpt-5.5"');
       expect(existsSync(plan.files.summary)).toBe(true);
     } finally {
       rmSync(root, { recursive: true, force: true });

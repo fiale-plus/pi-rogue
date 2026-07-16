@@ -38,13 +38,10 @@ jobs:
           cp -a ../../packages/core node_modules/@fiale-plus/pi-core
           cp -a ../../packages/advisor node_modules/@fiale-plus/pi-rogue-advisor
           cp -a ../../packages/context-broker node_modules/@fiale-plus/pi-rogue-context-broker
-          if [ -d "../../packages/fusion" ]; then
-            cp -a ../../packages/fusion node_modules/@fiale-plus/pi-rogue-fusion
-          fi
           cp -a ../../packages/orchestration node_modules/@fiale-plus/pi-rogue-orchestration
           cp -a ../../packages/router node_modules/@fiale-plus/pi-rogue-router
           node ../../scripts/prepare-bundle-publish.mjs .
-          echo "Vendored local (git-at-tag) core, advisor, context-broker, fusion, orchestration, and router into bundle for bundling as single artefact"
+          echo "Vendored local (git-at-tag) core, advisor, context-broker, orchestration, and router into bundle for bundling as single artefact"
 
       - name: Pack and smoke-test the exact canonical artifact
         id: candidate
