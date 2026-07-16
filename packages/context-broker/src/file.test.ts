@@ -438,9 +438,7 @@ describe("file context broker durable pruning", () => {
       globalMaxBytes: 16_000_000,
     });
     const now = Date.now();
-    for (let index = 0; index < 2_048; index += 1) {
-      broker.publish(input(`pre-${index}`, now + index));
-    }
+    broker.publishBatch(Array.from({ length: 2_048 }, (_, index) => input(`pre-${index}`, now + index)));
 
     const readFileSyncSpy = vi.spyOn(fsRequire, "readFileSync");
     try {
