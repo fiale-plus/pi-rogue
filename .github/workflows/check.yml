@@ -23,10 +23,22 @@ jobs:
       - name: Type and validation coverage checks
         run: npm run check
       - name: Run tests
-        run: npm test
+        run: npm test -- --reporter=json --outputFile=vitest-results.json
       - name: Verify packed minimum-runtime durability
         run: npm run test:packed-min-node
       - name: Summary
+        if: always()
         run: |
-          echo "## CI Summary" >> $GITHUB_STEP_SUMMARY
-          echo "- Tests: $(npx vitest run 2>&1 | grep -oE 'Tests [0-9]+ passed' | grep -oE '[0-9]+' || echo '?') passed" >> $GITHUB_STEP_SUMMARY
+          {
+            echo "## CI Summary"
+            node <<'NODE'
+          const fs = require("node:fs");
+          const reportPath = "vitest-results.json";
+          if (!fs.existsSync(reportPath)) {
+            console.log("- Tests: unavailable (Vitest did not produce a JSON report)");
+          } else {
+            const report = JSON.parse(fs.readFileSync(reportPath, "utf8"));
+            console.log(`- Tests: ${report.numPassedTests} passed, ${report.numFailedTests} failed, ${report.numPendingTests} pending`);
+          }
+          NODE
+          } >> "$GITHUB_STEP_SUMMARY"
