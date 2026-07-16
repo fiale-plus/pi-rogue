@@ -536,6 +536,7 @@ function loadStateFromPath(path: string): SessionState {
       lastContextHash: typeof (raw.advisorLoop as { lastContextHash?: unknown }).lastContextHash === "string" ? (raw.advisorLoop as { lastContextHash?: string }).lastContextHash : undefined,
       lastSource: typeof (raw.advisorLoop as { lastSource?: unknown }).lastSource === "string" ? (raw.advisorLoop as { lastSource?: string }).lastSource : undefined,
       lastObservedAt: typeof (raw.advisorLoop as { lastObservedAt?: unknown }).lastObservedAt === "string" ? (raw.advisorLoop as { lastObservedAt?: string }).lastObservedAt : undefined,
+      alerts: normalizeAdvisorLoopAlerts(raw.advisorLoop),
     } : defaultAdvisorLoopState(),
     board: normalizeBoardShadowState(raw.board),
     headOfBoard: raw.headOfBoard && typeof raw.headOfBoard === "object" ? {
@@ -1847,6 +1848,74 @@ function resetTaskScopedStateForSwitch(state: SessionState): void {
   };
 }
 
+function retainExplicitAdvisorLoopHistory(state: SessionState): void {
+  const loop = state.advisorLoop;
+  if (!loop) return;
+  const recent = loop.recent.filter((entry) => entry.source === "question");
+  const alerts = (loop.alerts ?? []).filter((entry) => entry.source === "question");
+  const last = recent.at(-1);
+  state.advisorLoop = recent.length || alerts.length
+    ? {
+        repeatCount: last?.repeatCount ?? 0,
+        recent,
+        lastOutputHash: last?.outputHash,
+        lastOutputText: last?.outputText,
+        lastContextHash: last?.contextHash,
+        lastSource: last?.source,
+        lastObservedAt: last?.at,
+        alerts,
+      }
+    : defaultAdvisorLoopState();
+}
+
+function clearDisabledAdvisorReplay(state: SessionState, mode: "manual" | "off"): boolean {
+  const hasAutomaticLoopState = Boolean(
+    state.advisorLoop?.recent.some((entry) => entry.source !== "question")
+    || state.advisorLoop?.alerts?.some((entry) => entry.source !== "question"),
+  );
+  const hadReplay = Boolean(
+    state.followUp
+    || state.reviewSignals.length
+    || state.reviewControl.pending
+    || state.reviewControl.running
+    || hasAutomaticLoopState,
+  );
+  if (!hadReplay) return false;
+
+  appendAdvisorDiagnostic("advisor_replay_cleared_disabled", {
+    mode,
+    task: state.lastTask,
+    followUp: Boolean(state.followUp),
+    reviewSignals: state.reviewSignals.length,
+    reviewPending: state.reviewControl.pending,
+  });
+  state.followUp = "";
+  state.followUpTask = undefined;
+  state.reviewSignals = [];
+  state.reviewSignalsTask = undefined;
+  state.reviewControl = {
+    ...state.reviewControl,
+    status: "consumed",
+    pending: false,
+    consumed: true,
+    running: false,
+    lastMaterialSignature: undefined,
+    lastDecision: "defer",
+    lastReason: `automatic advisor replay cleared (mode=${mode})`,
+    lastAppliedAt: new Date().toISOString(),
+  };
+  retainExplicitAdvisorLoopHistory(state);
+  if (state.router.review) {
+    state.router.review = {
+      ...state.router.review,
+      review: "off",
+      escalate: false,
+      reason: `advisor mode=${mode}`,
+    };
+  }
+  return true;
+}
+
 function reviewMaterialSignature(state: SessionState, delta: string, meta: ReviewMaterialMeta): string {
   const signals = normalizeReviewSignals(meta.materialSignals);
   return hash(
@@ -2086,6 +2155,14 @@ type AdvisorLoopEntry = {
   at: string;
 };
 
+type AdvisorLoopAlert = {
+  outputHash: string;
+  outputText: string;
+  familyHash: string;
+  source: string;
+  at: string;
+};
+
 type AdvisorLoopState = {
   repeatCount: number;
   recent: AdvisorLoopEntry[];
@@ -2094,10 +2171,30 @@ type AdvisorLoopState = {
   lastContextHash?: string;
   lastSource?: string;
   lastObservedAt?: string;
+  alerts?: AdvisorLoopAlert[];
 };
 
+function normalizeAdvisorLoopAlerts(raw: Partial<SessionState>["advisorLoop"]): AdvisorLoopAlert[] {
+  if (!raw || typeof raw !== "object") return [];
+  const candidate = raw as AdvisorLoopState & { alert?: unknown };
+  const entries = [
+    ...(Array.isArray(candidate.alerts) ? candidate.alerts : []),
+    candidate.alert && typeof candidate.alert === "object" ? candidate.alert as Partial<AdvisorLoopAlert> : undefined,
+  ];
+  return entries
+    .filter((entry): entry is Partial<AdvisorLoopAlert> => Boolean(entry?.outputHash && entry?.outputText && entry?.familyHash && entry?.source))
+    .map((entry) => ({
+      outputHash: String(entry.outputHash),
+      outputText: String(entry.outputText),
+      familyHash: String(entry.familyHash),
+      source: String(entry.source),
+      at: String(entry.at ?? ""),
+    }))
+    .slice(-8);
+}
+
 function defaultAdvisorLoopState(): AdvisorLoopState {
-  return { repeatCount: 0, recent: [] };
+  return { repeatCount: 0, recent: [], alerts: [] };
 }
 
 type ReviewMaterialMeta = {
@@ -2243,13 +2340,17 @@ function advisorLoopWarning(source: string, repeatCount: number): string {
   return `Advisor loop detected: ${source} repeated near-identical guidance across changing context ${repeatCount} times. Re-anchor to the latest brief before repeating it.`;
 }
 
+function advisorLoopAlertText(source: string, repeatCount: number, outputText: string): string {
+  return `${advisorLoopWarning(source, repeatCount)}\nLatest guidance retained for review:\n${outputText}`;
+}
+
 function advisorLoopFamilyHash(parts: string[]): string {
   return hash("advisor-loop-family", ...parts.map((part) => squish(part, 300)));
 }
 
-function observeAdvisorLoop(state: SessionState, source: string, familyHash: string, contextHash: string, outputText: string): { text: string; loopDetected: boolean; repeatCount: number } {
+export function observeAdvisorLoop(state: SessionState, source: string, familyHash: string, contextHash: string, outputText: string): { text: string; loopDetected: boolean; repeatCount: number; alertEmitted: boolean; suppressed: boolean } {
   const normalized = comparableAdvisorLoopText(outputText);
-  if (!normalized) return { text: outputText, loopDetected: false, repeatCount: 0 };
+  if (!normalized) return { text: outputText, loopDetected: false, repeatCount: 0, alertEmitted: false, suppressed: false };
 
   const outputHash = hash("advisor-loop-output", normalized);
   const previous = state.advisorLoop ?? defaultAdvisorLoopState();
@@ -2262,6 +2363,20 @@ function observeAdvisorLoop(state: SessionState, source: string, familyHash: str
   const loopDetected = repeatCount >= ADVISOR_LOOP_REPEAT_LIMIT;
   const now = new Date().toISOString();
   const outputSnapshot = sanitizeAdvisorText(outputText).trim().slice(0, 1200);
+  const previousAlerts = previous.alerts ?? [];
+  const previousAlert = previousAlerts.find((entry) => entry.source === source && entry.familyHash === familyHash);
+  const sameAlert = Boolean(previousAlert
+    && (previousAlert.outputHash === outputHash || isRepeatedAdvisorOutput(previousAlert.outputText, outputText)));
+  const alertEmitted = loopDetected && !sameAlert;
+  // Automatic review/check-in output should be silent after its one useful alert;
+  // explicit /pi-rogue-advisor questions continue to receive their answer.
+  const suppressRepeated = source !== "question";
+  const suppressed = loopDetected && sameAlert && suppressRepeated;
+  const alerts = alertEmitted
+    ? [...previousAlerts.filter((entry) => !(entry.source === source && entry.familyHash === familyHash)), { outputHash, outputText: outputSnapshot, familyHash, source, at: now }].slice(-8)
+    : !loopDetected
+      ? previousAlerts.filter((entry) => !(entry.source === source && entry.familyHash === familyHash))
+      : previousAlerts;
 
   state.advisorLoop = {
     repeatCount,
@@ -2271,16 +2386,25 @@ function observeAdvisorLoop(state: SessionState, source: string, familyHash: str
     lastContextHash: contextHash,
     lastSource: source,
     lastObservedAt: now,
+    alerts,
   };
 
-  if (loopDetected) {
+  if (alertEmitted) {
     appendAdvisorDiagnostic("advisor_loop_detected", { source, repeatCount, contextHash, familyHash, output: outputSnapshot });
   }
 
   return {
-    text: loopDetected ? advisorLoopWarning(source, repeatCount) : outputText,
+    text: suppressed
+      ? ""
+      : alertEmitted
+        ? advisorLoopAlertText(source, repeatCount, outputText)
+        : loopDetected && source !== "question"
+          ? advisorLoopWarning(source, repeatCount)
+          : outputText,
     loopDetected,
     repeatCount,
+    alertEmitted,
+    suppressed,
   };
 }
 
@@ -2302,15 +2426,17 @@ function sendAdvisorHint(pi: ExtensionAPI, state: SessionState, familyHash: stri
   const limitedActions = normalizeAdvisorActions(actions);
   const advisorText = advisorHandoffText(decision, cleanReason, cleanSummary, limitedActions);
   const loop = observeAdvisorLoop(state, "handoff", familyHash, contextHash, advisorText);
-  pi.sendMessage(
-    {
-      customType: "advisor:llm",
-      content: loop.text,
-      display: true,
-      details: { kind: "handoff", decision, reason: cleanReason, summary: cleanSummary, actions: limitedActions, loopDetected: loop.loopDetected, loopRepeatCount: loop.repeatCount },
-    },
-    { deliverAs: "followUp" },
-  );
+  if (loop.text) {
+    pi.sendMessage(
+      {
+        customType: "advisor:llm",
+        content: loop.text,
+        display: true,
+        details: { kind: "handoff", decision, reason: cleanReason, summary: cleanSummary, actions: limitedActions, loopDetected: loop.loopDetected, loopRepeatCount: loop.repeatCount },
+      },
+      { deliverAs: "followUp" },
+    );
+  }
   return loop;
 }
 
@@ -3823,6 +3949,16 @@ async function doReview(pi: ExtensionAPI, ctx: any, trigger: string, delta: stri
       ].join("\n"), timestamp: new Date().toISOString() },
     ] as any[];
     const completed = await completeWithModelFallback(ctx, config, REVIEW_SYSTEM, msgs, { maxTokens: 400, reasoning: "low" as ThinkingLevel, maxAttempts: 2 });
+    const latestConfig = loadConfig();
+    if (latestConfig.mode === "manual" || latestConfig.mode === "off") {
+      clearDisabledAdvisorReplay(state, latestConfig.mode);
+      finalDecision = "defer";
+      finalReason = `review discarded because advisor mode=${latestConfig.mode}`;
+      markReviewApplied(state, signature, trigger, finalDecision, finalReason, true);
+      persistReviewState(state, true);
+      finalized = true;
+      return;
+    }
     if (completed?.rateLimited) {
       recordRateLimit(state, ctx, { reason: completed.text || "advisor rate limit (429)", retryAfterSeconds: completed.retryAfterSeconds });
       finalDecision = "defer";
@@ -3895,7 +4031,7 @@ async function doReview(pi: ExtensionAPI, ctx: any, trigger: string, delta: stri
       const intendedFollowUp = [sanitizeAdvisorText(parsed.summary), ...parsed.taskActions].filter(Boolean).join(" — ");
       const hint = sendAdvisorHint(pi, state, reviewFamilyHash, reviewContextHash, decision, finalReason, parsed.summary || "", parsed.taskActions);
       state.followUp = hint.loopDetected ? hint.text : intendedFollowUp;
-      state.followUpTask = reviewTask;
+      state.followUpTask = state.followUp ? reviewTask : undefined;
     } else {
       state.followUp = "";
       state.followUpTask = undefined;
@@ -3904,15 +4040,22 @@ async function doReview(pi: ExtensionAPI, ctx: any, trigger: string, delta: stri
     const advisoryText = buildAdvisorySignalsBlock(reviewTask, parsed.advisorySignals, parsed.pivot);
     if (advisoryText) {
       const advisoryLoop = observeAdvisorLoop(state, "review-signals", reviewFamilyHash, reviewContextHash, advisoryText);
-      state.reviewSignals = [advisoryLoop.text];
-      state.reviewSignalsTask = reviewTask;
-      sendAdvisorAnswer(pi, advisoryLoop.text);
+      if (advisoryLoop.text) {
+        state.reviewSignals = [advisoryLoop.text];
+        state.reviewSignalsTask = reviewTask;
+        sendAdvisorAnswer(pi, advisoryLoop.text);
+      } else {
+        // A repeated automatic signal has already been surfaced once. Do not
+        // re-inject the stale signal into the next prompt or emit another UI message.
+        state.reviewSignals = [];
+        state.reviewSignalsTask = undefined;
+      }
     } else {
       state.reviewSignals = [];
       state.reviewSignalsTask = undefined;
     }
 
-    markReviewApplied(state, signature, trigger, finalDecision, finalReason, !hasTaskActions);
+    markReviewApplied(state, signature, trigger, finalDecision, finalReason, !state.followUp);
     persistReviewState(state, true);
     finalized = true;
   } finally {
@@ -4052,7 +4195,14 @@ export function registerAdvisor(pi: ExtensionAPI): void {
       return { systemPrompt: event.systemPrompt };
     }
     const hasFollowUp = Boolean(state.followUp);
-    if ((isAdvisorAutoRunSuppressed(state, state.turns) && !hasFollowUp) || cfg.mode === "off" || cfg.mode === "manual") {
+    if (cfg.mode === "off" || cfg.mode === "manual") {
+      if (clearDisabledAdvisorReplay(state, cfg.mode)) {
+        saveState(state);
+      }
+      setPiRogueStatus(ctx, cfg, state);
+      return { systemPrompt: event.systemPrompt };
+    }
+    if (isAdvisorAutoRunSuppressed(state, state.turns) && !hasFollowUp) {
       return { systemPrompt: event.systemPrompt };
     }
     setPiRogueStatus(ctx, cfg, state);
@@ -4110,8 +4260,14 @@ export function registerAdvisor(pi: ExtensionAPI): void {
   // ── Post-review (turn_end) ─────────────────────────────────────────────
   pi.on("turn_end", async (event: any, ctx: any) => {
     const cfg = loadConfig();
-    if (cfg.mode === "off") return;
+    if (cfg.mode === "off") {
+      const disabledState = loadState(ctx);
+      if (clearDisabledAdvisorReplay(disabledState, cfg.mode)) saveState(disabledState);
+      setPiRogueStatus(ctx, cfg, disabledState);
+      return;
+    }
     const state = loadState(ctx);
+    if (cfg.mode === "manual") clearDisabledAdvisorReplay(state, cfg.mode);
     const suppressedThisTurn = isAdvisorAutoRunSuppressedForTurnContext(state, state.turns);
     const toolResults = event.toolResults || [];
     const tools = toolResults.map((t: any) => String(t?.toolName || t?.name || "tool"));
@@ -4145,8 +4301,14 @@ export function registerAdvisor(pi: ExtensionAPI): void {
   // ── Post-review (agent_end) ────────────────────────────────────────────
   pi.on("agent_end", async (event: any, ctx: any) => {
     const cfg = loadConfig();
-    if (cfg.mode === "off") return;
+    if (cfg.mode === "off") {
+      const disabledState = loadState(ctx);
+      if (clearDisabledAdvisorReplay(disabledState, cfg.mode)) saveState(disabledState);
+      setPiRogueStatus(ctx, cfg, disabledState);
+      return;
+    }
     const state = loadState(ctx);
+    if (cfg.mode === "manual") clearDisabledAdvisorReplay(state, cfg.mode);
     const msgs = (event.messages || []).filter((m: any) => m.role === "assistant" || m.role === "toolResult");
     const last = msgs[msgs.length - 1];
     const delta = contentText(last?.content) || "(none)";

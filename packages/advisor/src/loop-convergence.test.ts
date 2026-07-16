@@ -5,7 +5,7 @@ import { dirname } from "node:path";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { completeSimple } from "@earendil-works/pi-ai/compat";
-import { advisorSessionStatePath, registerAdvisor } from "./extension.js";
+import { advisorSessionStatePath, observeAdvisorLoop, registerAdvisor } from "./extension.js";
 import * as advisorRouter from "./router.js";
 
 const testHome = vi.hoisted(() => `/tmp/pi-rogue-advisor-loop-convergence-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2)}`);
@@ -572,11 +572,41 @@ describe("advisor two-agent convergence", () => {
     bumpContext("third");
     await commands["pi-rogue-advisor"].handler("should I keep going?", ctx);
 
-    const lastMessage = sendMessageMock.mock.calls.at(-1)?.[0];
-    expect(String(lastMessage?.content)).toContain("Advisor loop detected");
-    expect(String(lastMessage?.content)).not.toContain("Keep the current approach");
+    const alertMessage = sendMessageMock.mock.calls.at(-1)?.[0];
+    expect(String(alertMessage?.content)).toContain("Advisor loop detected");
+    expect(String(alertMessage?.content)).toContain("Keep the current approach");
+
+    bumpContext("fourth");
+    await commands["pi-rogue-advisor"].handler("should I keep going?", ctx);
+    const repeatedQuestionMessage = sendMessageMock.mock.calls.at(-1)?.[0];
+    expect(String(repeatedQuestionMessage?.content)).toContain("Keep the current approach");
+    expect(String(repeatedQuestionMessage?.content)).not.toContain("Advisor loop detected");
     expect(readFileSync(ADVISOR_DIAGNOSTICS_PATH, "utf8")).toContain("advisor_loop_detected");
-    expect(completeSimpleMock).toHaveBeenCalledTimes(3);
+    expect(completeSimpleMock).toHaveBeenCalledTimes(4);
+  });
+
+  it("alerts once for repeated automatic review signals and retains useful latest guidance", () => {
+    const state: any = {};
+    const family = "same-review-family";
+    const output = "Inspect the latest validation result before changing the current approach.";
+
+    const first = observeAdvisorLoop(state, "review-signals", family, "context-1", output);
+    const second = observeAdvisorLoop(state, "review-signals", family, "context-2", output);
+    const alert = observeAdvisorLoop(state, "review-signals", family, "context-3", output);
+    const suppressed = observeAdvisorLoop(state, "review-signals", family, "context-4", output);
+
+    expect(first.text).toBe(output);
+    expect(second.text).toBe(output);
+    expect(alert.text).toContain("Advisor loop detected");
+    expect(alert.text).toContain(output);
+    expect(alert.alertEmitted).toBe(true);
+    expect(suppressed.text).toBe("");
+    expect(suppressed.suppressed).toBe(true);
+    expect(suppressed.alertEmitted).toBe(false);
+    expect(readFileSync(ADVISOR_DIAGNOSTICS_PATH, "utf8").match(/advisor_loop_detected/g)).toHaveLength(1);
+
+    const newEvidence = observeAdvisorLoop(state, "review-signals", family, "context-5", "A new validation failure requires a focused repair.");
+    expect(newEvidence.text).toContain("new validation failure");
   });
 
   it("does not carry manual loop detection across unrelated tasks", async () => {
@@ -1882,10 +1912,36 @@ describe("advisor two-agent convergence", () => {
   });
 
   it("keeps manual mode free of automatic post-turn and agent-end model calls", async () => {
+    const preflight = handlers.before_agent_start;
     const turnEnd = handlers.turn_end;
     const agentEnd = handlers.agent_end;
     writeFileSync(ADVISOR_CONFIG_PATH, JSON.stringify({ mode: "manual", review: "strict", checkins: "off", checkinIntervalMinutes: 30 }), "utf8");
     await handlers.session_start?.[0]?.({}, ctx);
+
+    const stale = readAdvisorState();
+    stale.lastTask = "finish the current task";
+    stale.followUp = "Old automatic follow-up";
+    stale.followUpTask = stale.lastTask;
+    stale.reviewSignals = ["Old automatic signal"];
+    stale.reviewSignalsTask = stale.lastTask;
+    stale.reviewControl.pending = true;
+    stale.reviewControl.consumed = false;
+    stale.advisorLoop = {
+      repeatCount: 3,
+      recent: [
+        { outputHash: "old", outputText: "old", contextHash: "old", familyHash: "old", source: "review-signals", repeatCount: 3, at: new Date().toISOString() },
+        { outputHash: "manual", outputText: "manual answer", contextHash: "manual", familyHash: "manual", source: "question", repeatCount: 1, at: new Date().toISOString() },
+      ],
+    };
+    writeFileSync(ADVISOR_STATE_PATH, JSON.stringify(stale, null, 2), "utf8");
+
+    await preflight![0]({ systemPrompt: "SYS", prompt: "continue the current task" }, ctx);
+    const cleared = readAdvisorState();
+    expect(cleared.followUp).toBe("");
+    expect(cleared.reviewSignals).toEqual([]);
+    expect(cleared.reviewControl.pending).toBe(false);
+    expect(cleared.advisorLoop.recent.map((entry: any) => entry.source)).toEqual(["question"]);
+    expect(readFileSync(ADVISOR_DIAGNOSTICS_PATH, "utf8")).toContain("advisor_replay_cleared_disabled");
 
     await turnEnd![0]({ toolResults: [{ toolName: "edit" }], message: { role: "assistant", content: "Edited a file." } }, ctx);
     await agentEnd![0]({ messages: [{ role: "toolResult", content: "edit tool changed file" }, { role: "assistant", content: "Done." }] }, ctx);
