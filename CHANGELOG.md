@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.3.32
+
+### Summary
+
+This patch release fixes stale Advisor review replay and preserves useful advice while keeping the Advisor Board available.
+
+### Changes
+
+- Suppress repeated automatic review-signals and handoff alerts per source/family while retaining the latest useful guidance.
+- Clear queued automatic Advisor replay when switching to manual or off mode, including in-flight results that finish after the transition.
+- Preserve explicit manual-question answers and their loop history.
+- Keep Board, Head-of-Board, and specialist paths independent from automatic loop suppression.
+
+### Validation
+
+- Advisor convergence and Board suites: 105 tests passed.
+- Advisor TypeScript check passed.
+- Required Node.js 22.19.0 CI passed on PR #366.
+- Codex review found no actionable regressions.
+
 ## 0.3.31
 
 ### Summary
