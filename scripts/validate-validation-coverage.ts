@@ -18,6 +18,7 @@ const tests = walk(path.join(root, "packages")).filter((file) => file.endsWith("
 const scripts = walk(path.join(root, "scripts")).filter((file) => file.endsWith(".ts"));
 const rootPackage = JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf8")) as { scripts?: Record<string, string> };
 const vitestConfig = fs.readFileSync(path.join(root, "vitest.config.ts"), "utf8");
+const checkWorkflow = fs.readFileSync(path.join(root, ".github", "workflows", "check.yml"), "utf8");
 const listedScriptFiles = new Set(
   execFileSync(path.join(root, "node_modules", ".bin", "tsc"), ["-p", "tsconfig.scripts.json", "--noEmit", "--listFilesOnly"], { encoding: "utf8" })
     .split(/\r?\n/)
@@ -27,6 +28,10 @@ const listedScriptFiles = new Set(
 
 const failures: string[] = [];
 if (rootPackage.scripts?.test !== "vitest run") failures.push("root test script must be exactly `vitest run` so recursive Vitest discovery is authoritative");
+if ((checkWorkflow.match(/\bnpm test\b/g) ?? []).length !== 1) failures.push("check workflow must invoke `npm test` exactly once");
+if (/\b(?:npx\s+)?vitest\s+run\b/.test(checkWorkflow)) failures.push("check workflow must not invoke Vitest separately from the authoritative `npm test` step");
+if (!checkWorkflow.includes("--reporter=json --outputFile=vitest-results.json")) failures.push("check workflow must persist the authoritative Vitest JSON report for its summary");
+if (!checkWorkflow.includes("numPassedTests")) failures.push("check workflow summary must consume the authoritative Vitest JSON report");
 if (!vitestConfig.includes('include: ["packages/**/src/**/*.test.ts"]')) failures.push("vitest.config.ts must recursively include packages/**/src/**/*.test.ts");
 if (/exclude:\s*\[[^\]]*\.test\.ts/s.test(vitestConfig.split("coverage:")[0] || "")) failures.push("Vitest test discovery must not exclude checked-in test files");
 for (const test of tests) {
