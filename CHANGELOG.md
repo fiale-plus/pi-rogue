@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.3.34
+
+### Summary
+
+This release adds Pi.dev listing artwork to the canonical Pi-Rogue package.
+
+### Changes
+
+- Add the optimized Pi-Rogue artwork at `docs/images/pi-rogue-pi-dev.png`.
+- Publish the artwork through the `pi.image` package manifest field using the repository's public raw GitHub URL.
+
+### Validation
+
+- `npm ci`
+- `npm run check`
+- `npm test`
+- Canonical package metadata and public raw image URL verified.
+
 ## 0.3.33
 
 ### Summary
