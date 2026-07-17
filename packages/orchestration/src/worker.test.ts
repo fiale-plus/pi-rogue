@@ -46,6 +46,7 @@ describe("execution worker policy", () => {
     registerWorker({
       on: (event: string, handler: Function) => handlers.set(event, handler),
       registerCommand: (name: string) => commands.push(name),
+      registerTool: () => undefined,
     } as any);
     expect(handlers.has("before_agent_start")).toBe(true);
     expect(commands).toEqual([]);

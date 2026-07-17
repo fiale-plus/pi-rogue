@@ -1,1 +1,20 @@
-export { default, registerAutoresearch, registerGoal, registerLoop, registerOrchestration } from "../src/index.js";
+export {
+  default,
+  registerAutoresearch,
+  registerGoal,
+  registerLoop,
+  registerOrchestration,
+  clearWorker,
+  formatWorkerState,
+  handleWorkerCommand,
+  readWorkerState,
+  workerArgumentCompletions,
+  workerSystemPrompt,
+  classifyWorkerOutcome,
+  clearWorkerRequestTracking,
+  recordWorkerRequest,
+  recordWorkerResult,
+  dispatchWorker,
+  resolveConfiguredWorkerModel,
+} from "../src/index.js";
+export type { WorkerOutcome, WorkerTelemetryEvent } from "../src/index.js";

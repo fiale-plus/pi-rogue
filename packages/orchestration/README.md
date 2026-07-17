@@ -62,3 +62,6 @@ npm install --workspace packages/orchestration
 - Stale research state is cleared when `goal` or `loop` are cleared.
 - Worker requests are session-scoped: the requested model is written to per-session state and only applies while enabled. The request informs the frontier controller; it does not dispatch a worker or validate provider availability by itself.
 - Worker system prompt enforces bounded-task discipline: explicit tools, paths, timeout, turn, and tool budgets. Worker output is untrusted evidence requiring frontier validation.
+- `worker_dispatch` invokes the installed pi-subagents RPC bridge only after explicit opt-in and configured-model preflight; it uses detached async execution with explicit timeout/turn/tool defaults and returns the run identifier for follow-up.
+- `worker_review_output` runs the read-only Advisor Board over a completed worker summary. It never dispatches, steers, changes policy, or calls a model.
+- Worker request/result telemetry reuses the router subagent-ledger schema with optional lifecycle outcome and elapsed-time fields; router behavior remains observe-only.

@@ -12,6 +12,7 @@ import type {
 export const SUBAGENT_DECISION_SCHEMA = "pi-router.subagent-decision.v1" as const;
 export const SUBAGENT_LEDGER_EVENT_SCHEMA = "pi-router.subagent-ledger-event.v1" as const;
 export const EVIDENCE_SUMMARY_SCHEMA = "pi-router.evidence-summary.v1" as const;
+export type SubagentOutcome = "success" | "timeout" | "failure" | "abandoned" | "partial";
 
 export interface EvidenceSummaryItem {
   kind: "file" | "command" | "session" | "manual";
@@ -69,6 +70,10 @@ export interface SubagentLedgerEvent {
   useful: boolean | null;
   causedRework: boolean | null;
   returnContract: SubagentReturnContract;
+  /** Optional lifecycle metadata for execution-worker telemetry. */
+  phase?: "request" | "result";
+  outcome?: SubagentOutcome | null;
+  elapsedMs?: number | null;
 }
 
 function clampConfidence(value: number): number {
@@ -161,6 +166,9 @@ export function buildSubagentLedgerEvent(options: Omit<SubagentLedgerEvent, "sch
     useful: options.useful,
     causedRework: options.causedRework,
     returnContract: options.returnContract,
+    ...(options.phase !== undefined ? { phase: options.phase } : {}),
+    ...(options.outcome !== undefined ? { outcome: options.outcome } : {}),
+    ...(options.elapsedMs !== undefined ? { elapsedMs: options.elapsedMs } : {}),
   };
 }
 

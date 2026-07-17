@@ -33,6 +33,8 @@
   },
   "dependencies": {
     "@fiale-plus/pi-core": "^0.1.0",
+    "@fiale-plus/pi-rogue-advisor": "^0.1.0",
+    "@fiale-plus/pi-rogue-router": "^0.1.0",
     "typebox": "^1.1.24"
   },
   "publishConfig": {

@@ -1,4 +1,7 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { reviewWorkerResult } from "@fiale-plus/pi-rogue-advisor";
+import { Type } from "typebox";
+import { dispatchWorker } from "./worker-dispatch.js";
 import { readSessionJson, writeSessionJson } from "./state.js";
 
 const FEATURE = "orchestration";
@@ -95,6 +98,48 @@ export function workerSystemPrompt(ctx: any): string | undefined {
 }
 
 export function registerWorker(pi: ExtensionAPI): void {
+  const registerTool = (pi as any).registerTool as ((tool: unknown) => void) | undefined;
+  registerTool?.call(pi, {
+    name: "worker_review_output",
+    label: "Worker Output Review",
+    description: "Run the read-only Advisor Board review over a completed worker result. This never dispatches, steers, or changes policy.",
+    parameters: Type.Object({
+      id: Type.String(),
+      role: Type.String(),
+      verdict: Type.Union([Type.Literal("green"), Type.Literal("red"), Type.Literal("unknown")]),
+      summary: Type.String(),
+      confidence: Type.Optional(Type.Number({ minimum: 0, maximum: 1 })),
+    }),
+    async execute(_id: string, params: any) {
+      const result = reviewWorkerResult(params);
+      return { content: [{ type: "text", text: JSON.stringify({ decision: result.decision, risks: result.risks, evidence: result.ledger.evidence }, null, 2) }], details: result };
+    },
+  });
+
+  registerTool?.call(pi, {
+    name: "worker_dispatch",
+    label: "Worker Dispatch",
+    description: "Dispatch one bounded task to the explicitly selected execution-worker model. The frontier remains controller and must review the result.",
+    parameters: Type.Object({
+      task: Type.String({ description: "Bounded worker task with a concrete output contract." }),
+      model: Type.Optional(Type.String({ description: "Optional configured provider/model override; defaults to the session request." })),
+      agent: Type.Optional(Type.String({ description: "Optional execution agent name; defaults to local-worker-poc." })),
+      cwd: Type.Optional(Type.String({ description: "Optional working directory." })),
+      timeoutMs: Type.Optional(Type.Integer({ minimum: 1, description: "Hard worker wall-clock deadline in milliseconds. Defaults to 900000." })),
+      turnBudget: Type.Optional(Type.Object({ maxTurns: Type.Integer({ minimum: 1 }), graceTurns: Type.Optional(Type.Integer({ minimum: 0 })) })),
+      toolBudget: Type.Optional(Type.Object({ hard: Type.Integer({ minimum: 1 }), soft: Type.Optional(Type.Integer({ minimum: 1 })), block: Type.Optional(Type.Unsafe({ anyOf: [{ type: "array", items: { type: "string" } }, { const: "*" }] })) })),
+    }),
+    async execute(_id: string, params: any, signal: AbortSignal, _onUpdate: unknown, ctx: any) {
+      const result = await dispatchWorker(pi, ctx, {
+        ...params,
+        timeoutMs: params.timeoutMs ?? 900_000,
+        turnBudget: params.turnBudget ?? { maxTurns: 40, graceTurns: 5 },
+        toolBudget: params.toolBudget ?? { soft: 60, hard: 80 },
+      }, signal);
+      return { content: [{ type: "text", text: result.text || `Worker started: ${result.runId ?? result.requestId}` }], details: result };
+    },
+  });
+
   pi.on("before_agent_start", async (event, ctx) => {
     const policy = workerSystemPrompt(ctx);
     if (!policy) return { systemPrompt: event.systemPrompt };
