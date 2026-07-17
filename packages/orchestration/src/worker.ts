@@ -135,8 +135,11 @@ export function registerWorker(pi: ExtensionAPI): void {
         timeoutMs: params.timeoutMs ?? 900_000,
         turnBudget: params.turnBudget ?? { maxTurns: 40, graceTurns: 5 },
         toolBudget: params.toolBudget ?? { soft: 60, hard: 80 },
-      }, signal);
-      return { content: [{ type: "text", text: result.text || `Worker started: ${result.runId ?? result.requestId}` }], details: result };
+      }, signal, {
+        waitForCompletion: true,
+        telemetry: { parentSessionId: ctx?.sessionManager?.getSessionId?.() ?? "unknown" },
+      });
+      return { content: [{ type: "text", text: result.text || `Worker completed: ${result.runId ?? result.requestId}` }], details: result };
     },
   });
 

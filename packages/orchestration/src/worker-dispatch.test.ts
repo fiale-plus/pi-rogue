@@ -1,10 +1,12 @@
 import { randomUUID } from "node:crypto";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { dispatchWorker, resolveConfiguredWorkerModel } from "./worker-dispatch.js";
 import { writeSessionJson } from "./state.js";
+
+const RPC_REPLY_PREFIX = "subagents:rpc:v1:reply:";
 
 /* ── helpers ───────────────────────────────────────────────────────────── */
 
@@ -363,6 +365,57 @@ describe("dispatchWorker", () => {
     cleanupCtx(ctx);
   });
 
+  it("records request and dispatch-result telemetry", async () => {
+    const eventBus = createMockEventBus();
+    const registry = createMockModelRegistry(["local/qwen3.6-35b-a3b"]);
+    const pi = makeFakePI(eventBus);
+    const ctx = makeCtxWithTempSession(registry);
+    enableWorker(ctx, "local/qwen3.6-35b-a3b");
+    const ledgerPath = join(tmpdir(), `worker-ledger-${randomUUID()}.jsonl`);
+
+    const promise = dispatchWorker(pi, ctx, { task: "telemetry task" }, undefined, {
+      telemetry: { parentSessionId: "parent-1", ledgerPath },
+    });
+    const spawn = eventBus.emitted[0].data as any;
+    eventBus.emit(`${RPC_REPLY_PREFIX}${spawn.requestId}`, {
+      requestId: spawn.requestId,
+      success: true,
+      data: { text: "started", details: { runId: "run-telemetry" } },
+    });
+    await expect(promise).resolves.toMatchObject({ runId: "run-telemetry" });
+    const events = readFileSync(ledgerPath, "utf8").trim().split("\n").map((line) => JSON.parse(line));
+    expect(events).toHaveLength(2);
+    expect(events.map((event) => event.phase)).toEqual(["request", "result"]);
+    expect(events[1].outcome).toBe("partial");
+    cleanupCtx(ctx);
+  });
+
+  it("waits for a terminal status when requested", async () => {
+    const eventBus = createMockEventBus();
+    const registry = createMockModelRegistry(["local/qwen3.6-35b-a3b"]);
+    const pi = makeFakePI(eventBus);
+    const ctx = makeCtxWithTempSession(registry);
+    enableWorker(ctx, "local/qwen3.6-35b-a3b");
+
+    const promise = dispatchWorker(pi, ctx, { task: "bounded task" }, undefined, { waitForCompletion: true });
+    const spawn = eventBus.emitted[0].data as any;
+    eventBus.emit(`${RPC_REPLY_PREFIX}${spawn.requestId}`, {
+      requestId: spawn.requestId,
+      success: true,
+      data: { text: "started", details: { runId: "run-1", asyncDir: "/tmp/run-1" } },
+    });
+    const status = eventBus.emitted.find((entry) => (entry.data as any).method === "status")?.data as any;
+    expect(status.params.runId).toBe("run-1");
+    eventBus.emit(`${RPC_REPLY_PREFIX}${status.requestId}`, {
+      requestId: status.requestId,
+      success: true,
+      data: { text: "completed output", details: { state: "complete" } },
+    });
+
+    await expect(promise).resolves.toMatchObject({ runId: "run-1", text: "completed output" });
+    cleanupCtx(ctx);
+  });
+
   it("rejects on timeout when no reply arrives", async () => {
     const eventBus = createMockEventBus();
     const registry = createMockModelRegistry(["local/qwen3.6-35b-a3b"]);
@@ -401,9 +454,10 @@ describe("dispatchWorker", () => {
     controller.abort();
 
     await expect(promise).rejects.toThrow("Worker dispatch cancelled");
-    // No stop emitted because runId is not yet known
+    // Stop targets the deterministic RPC execution id even before runId is acknowledged.
     const stopEvents = eventBus.emitted.filter((e) => e.data && (e.data as any).method === "stop");
-    expect(stopEvents).toHaveLength(0);
+    expect(stopEvents).toHaveLength(1);
+    expect((stopEvents[0].data as any).params.id).toMatch(/^rpc-spawn-/);
 
     cleanupCtx(ctx);
   });
