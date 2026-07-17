@@ -7,6 +7,8 @@ export type ContextArtifactKind =
   | "memory_note";
 
 export type ContextArtifactTier = "hot" | "warm" | "cold";
+/** Legacy persisted artifact kinds remain queryable but cannot be newly published. */
+export type ContextArtifactLookupKind = ContextArtifactKind | "fusion_result";
 
 export interface ContextArtifactInput {
   sessionId: string;
@@ -53,7 +55,7 @@ export interface ContextLookupQuery {
   id?: string;
   handle?: string;
   sessionId?: string;
-  kind?: ContextArtifactKind;
+  kind?: ContextArtifactLookupKind;
   tag?: string;
   path?: string;
   commandPrefix?: string;

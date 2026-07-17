@@ -1406,7 +1406,7 @@ export async function registerContextBrokerBeta(pi: ExtensionAPI, options: Conte
       text: Type.Optional(Type.String({ description: "Current-session text search over broker summaries and indexed payload text" })),
       path: Type.Optional(Type.String({ description: "File or directory path filter" })),
       tag: Type.Optional(Type.String({ description: "Artifact tag filter" })),
-      kind: Type.Optional(Type.String({ enum: ["tool_output", "diff", "file_snapshot", "subagent_result", "advisor_brief", "memory_note"] })),
+      kind: Type.Optional(Type.String({ enum: ["tool_output", "diff", "file_snapshot", "subagent_result", "advisor_brief", "memory_note", "fusion_result"] })),
       tier: Type.Optional(Type.String({ enum: ["hot", "warm", "cold"] })),
       limit: Type.Optional(Type.Number({ minimum: 1, maximum: 10, description: "Maximum artifacts to return" })),
     }),

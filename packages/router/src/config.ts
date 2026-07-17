@@ -206,13 +206,40 @@ function normalizeRouterMode(value: unknown): RouterMode {
   return value === "auto_model" || value === "auto" ? "auto_model" : "observe";
 }
 
+function migrateRemovedFusionTarget(value: unknown, fallback: string): string {
+  const target = typeof value === "string" ? value : "";
+  return target.startsWith("fusion/") ? fallback : target || fallback;
+}
+
+function migrateRouterProfile(name: string, profile: RouterProfile): RouterProfile {
+  const fallback = DEFAULT_ROUTER_CONFIG.profiles["all-smart"];
+  return {
+    ...profile,
+    worker: migrateRemovedFusionTarget(profile.worker, fallback.worker),
+    smart: migrateRemovedFusionTarget(profile.smart, fallback.smart),
+    teacher: migrateRemovedFusionTarget(profile.teacher, fallback.teacher),
+    reviewer: migrateRemovedFusionTarget(profile.reviewer, fallback.reviewer),
+    ...(profile.main ? { main: migrateRemovedFusionTarget(profile.main, fallback.main ?? fallback.smart) } : {}),
+    ...(profile.explore ? { explore: migrateRemovedFusionTarget(profile.explore, fallback.explore ?? fallback.worker) } : {}),
+    ...(profile.debug_diagnose ? { debug_diagnose: migrateRemovedFusionTarget(profile.debug_diagnose, fallback.debug_diagnose ?? fallback.smart) } : {}),
+    ...(profile.review ? { review: migrateRemovedFusionTarget(profile.review, fallback.review ?? fallback.reviewer) } : {}),
+    ...(profile.verify ? { verify: migrateRemovedFusionTarget(profile.verify, fallback.verify ?? fallback.worker) } : {}),
+  };
+}
+
 export function normalizeRouterConfig(raw: Partial<RouterConfig> | null | undefined): RouterConfig {
-  const mergedProfiles = { ...DEFAULT_ROUTER_CONFIG.profiles, ...(raw?.profiles ?? {}) };
+  const rawProfiles = { ...(raw?.profiles ?? {}) } as Record<string, RouterProfile>;
+  if (rawProfiles["fusion-smart"] && !rawProfiles["all-smart"]) rawProfiles["all-smart"] = rawProfiles["fusion-smart"];
+  delete rawProfiles["fusion-smart"];
+  const mergedProfiles = Object.fromEntries(
+    Object.entries({ ...DEFAULT_ROUTER_CONFIG.profiles, ...rawProfiles }).map(([name, profile]) => [name, migrateRouterProfile(name, profile)]),
+  ) as Record<string, RouterProfile>;
   const profileOrder = Array.isArray(raw?.profileOrder) && raw.profileOrder.length > 0
-    ? raw.profileOrder.filter((name) => typeof name === "string" && mergedProfiles[name])
+    ? raw.profileOrder.map((name) => name === "fusion-smart" ? "all-smart" : name).filter((name, index, order) => typeof name === "string" && mergedProfiles[name] && order.indexOf(name) === index)
     : DEFAULT_ROUTER_CONFIG.profileOrder;
-  const activeProfile = raw?.activeProfile && mergedProfiles[raw.activeProfile]
-    ? raw.activeProfile
+  const requestedActiveProfile = raw?.activeProfile === "fusion-smart" ? "all-smart" : raw?.activeProfile;
+  const activeProfile = requestedActiveProfile && mergedProfiles[requestedActiveProfile]
+    ? requestedActiveProfile
     : profileOrder[0] ?? DEFAULT_ROUTER_CONFIG.activeProfile;
   const print = raw?.print === "all" || raw?.print === "off" || raw?.print === "mismatch_only" ? raw.print : DEFAULT_ROUTER_CONFIG.print;
   return {

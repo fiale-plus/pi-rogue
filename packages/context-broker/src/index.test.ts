@@ -51,6 +51,21 @@ describe("createInMemoryContextBroker", () => {
     expect(broker.lookup({ sessionId: "s2", kind: "tool_output" })).toEqual([]);
   });
 
+  it("keeps legacy fusion_result artifacts queryable for upgrades", () => {
+    const broker = createInMemoryContextBroker({ briefBytes: 500 });
+    const artifact = broker.publish({
+      sessionId: "s",
+      kind: "fusion_result",
+      payload: JSON.stringify({ responses: ["legacy panel output"] }),
+      summary: "legacy Fusion result retained for lookup",
+      tags: ["legacy"],
+      tier: "warm",
+    } as any);
+
+    expect(broker.lookup({ sessionId: "s", kind: "fusion_result" })).toEqual([artifact]);
+    expect(broker.renderBrief({ sessionId: "s", kind: "fusion_result" })).toContain("legacy Fusion result retained for lookup");
+  });
+
   it("uses a metadata-only summary when callers omit summaries", () => {
     const broker = createInMemoryContextBroker({ briefBytes: 500 });
     const artifact = broker.publish({

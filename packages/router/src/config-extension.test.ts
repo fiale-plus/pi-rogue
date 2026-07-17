@@ -9,6 +9,7 @@ import {
   ensureRouterConfig,
   loadRouterConfig,
   loadRouterState,
+  normalizeRouterConfig,
   routerConfigPath,
   routerEventsPath,
   routerGlobalConfigPath,
@@ -155,6 +156,30 @@ describe("router config profiles", () => {
     );
     expect(activeProfile(config).worker).toBe("openai-codex/gpt-5.5");
     expect(readFileSync(routerConfigPath(ctx), "utf8")).toContain("spark-smart");
+  });
+
+  it("migrates removed Fusion profiles and targets to direct models", () => {
+    const config = normalizeRouterConfig({
+      enabled: true,
+      mode: "auto_model",
+      activeProfile: "fusion-smart",
+      profileOrder: ["fusion-smart", "quick"],
+      profiles: {
+        "fusion-smart": { worker: "fusion/old", smart: "fusion/old", teacher: "fusion/old", reviewer: "fusion/old" },
+        quick: { worker: "fusion/quick", smart: "fusion/quick", teacher: "fusion/quick", reviewer: "fusion/quick" },
+      },
+    });
+
+    expect(config.activeProfile).toBe("all-smart");
+    expect(config.profileOrder).toEqual(["all-smart", "quick"]);
+    expect(config.profiles["fusion-smart"]).toBeUndefined();
+    expect(config.profiles["all-smart"]).toMatchObject({
+      worker: "openai-codex/gpt-5.5",
+      smart: "openai-codex/gpt-5.5",
+      teacher: "openai-codex/gpt-5.5",
+      reviewer: "openai-codex/gpt-5.5",
+    });
+    expect(config.profiles.quick.worker).toBe("openai-codex/gpt-5.5");
   });
 
   it("reads and writes user-root config only", () => {

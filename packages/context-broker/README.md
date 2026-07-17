@@ -6,7 +6,7 @@ This package contains the executable in-memory bounded broker implementation:
 
 - `createInMemoryContextBroker()` stores artifacts behind stable `ctx://...` handles.
 - Lookups support handle, session, kind, tag, path, command prefix, branch, tier, and text filters.
-- Supported artifact kinds include tool outputs, diffs, file snapshots, subagent results, advisor briefs, and memory notes.
+- New artifact kinds include tool outputs, diffs, file snapshots, subagent results, advisor briefs, and memory notes. The legacy `fusion_result` kind remains available for read-only lookup of persisted artifacts from older installations.
 - Omitted summaries become metadata-only placeholders, keeping raw payloads out of prompt briefs by default.
 - Artifacts are classified as hot/warm/cold on publish; prompt briefs render hot first, warm second, and exclude cold unless explicitly queried.
 - Aging cools unpinned artifacts from hot to warm and from warm to cold; compaction remains cleanup/removal, not a separate cooling trigger.
