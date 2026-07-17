@@ -1,6 +1,6 @@
 # Qwen execution-worker failure triage
 
-This note documents how to distinguish a local Qwen inference failure from a Pi subagent-runner budget outcome. It is an operational guardrail; Pi-Rogue does not own the llama.cpp server lifecycle or the installed `pi-subagents` runner.
+This note documents how to distinguish a local Qwen inference failure from a Pi subagent-runner budget outcome. It is an operational guardrail; Pi-Rogue does not own the llama.cpp server lifecycle or the installed `pi-subagents` runner. The actual machine-readable runner outcome fix belongs upstream; Pi-Rogue tracks the integration and operating contract here.
 
 ## Diagnosis checklist
 
@@ -52,6 +52,6 @@ This note documents how to distinguish a local Qwen inference failure from a Pi 
 
 ## Current incident
 
-The July 17, 2026 investigation reached the `pi-subagents` tool budget at 30 calls (hard limit 45). The local server independently passed health, exact-model, and `OK` smoke checks. The incident therefore does not support a turns-quota or current llama.cpp-health diagnosis. The runner should expose a stable, resumable budget outcome; that runtime fix is tracked in [issue #371](https://github.com/fiale-plus/pi-rogue/issues/371), related to [issue #356](https://github.com/fiale-plus/pi-rogue/issues/356).
+The July 17, 2026 investigation reached the `pi-subagents` tool budget at 30 calls (hard limit 45). The local server independently passed health, exact-model, and `OK` smoke checks. The incident therefore does not support a turns-quota or current llama.cpp-health diagnosis. The runner should expose a stable, resumable budget outcome. Pi-Rogue tracks the integration and operating contract in [issue #371](https://github.com/fiale-plus/pi-rogue/issues/371), related to [issue #356](https://github.com/fiale-plus/pi-rogue/issues/356); the runtime implementation belongs in the `pi-subagents` project.
 
 This workaround does not change model settings, context size, budgets, fallback policy, or server lifecycle.
