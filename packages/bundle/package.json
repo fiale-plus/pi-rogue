@@ -27,6 +27,7 @@
     "./context-broker/sqlite": "./src/context-broker-sqlite.ts"
   },
   "pi": {
+    "image": "https://raw.githubusercontent.com/fiale-plus/pi-rogue/main/docs/images/pi-rogue-engraved-banner-3x1.png",
     "extensions": [
       "./src/extension.ts"
     ],
