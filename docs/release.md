@@ -37,9 +37,9 @@ Prefer the changelog entry to be done before the release is cut, not after.
   - `## Changes`
   - `## Validation`
 
-## Greenhouse / paused packages
+## Paused packages
 
-- Internal helper packages (`pi-rogue-guardrails`, `pi-rogue-brain`, `pi-rogue-repo-arch`) remain lab/greenhouse scope and are not published.
+- The former lab helper packages (Brain, Repo Arch, and the standalone Guardrails lab) are archived; deterministic shell scanning remains in `packages/core`.
 - `@fiale-plus/pi-rogue-advisor` and `@fiale-plus/pi-rogue-orchestration` releases are paused. Their code evolves in this repo and ships inside `@fiale-plus/pi-rogue`.
 - `@fiale-plus/pi-rogue-bundle`, `@fiale-plus/pi-rogue-advisor`, and `@fiale-plus/pi-rogue-orchestration` should be deprecation tracks:
   - Keep install/installers discoverable but warning-forwarding only.
