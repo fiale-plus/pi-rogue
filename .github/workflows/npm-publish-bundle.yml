@@ -52,6 +52,7 @@ jobs:
           mkdir -p "$PACK_DIR"
           npm pack --json --pack-destination "$PACK_DIR" > "$RUNNER_TEMP/pi-rogue-pack.json"
           TARBALL="$(node -e 'const fs=require("fs"); const path=require("path"); const rows=JSON.parse(fs.readFileSync(process.argv[1], "utf8")); process.stdout.write(path.resolve(process.argv[2], rows[0].filename));' "$RUNNER_TEMP/pi-rogue-pack.json" "$PACK_DIR")"
+          node ../../scripts/finalize-canonical-tarball.mjs "$TARBALL"
           node ../../scripts/smoke-canonical-package.mjs "$TARBALL"
           echo "tarball=$TARBALL" >> "$GITHUB_OUTPUT"
 

@@ -65,7 +65,7 @@ Router defaults to observe-only recommendations. `auto_model` is explicit and li
 - `packages/orchestration/` — goal, loop, autoresearch, and lab primitives.
 - `packages/core/` — shared contracts/helpers.
 
-Workspace-only lab helpers live under `packages/lab/`; they are not part of the public single-install artefact.
+Former workspace-only lab helpers were archived; the supported production path is the consolidated bundle and shared core/context runtime.
 
 ## Command cheat sheet
 

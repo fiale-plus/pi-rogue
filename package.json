@@ -5,8 +5,7 @@
   "description": "Pi-Rogue monorepo for the consolidated Pi extension and internal development workspaces.",
   "type": "module",
   "workspaces": [
-    "packages/*",
-    "packages/lab/*"
+    "packages/*"
   ],
   "scripts": {
     "check": "npm run check -ws --if-present && npm run check:scripts && npm run check:coverage",

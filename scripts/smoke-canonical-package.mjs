@@ -42,6 +42,11 @@ execFileSync("npm", ["install", "--ignore-scripts", "--no-audit", "--no-fund", "
 const packageDir = join(consumer, "node_modules", "@fiale-plus", "pi-rogue");
 const pkg = JSON.parse(readFileSync(join(packageDir, "package.json"), "utf8"));
 if (pkg.name !== "@fiale-plus/pi-rogue") throw new Error(`installed unexpected package ${pkg.name}`);
+for (const field of ["dependencies", "optionalDependencies", "peerDependencies"]) {
+  for (const name of INTERNAL_PACKAGES.map((item) => `@fiale-plus/${item}`)) {
+    if (pkg[field]?.[name]) throw new Error(`canonical package still declares internal dependency ${name} in ${field}`);
+  }
+}
 if (JSON.stringify(Object.keys(pkg.exports || {}).sort()) !== JSON.stringify(EXPECTED_EXPORTS.sort())) {
   throw new Error(`canonical exports changed: ${JSON.stringify(Object.keys(pkg.exports || {}))}`);
 }
