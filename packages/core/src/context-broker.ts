@@ -32,7 +32,7 @@ export interface ContextArtifact {
   id: string;
   handle: string;
   sessionId: string;
-  kind: ContextArtifactKind;
+  kind: ContextArtifactLookupKind;
   createdAt: number;
   updatedAt: number;
   bytes: number;
