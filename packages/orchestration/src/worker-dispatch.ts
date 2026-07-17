@@ -94,6 +94,9 @@ export async function dispatchWorker(
     }
   }
 
+  const dispatchStartedAt = Date.now();
+  const workerTimeoutMs = params.timeoutMs ?? 900_000;
+  const workerDeadline = dispatchStartedAt + workerTimeoutMs;
   return await new Promise<WorkerDispatchResult>((resolve, reject) => {
     let settled = false;
     let runId: string | undefined;
@@ -183,11 +186,16 @@ export async function dispatchWorker(
       asyncDir = typeof detailValue(details, "asyncDir") === "string" ? detailValue(details, "asyncDir") as string : undefined;
       if (options?.waitForCompletion && runId) {
         if (timer) clearTimeout(timer);
-        const workerTimeoutMs = params.timeoutMs ?? 900_000;
+        const remainingWorkerMs = workerDeadline - Date.now();
+        if (remainingWorkerMs <= 0) {
+          stop();
+          finish(() => reject(new Error(`Worker dispatch timed out after ${workerTimeoutMs}ms.`)), classifyWorkerOutcome({ timedOut: true }), "Worker dispatch timed out.");
+          return;
+        }
         timer = setTimeout(() => {
           stop();
           finish(() => reject(new Error(`Worker dispatch timed out after ${workerTimeoutMs}ms.`)), classifyWorkerOutcome({ timedOut: true }), "Worker dispatch timed out.");
-        }, workerTimeoutMs);
+        }, remainingWorkerMs);
         pollStatus();
         return;
       }
@@ -198,10 +206,16 @@ export async function dispatchWorker(
       );
     });
     const acknowledgementTimeoutMs = options?.acknowledgementTimeoutMs ?? RPC_REPLY_TIMEOUT_MS;
+    const acknowledgementDeadline = Date.now() + acknowledgementTimeoutMs;
+    const firstDeadline = Math.min(acknowledgementDeadline, workerDeadline);
     timer = setTimeout(() => {
       stop();
-      finish(() => reject(new Error(`Worker dispatch acknowledgement timed out after ${acknowledgementTimeoutMs}ms.`)), classifyWorkerOutcome({ timedOut: true }), "Worker dispatch acknowledgement timed out.");
-    }, acknowledgementTimeoutMs);
+      if (Date.now() >= workerDeadline) {
+        finish(() => reject(new Error(`Worker dispatch timed out after ${workerTimeoutMs}ms.`)), classifyWorkerOutcome({ timedOut: true }), "Worker dispatch timed out.");
+      } else {
+        finish(() => reject(new Error(`Worker dispatch acknowledgement timed out after ${acknowledgementTimeoutMs}ms.`)), classifyWorkerOutcome({ timedOut: true }), "Worker dispatch acknowledgement timed out.");
+      }
+    }, Math.max(0, firstDeadline - Date.now()));
     signal?.addEventListener("abort", onAbort, { once: true });
     events.emit(RPC_REQUEST, {
       version: RPC_VERSION,

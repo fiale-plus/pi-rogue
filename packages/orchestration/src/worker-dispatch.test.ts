@@ -423,16 +423,8 @@ describe("dispatchWorker", () => {
     const ctx = makeCtxWithTempSession(registry);
     enableWorker(ctx, "local/qwen3.6-35b-a3b");
 
-    // Use a very short timeout for the test
-    const promise = dispatchWorker(pi, ctx, { task: "slow task", timeoutMs: 100 }, undefined, { acknowledgementTimeoutMs: 20 });
-    // Note: the RPC_REPLY_TIMEOUT_MS is hardcoded to 15000ms.
-    // The timeoutMs param controls the worker wall-clock, not the RPC ack timeout.
-    // We need to wait for the RPC ack timeout. Use a very short timeoutMs
-    // doesn't help; the RPC reply timeout is always 15s. We'll skip this test
-    // with a workaround: just verify the timeout error message pattern matches.
-
-    // No reply emitted; should timeout after RPC_REPLY_TIMEOUT_MS (15s).
-    // Use a 20s test timeout to allow this to complete.
+    // Keep the worker deadline longer than the short acknowledgement deadline.
+    const promise = dispatchWorker(pi, ctx, { task: "slow task", timeoutMs: 20_000 }, undefined, { acknowledgementTimeoutMs: 20 });
     await expect(promise).rejects.toThrow(
       "Worker dispatch acknowledgement timed out after",
     );
