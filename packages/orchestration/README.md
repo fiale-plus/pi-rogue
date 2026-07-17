@@ -4,11 +4,12 @@
 
 ## What this package is
 
-Session orchestration for Pi-Rogue built around three primitives:
+Session orchestration for Pi-Rogue built around four primitives:
 
 1. `goal` — define and track what success looks like
 2. `loop` — periodic execution with explicit start/stop
 3. `autoresearch` / canonical `lab` — goal+loop facades for iterative or parallelized optimization
+4. `worker` — explicit session-scoped model requests for bounded execution tasks (opt-in, frontier remains controller)
 
 ## Install
 
@@ -43,6 +44,10 @@ npm install --workspace packages/orchestration
 | `/pi-rogue-orchestration lab <instruction>` | Start/update parallel research mode |
 | `/pi-rogue-orchestration lab status` | Show lab state |
 | `/pi-rogue-orchestration lab clear` | Clear lab + underlying loop |
+| `/pi-rogue-orchestration worker use <provider>/<model>` | Request a model for bounded worker tasks (session-scoped opt-in) |
+| `/pi-rogue-orchestration worker status` | Show current worker request |
+| `/pi-rogue-orchestration worker clear` | Clear worker request; restore frontier-only mode |
+| `/pi-rogue-orchestration worker ask` | Show worker opt-in prompt |
 
 ## Behavior notes
 
@@ -55,3 +60,5 @@ npm install --workspace packages/orchestration
 - A bounded no-progress guard detects repeated assistant output or repeated planning-only turns during active orchestration, then nudges one concrete alternative action and eventually stops retry churn instead of stacking recovery prompts.
 - There are no hidden flow budgets. Long loops run until `/pi-rogue-orchestration loop off`, `/pi-rogue-orchestration goal clear`, `goal_complete`, or a `GOAL_DONE` response clears the active goal and loop.
 - Stale research state is cleared when `goal` or `loop` are cleared.
+- Worker requests are session-scoped: the requested model is written to per-session state and only applies while enabled. The request informs the frontier controller; it does not dispatch a worker or validate provider availability by itself.
+- Worker system prompt enforces bounded-task discipline: explicit tools, paths, timeout, turn, and tool budgets. Worker output is untrusted evidence requiring frontier validation.
