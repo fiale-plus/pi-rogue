@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.3.33
+
+### Summary
+
+This release consolidates the public package and removes disabled or obsolete runtime surfaces.
+
+### Changes
+
+- Remove the disabled Fusion provider, benchmarks, commands, and runtime wiring.
+- Archive unused lab packages while retaining deterministic shell-risk scanning in core.
+- Finalize canonical tarball metadata so bundled internal packages do not remain runtime dependency declarations.
+- Migrate legacy Fusion router profiles and preserve read-only lookup of persisted `fusion_result` artifacts.
+- Update public README, configuration UX, release docs, and package smoke tests.
+
+### Validation
+
+- `npm ci`
+- `npm run check`
+- `npm test`
+- Canonical tarball finalization and consumer smoke test passed on the integrated release worktree.
+
 ## 0.3.32
 
 ### Summary
