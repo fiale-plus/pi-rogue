@@ -32,7 +32,7 @@ This note documents how to distinguish a local Qwen inference failure from a Pi 
    Tool budget soft limit reached after 30 tool calls (soft 30, hard 45)
    ```
 
-   is a **tool-call budget** outcome from `pi-subagents`, not a turns quota and not proof that Qwen or llama.cpp failed. The runner has separate tool-budget and turn-budget controls.
+   is a **soft tool-call budget warning** from `pi-subagents`, not a turns quota and not proof that Qwen or llama.cpp failed. The runner has separate tool-budget and turn-budget controls; the observed child ultimately terminated at the runner’s 600-second timeout before reaching the hard tool limit.
 
 5. Treat these as separate diagnoses:
 
@@ -52,6 +52,6 @@ This note documents how to distinguish a local Qwen inference failure from a Pi 
 
 ## Current incident
 
-The July 17, 2026 investigation recorded the expected `llamacpp-qwen-unsloth` model and the `pi-subagents` tool-budget warning at 30 calls (hard limit 45). The local server independently passed health, exact-model, and `OK` smoke checks. The detailed session counts, timestamps, and source hash are preserved in the [evidence manifest](evidence/qwen-worker-tool-budget-2026-07-17.json) and issue #371. The incident therefore does not support a turns-quota or current llama.cpp-health diagnosis. The runner should expose a stable, resumable budget outcome. Pi-Rogue tracks the integration and operating contract in [issue #371](https://github.com/fiale-plus/pi-rogue/issues/371), related to [issue #356](https://github.com/fiale-plus/pi-rogue/issues/356); the runtime implementation belongs in the `pi-subagents` project.
+The July 17, 2026 investigation recorded the expected `llamacpp-qwen-unsloth` model, a `pi-subagents` soft tool-budget warning at 30 calls (hard limit 45), and a terminal runner timeout after 600 seconds. The local server independently passed health, exact-model, and `OK` smoke checks. The detailed session counts, timestamps, and source hash are preserved in the [evidence manifest](evidence/qwen-worker-tool-budget-2026-07-17.json) and issue #371. The incident therefore does not support a turns-quota or current llama.cpp-health diagnosis. The runner should expose a stable, resumable budget outcome. Pi-Rogue tracks the integration and operating contract in [issue #371](https://github.com/fiale-plus/pi-rogue/issues/371), related to [issue #356](https://github.com/fiale-plus/pi-rogue/issues/356); the runtime implementation belongs in the `pi-subagents` project.
 
 This workaround does not change model settings, context size, budgets, fallback policy, or server lifecycle.
