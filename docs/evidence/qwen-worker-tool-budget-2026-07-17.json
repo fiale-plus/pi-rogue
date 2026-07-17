@@ -1,0 +1,36 @@
+{
+  "schema": "pi-rogue.qwen-worker-evidence.v1",
+  "incidentDate": "2026-07-17",
+  "source": {
+    "kind": "local-pi-session-jsonl",
+    "relativePath": "~/.pi/agent/sessions/--Users-pavel-repos-fiale-plus-pi-rogue--/2026-07-16T19-45-07-578Z_019f6c76-1bfa-7824-b10f-903741487599/c07f273d/run-0/session.jsonl",
+    "sha256": "d0f47a30582ed5260697ace8f4de842c1243239c3bf6988ba5f6cbe9fecadd81"
+  },
+  "runnerMetadata": {
+    "kind": "local-pi-subagents-run-metadata",
+    "relativePath": ".pi-subagents/artifacts/c07f273d_local-worker-poc_0_meta.json",
+    "sha256": "0eb302a4cbc82b3b47914f3d9e0b3c9567ea10d8d98c289085c3b518431f595e",
+    "exitCode": 1,
+    "error": "Subagent timed out after 600000ms",
+    "durationMs": 600086,
+    "toolBudgetOutcome": "soft-reached (30/45 warning; hard limit not reached)"
+  },
+  "observed": {
+    "start": "2026-07-16T23:55:57.725Z",
+    "end": "2026-07-17T00:04:27.544Z",
+    "provider": "llamacpp-qwen-unsloth",
+    "model": "qwen3.6-35b-a3b-ud-q4-k-m",
+    "assistantTurns": 20,
+    "toolCalls": 44,
+    "toolNames": { "bash": 44 },
+    "runnerWarning": "Tool budget soft limit reached after 30 tool calls (soft 30, hard 45)",
+    "runnerTerminalOutcome": "Subagent timed out after 600000ms",
+    "requestedArtifactProduced": false
+  },
+  "conclusion": {
+    "turnQuotaImplicated": false,
+    "primaryCause": "pi-subagents runner timeout after soft tool-budget pressure",
+    "currentModelHealthImplicated": false,
+    "notes": "The local endpoint separately passed health, exact-model, and OK-generation smoke checks."
+  }
+}

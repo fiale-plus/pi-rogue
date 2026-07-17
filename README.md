@@ -92,6 +92,7 @@ Workspace-only lab helpers live under `packages/lab/`; they are not part of the 
 - [Advisor Board agent/skill taxonomy](docs/advisor-board-agent-skill-taxonomy.md) — boundary between advisory agents, executable skills, and role Markdown.
 - [Advisor Board replay PoC](docs/advisor-board-poc.md) — deterministic ledger/replay gate before live board behavior.
 - [Orchestration README](packages/orchestration/README.md) — goal, loop, autoresearch, and lab behavior.
+- [Qwen worker failure triage](docs/qwen-worker-failure-triage.md) — distinguish runner budgets from local-model health and use bounded worker chunks.
 - [Release guide](docs/release.md) — canonical `pi-rogue-<semver>` release process.
 
 ## Local development
