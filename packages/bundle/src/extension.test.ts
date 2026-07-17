@@ -47,7 +47,6 @@ describe("bundle extension defaults", () => {
     expect(commands.has("pi-rogue")).toBe(true);
     expect(commands.has("pi-rogue-advisor")).toBe(true);
     expect(commands.has("pi-rogue-router")).toBe(true);
-    expect(commands.has("pi-rogue-fusion")).toBe(true);
     expect(commands.has("pi-rogue-orchestration")).toBe(true);
     expect(commands.has("goal")).toBe(true);
     expect(commands.has("loop")).toBe(true);
@@ -58,14 +57,13 @@ describe("bundle extension defaults", () => {
       "cfg",
       "pi-rogue-advisor",
       "pi-rogue-router",
-      "pi-rogue-fusion",
       "goal",
       "loop",
       "autoresearch",
       "pi-rogue-orchestration",
       "pi-rogue-context",
     ]);
-    expect(["advisor", "router", "fusion"].some((name) => commands.has(name))).toBe(false);
+    expect(["advisor", "router"].some((name) => commands.has(name))).toBe(false);
   });
 
   it("honors canonical durability, store, and backend environment precedence", async () => {

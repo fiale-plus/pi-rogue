@@ -206,13 +206,52 @@ function normalizeRouterMode(value: unknown): RouterMode {
   return value === "auto_model" || value === "auto" ? "auto_model" : "observe";
 }
 
+function migrateRemovedFusionTarget(value: unknown, fallback: string): string {
+  const target = typeof value === "string" ? value : "";
+  return target.startsWith("fusion/") ? fallback : target || fallback;
+}
+
+function migrateRouterProfile(profile: RouterProfile, fallback: RouterProfile): RouterProfile {
+  return {
+    ...profile,
+    worker: migrateRemovedFusionTarget(profile.worker, fallback.worker),
+    smart: migrateRemovedFusionTarget(profile.smart, fallback.smart),
+    teacher: migrateRemovedFusionTarget(profile.teacher, fallback.teacher),
+    reviewer: migrateRemovedFusionTarget(profile.reviewer, fallback.reviewer),
+    ...(profile.main ? { main: migrateRemovedFusionTarget(profile.main, fallback.main ?? fallback.smart) } : {}),
+    ...(profile.explore ? { explore: migrateRemovedFusionTarget(profile.explore, fallback.explore ?? fallback.worker) } : {}),
+    ...(profile.debug_diagnose ? { debug_diagnose: migrateRemovedFusionTarget(profile.debug_diagnose, fallback.debug_diagnose ?? fallback.smart) } : {}),
+    ...(profile.review ? { review: migrateRemovedFusionTarget(profile.review, fallback.review ?? fallback.reviewer) } : {}),
+    ...(profile.verify ? { verify: migrateRemovedFusionTarget(profile.verify, fallback.verify ?? fallback.worker) } : {}),
+  };
+}
+
 export function normalizeRouterConfig(raw: Partial<RouterConfig> | null | undefined): RouterConfig {
-  const mergedProfiles = { ...DEFAULT_ROUTER_CONFIG.profiles, ...(raw?.profiles ?? {}) };
+  const rawProfiles = { ...(raw?.profiles ?? {}) } as Record<string, RouterProfile>;
+  if (rawProfiles["fusion-smart"] && !rawProfiles["all-smart"]) rawProfiles["all-smart"] = rawProfiles["fusion-smart"];
+  delete rawProfiles["fusion-smart"];
+  const defaultFallback = DEFAULT_ROUTER_CONFIG.profiles["all-smart"];
+  const configuredFallback = rawProfiles.balanced ?? rawProfiles["all-smart"] ?? defaultFallback;
+  const fallback: RouterProfile = {
+    ...defaultFallback,
+    worker: migrateRemovedFusionTarget(configuredFallback.worker, defaultFallback.worker),
+    smart: migrateRemovedFusionTarget(configuredFallback.smart, defaultFallback.smart),
+    teacher: migrateRemovedFusionTarget(configuredFallback.teacher, defaultFallback.teacher),
+    reviewer: migrateRemovedFusionTarget(configuredFallback.reviewer, defaultFallback.reviewer),
+    ...(configuredFallback.explore ? { explore: migrateRemovedFusionTarget(configuredFallback.explore, defaultFallback.explore ?? defaultFallback.worker) } : {}),
+    ...(configuredFallback.debug_diagnose ? { debug_diagnose: migrateRemovedFusionTarget(configuredFallback.debug_diagnose, defaultFallback.debug_diagnose ?? defaultFallback.smart) } : {}),
+    ...(configuredFallback.review ? { review: migrateRemovedFusionTarget(configuredFallback.review, defaultFallback.review ?? defaultFallback.reviewer) } : {}),
+    ...(configuredFallback.verify ? { verify: migrateRemovedFusionTarget(configuredFallback.verify, defaultFallback.verify ?? defaultFallback.worker) } : {}),
+  };
+  const mergedProfiles = Object.fromEntries(
+    Object.entries({ ...DEFAULT_ROUTER_CONFIG.profiles, ...rawProfiles }).map(([name, profile]) => [name, migrateRouterProfile(profile, fallback)]),
+  ) as Record<string, RouterProfile>;
   const profileOrder = Array.isArray(raw?.profileOrder) && raw.profileOrder.length > 0
-    ? raw.profileOrder.filter((name) => typeof name === "string" && mergedProfiles[name])
+    ? raw.profileOrder.map((name) => name === "fusion-smart" ? "all-smart" : name).filter((name, index, order) => typeof name === "string" && mergedProfiles[name] && order.indexOf(name) === index)
     : DEFAULT_ROUTER_CONFIG.profileOrder;
-  const activeProfile = raw?.activeProfile && mergedProfiles[raw.activeProfile]
-    ? raw.activeProfile
+  const requestedActiveProfile = raw?.activeProfile === "fusion-smart" ? "all-smart" : raw?.activeProfile;
+  const activeProfile = requestedActiveProfile && mergedProfiles[requestedActiveProfile]
+    ? requestedActiveProfile
     : profileOrder[0] ?? DEFAULT_ROUTER_CONFIG.activeProfile;
   const print = raw?.print === "all" || raw?.print === "off" || raw?.print === "mismatch_only" ? raw.print : DEFAULT_ROUTER_CONFIG.print;
   return {

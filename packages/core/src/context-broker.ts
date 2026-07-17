@@ -4,10 +4,11 @@ export type ContextArtifactKind =
   | "file_snapshot"
   | "subagent_result"
   | "advisor_brief"
-  | "memory_note"
-  | "fusion_result";
+  | "memory_note";
 
 export type ContextArtifactTier = "hot" | "warm" | "cold";
+/** Legacy persisted artifact kinds remain queryable but cannot be newly published. */
+export type ContextArtifactLookupKind = ContextArtifactKind | "fusion_result";
 
 export interface ContextArtifactInput {
   sessionId: string;
@@ -31,7 +32,7 @@ export interface ContextArtifact {
   id: string;
   handle: string;
   sessionId: string;
-  kind: ContextArtifactKind;
+  kind: ContextArtifactLookupKind;
   createdAt: number;
   updatedAt: number;
   bytes: number;
@@ -54,7 +55,7 @@ export interface ContextLookupQuery {
   id?: string;
   handle?: string;
   sessionId?: string;
-  kind?: ContextArtifactKind;
+  kind?: ContextArtifactLookupKind;
   tag?: string;
   path?: string;
   commandPrefix?: string;

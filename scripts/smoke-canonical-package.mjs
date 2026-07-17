@@ -9,7 +9,6 @@ const INTERNAL_PACKAGES = [
   "pi-core",
   "pi-rogue-advisor",
   "pi-rogue-context-broker",
-  "pi-rogue-fusion",
   "pi-rogue-orchestration",
   "pi-rogue-router",
 ];
@@ -70,14 +69,11 @@ walk(packageDir, (path, name) => {
 });
 if (testSource) throw new Error(`canonical tarball included test source ${testSource}`);
 
-const fusionRecipePath = join(home, "fusion-recipes.json");
-writeFileSync(fusionRecipePath, JSON.stringify([{ schema: "pi-rogue.fusion.recipe.v1", kind: "fusion", id: "canonical-smoke", model: "faux/synthesis", analysis_models: ["faux/analysis"] }]));
 const extensionPath = join(packageDir, pkg.pi.extensions[0]);
 const piBin = join(consumer, "node_modules", ".bin", "pi");
-const output = execFileSync(piBin, ["--offline", "--no-extensions", "-e", extensionPath, "--list-models"], {
+execFileSync(piBin, ["--offline", "--no-extensions", "-e", extensionPath, "--list-models"], {
   cwd: consumer,
-  env: { ...process.env, HOME: home, USERPROFILE: home, PI_OFFLINE: "1", PI_ROGUE_FUSION_RECIPES: fusionRecipePath },
+  env: { ...process.env, HOME: home, USERPROFILE: home, PI_OFFLINE: "1" },
   encoding: "utf8",
 });
-if (!/^fusion\s+/m.test(output)) throw new Error("canonical extension did not load through the supported Pi host");
-console.log(`canonical package smoke passed: ${pkg.name}@${pkg.version}; Pi ${PI_VERSION}; six bundled leaves; skills and exports present`);
+console.log(`canonical package smoke passed: ${pkg.name}@${pkg.version}; Pi ${PI_VERSION}; bundled leaves; skills and exports present`);

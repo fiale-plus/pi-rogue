@@ -2,7 +2,6 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { registerAdvisor } from "@fiale-plus/pi-rogue-advisor";
 import { registerOrchestration } from "@fiale-plus/pi-rogue-orchestration";
 import { registerRouter } from "@fiale-plus/pi-rogue-router/extension";
-import { registerFusion } from "@fiale-plus/pi-rogue-fusion/extension";
 import { registerDefaultContextBroker } from "./context-broker-default.js";
 
 export async function registerBundle(pi: ExtensionAPI): Promise<void> {
@@ -12,7 +11,6 @@ export async function registerBundle(pi: ExtensionAPI): Promise<void> {
 
   registerAdvisor(pi);
   registerRouter(pi);
-  registerFusion(pi);
   registerOrchestration(pi);
 
   await registerDefaultContextBroker(pi);

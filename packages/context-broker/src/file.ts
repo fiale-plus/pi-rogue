@@ -3,7 +3,7 @@ import { homedir } from "node:os";
 import { DatabaseSync } from "node:sqlite";
 import { dirname, join } from "node:path";
 import { ensureOwnerOnlyDirectory, safeName, secureWriteFile, tightenOwnerOnlyFile, tightenSqliteArtifacts } from "@fiale-plus/pi-core";
-import type { BoundedContextBroker, ContextArtifact, ContextArtifactInput, ContextArtifactTier, ContextBrokerOptions, ContextBrokerStatus, ContextLookupQuery, ContextPurgeOptions } from "@fiale-plus/pi-core";
+import type { BoundedContextBroker, ContextArtifact, ContextArtifactInput, ContextArtifactLookupKind, ContextArtifactTier, ContextBrokerOptions, ContextBrokerStatus, ContextLookupQuery, ContextPurgeOptions } from "@fiale-plus/pi-core";
 import { CONTEXT_BROKER_PERSISTENCE_SNAPSHOT, CONTEXT_BROKER_RESTORE_ARTIFACT, createInMemoryContextBroker, rememberSource, sourceIdFor, sourceTombstoneArtifact } from "./index.js";
 
 export interface FileContextBrokerOptions extends ContextBrokerOptions {
@@ -35,13 +35,15 @@ function isDurableStateSignature(stale: DurableStateSignature, current: DurableS
   return stale === current;
 }
 
+type PersistedContextInput = Omit<ContextArtifactInput, "kind" | "payload"> & { kind: ContextArtifactLookupKind; payload: string };
+
 interface StoredRecord {
   version: number;
   id?: string;
   sequence?: number;
   handle: string;
   baseTier?: ContextArtifactTier;
-  input: Omit<ContextArtifactInput, "payload"> & { payloadSha256: string };
+  input: Omit<PersistedContextInput, "payload"> & { payloadSha256: string };
 }
 
 function defaultStoreDir(): string {
@@ -197,8 +199,8 @@ function withStoreLock<T>(dir: string, operation: () => T): T {
   }
 }
 
-function stableSource(input: ContextArtifactInput): string | undefined {
-  const sourceId = sourceIdFor(input);
+function stableSource(input: Pick<ContextArtifactInput, "sessionId" | "sourceId" | "parentIds">): string | undefined {
+  const sourceId = sourceIdFor({ ...input, kind: "tool_output", payload: "" });
   return sourceId ? `${input.sessionId}\u0000${sourceId}` : undefined;
 }
 
@@ -238,7 +240,7 @@ function artifactBaseTier(artifact: ContextArtifact, fallback?: ContextArtifactT
   return (artifact as ContextArtifact & { baseTier?: ContextArtifactTier }).baseTier ?? fallback ?? artifact.tier;
 }
 
-function storedRecord(artifact: ContextArtifact, input: ContextArtifactInput, persistedHandle = artifact.handle, persistedId = artifact.id): StoredRecord {
+function storedRecord(artifact: ContextArtifact, input: PersistedContextInput, persistedHandle = artifact.handle, persistedId = artifact.id): StoredRecord {
   return {
     version: STORE_VERSION,
     id: persistedId,
@@ -279,7 +281,7 @@ function ensureBlob(dir: string, artifact: ContextArtifact): void {
   }
 }
 
-function snapshotInput(artifact: ContextArtifact): ContextArtifactInput {
+function snapshotInput(artifact: ContextArtifact): PersistedContextInput {
   return {
     sessionId: artifact.sessionId,
     kind: artifact.kind,
@@ -303,9 +305,9 @@ function replayRecord(broker: BoundedContextBroker, record: StoredRecord, payloa
   if (record.id && typeof record.sequence === "number") {
     return (broker as BoundedContextBroker & {
       [CONTEXT_BROKER_RESTORE_ARTIFACT](input: ContextArtifactInput, identity: { id: string; handle: string; sequence: number }): ContextArtifact;
-    })[CONTEXT_BROKER_RESTORE_ARTIFACT](input, { id: record.id, handle: record.handle, sequence: record.sequence });
+    })[CONTEXT_BROKER_RESTORE_ARTIFACT](input as ContextArtifactInput, { id: record.id, handle: record.handle, sequence: record.sequence });
   }
-  return broker.publish(input);
+  return broker.publish(input as ContextArtifactInput);
 }
 
 function removeUnreferencedBlobs(dir: string, keptSha256: Set<string>): void {

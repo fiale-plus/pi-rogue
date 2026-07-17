@@ -26,7 +26,6 @@ for (const [source, target] of [
   ["core", "pi-core"],
   ["advisor", "pi-rogue-advisor"],
   ["context-broker", "pi-rogue-context-broker"],
-  ["fusion", "pi-rogue-fusion"],
   ["orchestration", "pi-rogue-orchestration"],
   ["router", "pi-rogue-router"],
 ]) cpSync(join(root, "packages", source), join(stage, "node_modules", "@fiale-plus", target), { recursive: true });
@@ -42,13 +41,10 @@ const installedPi = JSON.parse(readFileSync(join(consumer, "node_modules", "@ear
 if (installedPi.version !== EXPECTED_PI) throw new Error(`expected Pi ${EXPECTED_PI}; got ${installedPi.version}`);
 const extensionPath = join(consumer, "node_modules", "@fiale-plus", "pi-rogue", "src", "extension.ts");
 const brokerExtensionPath = join(consumer, "node_modules", "@fiale-plus", "pi-rogue", "src", "context-broker-default.ts");
-const fusionRecipePath = join(home, "fusion-recipes.json");
-writeFileSync(fusionRecipePath, JSON.stringify([{ schema: "pi-rogue.fusion.recipe.v1", kind: "fusion", id: "packed-smoke", model: "faux/synthesis", analysis_models: ["faux/analysis"] }]));
 const piBin = join(consumer, "node_modules", ".bin", "pi");
-const isolatedEnv = { ...process.env, HOME: home, USERPROFILE: home, PI_OFFLINE: "1", PI_CONTEXT_BROKER_ENABLED: "true", PI_ROGUE_FUSION_RECIPES: fusionRecipePath };
+const isolatedEnv = { ...process.env, HOME: home, USERPROFILE: home, PI_OFFLINE: "1", PI_CONTEXT_BROKER_ENABLED: "true" };
 for (const name of ["PI_CONTEXT_BROKER_BACKEND", "PI_CONTEXT_BROKER_DURABLE", "PI_CONTEXT_BROKER_STORE_DIR"]) delete isolatedEnv[name];
-const piModels = execFileSync(piBin, ["--offline", "--no-extensions", "-e", extensionPath, "--list-models"], { cwd: consumer, env: isolatedEnv, encoding: "utf8" });
-if (!/^fusion\s+/m.test(piModels)) throw new Error("packed canonical extension did not load through Pi");
+execFileSync(piBin, ["--offline", "--no-extensions", "-e", extensionPath, "--list-models"], { cwd: consumer, env: isolatedEnv, encoding: "utf8" });
 
 const sentinel = `packed-min-node-${Date.now()}`;
 const smokePath = join(consumer, "durability-smoke.mjs");
