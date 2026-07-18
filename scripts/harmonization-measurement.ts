@@ -38,6 +38,7 @@ export interface MeasurementObservation {
   correlation: {
     sessionIdHash?: string;
     repoHash?: string;
+    declaredSessionIdHash?: string;
     conflict: boolean;
   };
 }
@@ -52,7 +53,7 @@ type Fixture =
   | { id: string; feature: "router"; operation: "router_status"; sessionId?: string; state?: "malformed"; optionalInput: MeasurementObservation["request"]["optionalInput"] }
   | { id: string; feature: "router"; operation: "router_decision"; route: "explicit" | "default"; checkpoint: RouterCheckpoint; optionalInput: MeasurementObservation["request"]["optionalInput"] }
   | { id: string; feature: "orchestration"; operation: "orchestration_status"; sessionId: string; optionalInput: MeasurementObservation["request"]["optionalInput"] }
-  | { id: string; feature: "advisor"; operation: "worker_review"; sessionId?: string; observedSessionId?: string; optionalInput: MeasurementObservation["request"]["optionalInput"] }
+  | { id: string; feature: "advisor"; operation: "worker_review"; sessionId?: string; declaredSessionId?: string; repo?: string; optionalInput: MeasurementObservation["request"]["optionalInput"] }
   | { id: string; feature: "context-broker"; operation: "context_source"; sourceId?: string; optionalInput: MeasurementObservation["request"]["optionalInput"] }
   | { id: string; feature: "unknown"; operation: "unknown_feature"; optionalInput: MeasurementObservation["request"]["optionalInput"] };
 
@@ -126,7 +127,7 @@ export const HARMONIZATION_FIXTURES: readonly Fixture[] = [
   { id: "orchestration-status-idle", feature: "orchestration", operation: "orchestration_status", sessionId: "fixture-orchestration", optionalInput: "absent" },
   { id: "advisor-worker-review-minimal", feature: "advisor", operation: "worker_review", optionalInput: "absent" },
   { id: "advisor-worker-review-empty-optional", feature: "advisor", operation: "worker_review", optionalInput: "empty" },
-  { id: "advisor-worker-review-conflicting-correlation", feature: "advisor", operation: "worker_review", sessionId: "outer-session", observedSessionId: "inner-session", optionalInput: "present" },
+  { id: "advisor-worker-review-conflicting-correlation", feature: "advisor", operation: "worker_review", sessionId: "inner-session", declaredSessionId: "outer-session", repo: "fixture-repo", optionalInput: "present" },
   { id: "context-source-optional-absent", feature: "context-broker", operation: "context_source", optionalInput: "absent" },
   { id: "context-source-explicit", feature: "context-broker", operation: "context_source", sourceId: "fixture-source", optionalInput: "present" },
   { id: "unknown-feature", feature: "unknown", operation: "unknown_feature", optionalInput: "empty" },
@@ -187,9 +188,13 @@ function baseObservation(fixture: Fixture, correlationConflict = false): Measure
   const sessionId = fixture.operation === "router_status" || fixture.operation === "orchestration_status"
     ? fixture.sessionId
     : fixture.operation === "worker_review"
-      ? fixture.sessionId ?? fixture.observedSessionId
+      ? fixture.sessionId
       : undefined;
-  const repo = fixture.operation === "worker_review" ? fixture.observedSessionId : undefined;
+  // The declared identity is harness metadata; only sessionId is passed to
+  // the public worker-review entry point. A mismatch is observed, never used
+  // to alter the review result.
+  const repo = fixture.operation === "worker_review" ? fixture.repo : undefined;
+  const declaredSessionId = fixture.operation === "worker_review" ? fixture.declaredSessionId : undefined;
   return {
     fixtureId: fixture.id,
     request: {
@@ -212,6 +217,7 @@ function baseObservation(fixture: Fixture, correlationConflict = false): Measure
     correlation: {
       sessionIdHash: hashIdentifier(sessionId),
       repoHash: hashIdentifier(repo),
+      declaredSessionIdHash: hashIdentifier(declaredSessionId),
       conflict: correlationConflict,
     },
   };
@@ -263,15 +269,15 @@ export function measureFixture(fixture: Fixture): MeasurementObservation {
   }
 
   if (fixture.operation === "worker_review") {
-    const conflict = Boolean(fixture.sessionId && fixture.observedSessionId && fixture.sessionId !== fixture.observedSessionId);
+    const conflict = Boolean(fixture.sessionId && fixture.declaredSessionId && fixture.sessionId !== fixture.declaredSessionId);
     const result = reviewWorkerResult({
       id: "fixture-worker",
       role: "reviewer",
       verdict: "green",
       summary: "fixture worker result",
       ...(fixture.optionalInput === "empty" ? { topic: "" } : {}),
-      ...(fixture.sessionId || fixture.observedSessionId ? { sessionId: fixture.sessionId ?? fixture.observedSessionId } : {}),
-      ...(fixture.sessionId || fixture.observedSessionId ? { repo: fixture.observedSessionId ?? fixture.sessionId } : {}),
+      ...(fixture.sessionId ? { sessionId: fixture.sessionId } : {}),
+      ...(fixture.repo ? { repo: fixture.repo } : {}),
     });
     const observation = baseObservation(fixture, conflict);
     observation.defaults = { workerAuthority: "advisor-review" };

@@ -46,7 +46,7 @@ describe("harmonization measurement harness", () => {
     expect(byId.get("advisor-worker-review-empty-optional")).toMatchObject({ request: { optionalInput: "empty", correlationConflict: false } });
     expect(byId.get("advisor-worker-review-conflicting-correlation")).toMatchObject({
       request: { correlationConflict: true },
-      correlation: { conflict: true, sessionIdHash: expect.any(String), repoHash: expect.any(String) },
+      correlation: { conflict: true, sessionIdHash: expect.any(String), repoHash: expect.any(String), declaredSessionIdHash: expect.any(String) },
     });
     expect(byId.get("context-source-optional-absent")).toMatchObject({ response: { sourceIdHash: null }, defaults: { sourceIdPresent: false } });
     expect(byId.get("context-source-explicit")).toMatchObject({ response: { sourceIdHash: expect.any(String) }, defaults: { sourceIdPresent: true, sourceIdValidated: true } });
