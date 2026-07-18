@@ -29,6 +29,28 @@ describe("routerFeatureStatus", () => {
     expect(existsSync(join(home, ".pi", "agent", "pi-rogue"))).toBe(false);
   });
 
+  it("keeps id-only session state isolated", async () => {
+    const home = mkdtempSync(join(tmpdir(), "pi-rogue-router-status-"));
+    vi.stubEnv("HOME", home);
+    vi.resetModules();
+    const config = await import("./config.js");
+    const { routerFeatureStatus } = await import("./status.js");
+    const configPath = config.routerGlobalConfigPath();
+    mkdirSync(dirname(configPath), { recursive: true });
+    writeFileSync(configPath, JSON.stringify({ enabled: true, mode: "observe" }), "utf8");
+
+    const first = { session: { id: "session-a" } };
+    const second = { session: { id: "session-b" } };
+    const firstStatePath = config.routerStatePath(first);
+    const secondStatePath = config.routerStatePath(second);
+    expect(firstStatePath).not.toBe(secondStatePath);
+    mkdirSync(dirname(firstStatePath), { recursive: true });
+    writeFileSync(firstStatePath, JSON.stringify({ lastDecisionAction: "continue" }), "utf8");
+
+    expect(routerFeatureStatus(first)).toMatchObject({ health: "ready", diagnostics: { sessionScoped: true } });
+    expect(routerFeatureStatus(second)).toMatchObject({ health: "idle", diagnostics: { sessionScoped: true } });
+  });
+
   it("reports disabled and reads corrupt/newer state without writing", async () => {
     const home = mkdtempSync(join(tmpdir(), "pi-rogue-router-status-"));
     vi.stubEnv("HOME", home);
