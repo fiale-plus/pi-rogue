@@ -30,6 +30,7 @@ function registerAndCaptureCommands(): { commands: Map<string, CommandHandle>; p
     registerCommand: (name: string, command: CommandHandle) => {
       commands.set(name, command);
     },
+    registerTool: () => undefined,
     sendUserMessage: vi.fn(),
     on: () => undefined,
   };

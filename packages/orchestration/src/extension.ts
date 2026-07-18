@@ -6,6 +6,7 @@ import { activeGoal, handleGoalCommand, registerGoal } from "./goal.js";
 import { formatLoopState, handleLoopCommand, readLoopState, registerLoop } from "./loop.js";
 import { registerNoveltyGuard } from "./novelty-guard.js";
 import { advisorCheckinDemandStatus } from "./advisor-checkins.js";
+import { formatWorkerState, handleWorkerCommand, readWorkerState, registerWorker, workerArgumentCompletions } from "./worker.js";
 
 type CompletionItem = { value: string; label: string; description?: string };
 
@@ -26,6 +27,7 @@ function orchestrationCompletions(prefix: string): CompletionItem[] | null {
       item("loop ", "show/set/clear loop cadence"),
       item("autoresearch ", "solo research loop"),
       item("lab ", "parallel research lab loop"),
+      item("worker ", "opt-in execution worker selection"),
     ];
     const out = q ? items.filter((entry) => entry.value.toLowerCase().startsWith(q)) : items;
     return out.length ? out : null;
@@ -33,6 +35,7 @@ function orchestrationCompletions(prefix: string): CompletionItem[] | null {
   if (cmd === "goal") return goalArgumentCompletions(tail);
   if (cmd === "loop") return loopArgumentCompletions(tail);
   if (cmd === "autoresearch" || cmd === "lab") return autoresearchArgumentCompletions(tail);
+  if (cmd === "worker") return workerArgumentCompletions(tail);
   return null;
 }
 
@@ -52,6 +55,7 @@ function orchestrationStatus(ctx: any): string {
     `goal: ${goal || "none"}`,
     `loop: ${formatLoopState(readLoopState(ctx))}`,
     `research: ${formatResearchState(readResearchState(ctx))}`,
+    formatWorkerState(readWorkerState(ctx)),
     `check-ins: ${checkins}`,
   ].join("\n");
 }
@@ -64,6 +68,7 @@ function orchestrationHelp(): string {
     "  /pi-rogue-orchestration loop [status|off|clear|stop|<interval> <instruction>]",
     "  /pi-rogue-orchestration autoresearch [status|clear|<instruction>]",
     "  /pi-rogue-orchestration lab [status|clear|<instruction>]",
+    "  /pi-rogue-orchestration worker [ask|use <model-ref>|status|clear]",
     "Aliases (same behavior): /goal, /loop, /autoresearch",
   ].join("\n");
 }
@@ -105,6 +110,7 @@ export function registerOrchestration(pi: ExtensionAPI): void {
   registerLoop(pi);
   registerAutoresearch(pi);
   registerAutoresearchLab(pi);
+  registerWorker(pi);
   registerAliasCommands(pi);
 
   pi.registerCommand("pi-rogue-orchestration", {
@@ -139,7 +145,11 @@ export function registerOrchestration(pi: ExtensionAPI): void {
         await handleResearchCommand(pi, "autoresearch-lab", tail, ctx);
         return;
       }
-      ctx.ui.notify("Usage: /pi-rogue-orchestration status|help|goal|loop|autoresearch|lab", "error");
+      if (cmd === "worker") {
+        await handleWorkerCommand(tail, ctx);
+        return;
+      }
+      ctx.ui.notify("Usage: /pi-rogue-orchestration status|help|goal|loop|autoresearch|lab|worker", "error");
     },
   });
 }
