@@ -1,6 +1,6 @@
 {
   "name": "@fiale-plus/pi-rogue",
-  "version": "0.3.34",
+  "version": "0.3.35",
   "description": "Single Pi extension for bounded context, explicit advisor guidance, offline routing telemetry, and controlled orchestration.",
   "type": "module",
   "license": "MIT",
