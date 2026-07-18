@@ -164,7 +164,13 @@ export function routerConfigSources(_ctx: any): { global: string; repo: string; 
 
 function sessionPathFromCtx(ctx: any): string | undefined {
   const value = ctx?.sessionManager?.getSessionFile?.();
-  return value ? String(value) : undefined;
+  if (value) return String(value);
+
+  // Some Pi contexts expose only a session id. Keep those contexts isolated
+  // rather than collapsing them into the shared `no-session` directory.
+  const sessionId = ctx?.session?.id || process.env.PI_ROGUE_SESSION_ID;
+  if (typeof sessionId !== "string" || sessionId.length === 0) return undefined;
+  return `/__pi_rogue_session_id__/${hashText(sessionId)}`;
 }
 
 function safeSegment(value: string): string {

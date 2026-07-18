@@ -38,6 +38,10 @@ npm run router:shadow -- --checkpoint-file .pi/router/checkpoints.jsonl --ledger
 #   switchWindowSeconds: 300
 ```
 
+## Passive feature status
+
+`routerFeatureStatus(ctx)` exposes a read-only `FeatureStatusV1` snapshot owned by Router. It reads only Router config/session files, reports `unconfigured`, `disabled`, `idle`, `ready`, `degraded`, or `error`, and never changes routing, creates state, or applies policy. Feature-owned diagnostic fields are additive and unknown fields are ignored by consumers.
+
 ## V1 telemetry notes
 
 Router v1 defaults to observe-only. It adds outcome skeletons, stronger diff/error fingerprints, teacher-label request export, binary gate dataset export, and subagent-aware telemetry schemas. It does not spawn agents/subagents or promote policies automatically. The explicit `auto_model` mode may only switch the active model for future turns.
