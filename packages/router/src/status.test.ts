@@ -43,7 +43,12 @@ describe("routerFeatureStatus", () => {
     const second = { session: { id: "session-b" } };
     const firstStatePath = config.routerStatePath(first);
     const secondStatePath = config.routerStatePath(second);
+    expect(firstStatePath).toBe(config.routerStatePath({ session: { id: "session-a" } }));
     expect(firstStatePath).not.toBe(secondStatePath);
+
+    const hostileIdPath = config.routerStatePath({ session: { id: "../outside/session" } });
+    expect(hostileIdPath).toContain(join(home, ".pi", "agent", "pi-rogue", "router", "sessions"));
+    expect(hostileIdPath).not.toContain("../outside");
     mkdirSync(dirname(firstStatePath), { recursive: true });
     writeFileSync(firstStatePath, JSON.stringify({ lastDecisionAction: "continue" }), "utf8");
 
