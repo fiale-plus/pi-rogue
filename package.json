@@ -42,7 +42,8 @@
     "router:sharpen:auto": "tsx scripts/router-auto-sharpen.ts",
     "router:shadow": "tsx packages/router/src/cli.ts shadow",
     "board:eval": "tsx scripts/select-board-fixtures.ts",
-    "budget-board:smoke": "tsx scripts/smoke-budget-board-profile.ts"
+    "budget-board:smoke": "tsx scripts/smoke-budget-board-profile.ts",
+    "harmonization:measure": "tsx scripts/harmonization-measurement.ts"
   },
   "engines": {
     "node": ">=22.19.0"
