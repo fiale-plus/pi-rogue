@@ -49,6 +49,10 @@ npm install --workspace packages/orchestration
 | `/pi-rogue-orchestration worker clear` | Clear worker request; restore frontier-only mode |
 | `/pi-rogue-orchestration worker ask` | Show worker opt-in prompt |
 
+## Passive feature status
+
+`orchestrationFeatureStatus(ctx)` exposes a read-only `FeatureStatusV1` snapshot owned by Orchestration. It reads current goal/loop/research/worker state, reports `idle`, `ready`, `degraded`, or `error`, and never starts, stops, migrates, or dispatches work. Feature-owned diagnostic fields are additive and unknown fields are ignored by consumers.
+
 ## Behavior notes
 
 - `loop` supports minimum interval `1m`.

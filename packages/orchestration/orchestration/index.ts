@@ -16,5 +16,7 @@ export {
   recordWorkerResult,
   dispatchWorker,
   resolveConfiguredWorkerModel,
+  orchestrationFeatureStatus,
+  serializeOrchestrationFeatureStatus,
 } from "../src/index.js";
 export type { WorkerOutcome, WorkerTelemetryEvent } from "../src/index.js";
