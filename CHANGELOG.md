@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.3.35
+
+### Summary
+
+This release adds the opt-in, model-agnostic execution-worker plane.
+
+### Changes
+
+- Add explicit session-scoped worker selection and configured-model preflight.
+- Add bounded RPC worker dispatch with timeouts, cancellation, status polling, and cleanup.
+- Add router worker lifecycle telemetry and read-only Advisor Board worker-output review.
+- Add focused worker dispatch, telemetry, routing, and review coverage.
+
+### Validation
+
+- TypeScript checks passed.
+- Focused execution-worker, advisor, and router suites passed.
+- PR #377 CI passed before merge.
+
 ## 0.3.34
 
 ### Summary
