@@ -64,6 +64,10 @@ describe("bundle extension defaults", () => {
       "pi-rogue-context",
     ]);
     expect(["advisor", "router"].some((name) => commands.has(name))).toBe(false);
+    expect(typeof (pi as any).__piRogueFeatureStatusCatalog).toBe("function");
+    expect((pi as any).__piRogueFeatureStatusCatalog({}).features.map((status: any) => status.feature)).toEqual([
+      "advisor", "router", "orchestration", "context-broker",
+    ]);
   });
 
   it("honors canonical durability, store, and backend environment precedence", async () => {
