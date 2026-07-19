@@ -7,6 +7,7 @@ describe("contextBrokerFeatureStatus", () => {
     expect(contextBrokerFeatureStatus({ enabled: true, registered: false }).health).toBe("unavailable");
     expect(contextBrokerFeatureStatus({ enabled: true, registered: false, error: true }).health).toBe("error");
     expect(contextBrokerFeatureStatus({ enabled: true, registered: true, durable: true, backend: "sqlite" })).toMatchObject({ health: "ready", mode: "sqlite" });
+    expect(contextBrokerFeatureStatus({ enabled: true, registered: true, durable: false, backend: "memory(degraded)" })).toMatchObject({ health: "degraded", summary: "context broker is degraded" });
     expect(contextBrokerFeatureStatus({ enabled: true, registered: true, backend: "/private/user/secret" }).health).toBe("error");
   });
 
