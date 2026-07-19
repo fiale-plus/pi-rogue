@@ -150,19 +150,22 @@ const SAMPLE_VALUES: readonly SampleClass[] = ["explicit_route", "default_route"
 const FEATURE_VALUES: readonly EvidenceFeature[] = [...FEATURES];
 
 function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const prototype = Object.getPrototypeOf(value);
+  return prototype === Object.prototype || prototype === null;
 }
 
 function assertKeys(value: Record<string, unknown>, expected: readonly string[], path: string): void {
   const allowed = new Set(expected);
-  for (const key of Object.keys(value)) {
+  for (const key of Reflect.ownKeys(value)) {
+    if (typeof key !== "string") throw new Error(`${path}: symbol field is not allowed`);
     if (/prompt|transcript|payload|path|secret|credential|password|user|email|raw|content|filesystem/i.test(key)) {
       throw new Error(`${path}.${key}: prohibited field`);
     }
     if (!allowed.has(key)) throw new Error(`${path}.${key}: unknown field`);
   }
   for (const key of expected) {
-    if (!(key in value)) throw new Error(`${path}.${key}: required field missing`);
+    if (!Object.prototype.hasOwnProperty.call(value, key)) throw new Error(`${path}.${key}: required field missing`);
   }
 }
 
@@ -182,9 +185,15 @@ function validateRecord(value: unknown, index: number): HarmonizationEvidenceRec
   const path = `records[${index}]`;
   if (!isRecord(value)) throw new Error(`${path}: expected object`);
   assertKeys(value, ["fixtureId", "feature", "sampleClass", "acceptedOutcome", "cost", "escalation", "reworkCount", "fallback", "usage", "contextBroker"], path);
-  if (typeof value.fixtureId !== "string" || !/^fixture-[a-z0-9-]+$/.test(value.fixtureId)) throw new Error(`${path}.fixtureId: invalid fixture identifier`);
+  const fixtureMatch = typeof value.fixtureId === "string"
+    ? value.fixtureId.match(/^fixture-(router|advisor|orchestration|context-broker)-(explicit-route|default-route|accepted-escalation|rejected-escalation|fallback-recovery|missing-evidence)$/)
+    : null;
+  if (!fixtureMatch) throw new Error(`${path}.fixtureId: invalid or non-opaque fixture identifier`);
   assertEnum(value.feature, FEATURE_VALUES, `${path}.feature`);
   assertEnum(value.sampleClass, SAMPLE_VALUES, `${path}.sampleClass`);
+  if (fixtureMatch[1] !== value.feature || fixtureMatch[2] !== value.sampleClass.replaceAll("_", "-")) {
+    throw new Error(`${path}.fixtureId: does not match feature or sample class`);
+  }
   assertEnum(value.acceptedOutcome, ACCEPTED_VALUES, `${path}.acceptedOutcome`);
   if (!isRecord(value.cost)) throw new Error(`${path}.cost: expected object`);
   assertKeys(value.cost, ["tokenBand", "callBand", "spendBand"], `${path}.cost`);
@@ -213,14 +222,8 @@ export function validateHarmonizationEvidence(input: unknown): HarmonizationEvid
   if (Array.isArray(input)) {
     records = input;
   } else if (isRecord(input) && Array.isArray(input.records)) {
-    const allowedContainerKeys = new Set(["schema", "recordCount", "records", "aggregates"]);
-    for (const key of Object.keys(input)) {
-      if (/prompt|transcript|payload|path|secret|credential|password|user|email|raw|content|filesystem/i.test(key)) {
-        throw new Error(`evidence.${key}: prohibited field`);
-      }
-      if (!allowedContainerKeys.has(key)) throw new Error(`evidence.${key}: unknown field`);
-    }
-    if (input.schema !== undefined && input.schema !== HARMONIZATION_EVIDENCE_SCHEMA) throw new Error("evidence.schema: invalid schema");
+    assertKeys(input, ["schema", "recordCount", "records", "aggregates"], "evidence");
+    if (input.schema !== HARMONIZATION_EVIDENCE_SCHEMA) throw new Error("evidence.schema: invalid schema");
     records = input.records;
   }
   if (!records) throw new Error("evidence input: expected an array or evidence pack with a records array");
@@ -298,7 +301,7 @@ export function buildHarmonizationEvidencePack(input: unknown = HARMONIZATION_EV
 }
 
 export function serializeHarmonizationEvidence(pack: HarmonizationEvidencePack): string {
-  return JSON.stringify(canonicalize(pack));
+  return JSON.stringify(canonicalize(buildHarmonizationEvidencePack(pack)));
 }
 
 const CSV_COLUMNS = [
@@ -324,7 +327,10 @@ export function serializeHarmonizationEvidenceCsv(input: unknown): string {
 
 function cliValue(argv: readonly string[], flag: string): string | undefined {
   const index = argv.indexOf(flag);
-  return index >= 0 ? argv[index + 1] : undefined;
+  if (index < 0) return undefined;
+  const value = argv[index + 1];
+  if (!value || value.startsWith("--")) throw new Error(`${flag} requires a value`);
+  return value;
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {

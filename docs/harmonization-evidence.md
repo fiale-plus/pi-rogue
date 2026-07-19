@@ -9,7 +9,7 @@ npm --silent run harmonization:evidence -- --format csv --output /tmp/harmonizat
 npm --silent run harmonization:evidence -- --input path/to/pack.json
 ```
 
-The JSON output is versioned as `pi-rogue.harmonization-evidence.v1`. It contains 24 stratified synthetic fixtures across Router, Advisor, Orchestration, and Context Broker. Each record contains only fixture IDs, categorical labels, bounded cost bands, bounded rework counts, and boolean usage flags. The aggregate section counts accepted outcomes, escalation labels/reasons, rework, fallback classes, usage, and Context Broker availability/savings bands.
+The JSON output is versioned as `pi-rogue.harmonization-evidence.v1`. It contains 24 stratified synthetic fixtures across Router, Advisor, Orchestration, and Context Broker. Each record contains only allowlisted opaque fixture IDs, categorical labels, bounded cost bands, bounded rework counts, and boolean usage flags. Pack-shaped inputs must include the complete schema, record count, records, and aggregate envelope. The aggregate section counts accepted outcomes, escalation labels/reasons, rework, fallback classes, usage, and Context Broker availability/savings bands.
 
 ## Interpretation
 

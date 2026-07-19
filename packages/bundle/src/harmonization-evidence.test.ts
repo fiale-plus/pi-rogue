@@ -46,5 +46,12 @@ describe("harmonization evidence pack", () => {
     const pack = buildHarmonizationEvidencePack();
     expect(() => validateHarmonizationEvidence({ ...pack, aggregates: { ...pack.aggregates, prompt: "no" } })).toThrow(/aggregates/);
     expect(() => validateHarmonizationEvidence({ ...pack, recordCount: 1 })).toThrow(/recordCount/);
+    expect(() => validateHarmonizationEvidence({ records: [record] })).toThrow(/required field/);
+    expect(() => serializeHarmonizationEvidence({ ...pack, records: [{ ...record, prompt: "no" }] } as typeof pack)).toThrow(/prohibited field/);
+    expect(() => validateHarmonizationEvidence([{ ...record, fixtureId: "fixture-user-alice" }])).toThrow(/opaque fixture identifier/);
+    expect(() => validateHarmonizationEvidence([{ ...record, feature: "advisor" }])).toThrow(/does not match feature/);
+    const inherited = Object.create({ prompt: "no" });
+    Object.assign(inherited, record);
+    expect(() => validateHarmonizationEvidence([inherited])).toThrow(/expected object/);
   });
 });
