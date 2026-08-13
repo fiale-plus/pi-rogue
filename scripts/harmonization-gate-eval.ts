@@ -4,7 +4,7 @@ import { pathToFileURL } from "node:url";
 export const HARMONIZATION_GATE_EVAL_SCHEMA = "pi-rogue.harmonization-gate-eval.v1" as const;
 export type GatePhase = "preflight" | "review" | "closeout";
 export type GateDecision = "continue" | "escalate";
-export type GateTaskClass = "quick_edit" | "implementation" | "debug" | "review" | "architecture" | "safety_sensitive" | "trivial";
+export type GateTaskClass = "quick_edit" | "implementation" | "debug" | "review" | "architecture" | "safety_sensitive" | "trivial" | "failure";
 export type GateOutcome = "accepted" | "regressed" | "incomplete" | "unknown";
 export type GateSourceKind = "synthetic" | "real_replay";
 
@@ -19,6 +19,8 @@ export interface GateEvalRow {
   gateAdvisorCalls: number;
   baselineHostedTokens: number;
   gateHostedTokens: number;
+  baselineLatencyMs: number;
+  gateLatencyMs: number;
   baselineOutcome: GateOutcome;
   gateOutcome: GateOutcome;
   failureClass: "none" | "timeout" | "provider_error" | "rate_limit" | "budget" | "other";
@@ -32,10 +34,17 @@ export interface GateSliceMetrics {
   gateAdvisorCalls: number;
   baselineHostedTokens: number;
   gateHostedTokens: number;
+  baselineFalseEscalations: number;
+  baselineMissedEscalations: number;
   falseEscalations: number;
   missedEscalations: number;
+  baselineAccuracy: number;
   accuracy: number;
+  baselineEscalationRate: number;
   escalationRate: number;
+  baselineLatencyMs: number;
+  gateLatencyMs: number;
+  failureRows: number;
   advisorCallReduction: number;
   hostedTokenReduction: number;
   baselineAcceptedRate: number;
@@ -49,21 +58,23 @@ export interface GateEvalReport {
   phases: Record<GatePhase, GateSliceMetrics>;
   taskClasses: Record<GateTaskClass, GateSliceMetrics>;
   safety: GateSliceMetrics;
+  failure: GateSliceMetrics;
   recommendation: "promote" | "hold" | "reject";
   recommendationReason: string;
 }
 
 export const HARMONIZATION_GATE_FIXTURES: readonly GateEvalRow[] = [
-  { id: "fixture-001", phase: "preflight", taskClass: "quick_edit", label: "continue", baselineDecision: "continue", gateDecision: "continue", baselineAdvisorCalls: 0, gateAdvisorCalls: 0, baselineHostedTokens: 0, gateHostedTokens: 0, baselineOutcome: "accepted", gateOutcome: "accepted", failureClass: "none" },
-  { id: "fixture-002", phase: "preflight", taskClass: "implementation", label: "escalate", baselineDecision: "escalate", gateDecision: "escalate", baselineAdvisorCalls: 1, gateAdvisorCalls: 1, baselineHostedTokens: 900, gateHostedTokens: 900, baselineOutcome: "accepted", gateOutcome: "accepted", failureClass: "none" },
-  { id: "fixture-003", phase: "review", taskClass: "debug", label: "escalate", baselineDecision: "escalate", gateDecision: "escalate", baselineAdvisorCalls: 1, gateAdvisorCalls: 1, baselineHostedTokens: 700, gateHostedTokens: 700, baselineOutcome: "accepted", gateOutcome: "accepted", failureClass: "none" },
-  { id: "fixture-004", phase: "review", taskClass: "review", label: "continue", baselineDecision: "escalate", gateDecision: "continue", baselineAdvisorCalls: 1, gateAdvisorCalls: 0, baselineHostedTokens: 600, gateHostedTokens: 0, baselineOutcome: "accepted", gateOutcome: "accepted", failureClass: "none" },
-  { id: "fixture-005", phase: "closeout", taskClass: "architecture", label: "escalate", baselineDecision: "escalate", gateDecision: "escalate", baselineAdvisorCalls: 1, gateAdvisorCalls: 1, baselineHostedTokens: 1_100, gateHostedTokens: 1_100, baselineOutcome: "accepted", gateOutcome: "accepted", failureClass: "none" },
-  { id: "fixture-006", phase: "preflight", taskClass: "safety_sensitive", label: "escalate", baselineDecision: "escalate", gateDecision: "escalate", baselineAdvisorCalls: 1, gateAdvisorCalls: 1, baselineHostedTokens: 500, gateHostedTokens: 500, baselineOutcome: "accepted", gateOutcome: "accepted", failureClass: "none" },
+  { id: "fixture-001", phase: "preflight", taskClass: "quick_edit", label: "continue", baselineDecision: "continue", gateDecision: "continue", baselineAdvisorCalls: 0, gateAdvisorCalls: 0, baselineHostedTokens: 0, gateHostedTokens: 0, baselineLatencyMs: 20, gateLatencyMs: 20, baselineOutcome: "accepted", gateOutcome: "accepted", failureClass: "none" },
+  { id: "fixture-002", phase: "preflight", taskClass: "implementation", label: "escalate", baselineDecision: "escalate", gateDecision: "escalate", baselineAdvisorCalls: 1, gateAdvisorCalls: 1, baselineHostedTokens: 900, gateHostedTokens: 900, baselineLatencyMs: 90, gateLatencyMs: 90, baselineOutcome: "accepted", gateOutcome: "accepted", failureClass: "none" },
+  { id: "fixture-003", phase: "review", taskClass: "debug", label: "escalate", baselineDecision: "escalate", gateDecision: "escalate", baselineAdvisorCalls: 1, gateAdvisorCalls: 1, baselineHostedTokens: 700, gateHostedTokens: 700, baselineLatencyMs: 80, gateLatencyMs: 80, baselineOutcome: "accepted", gateOutcome: "accepted", failureClass: "none" },
+  { id: "fixture-004", phase: "review", taskClass: "review", label: "continue", baselineDecision: "escalate", gateDecision: "continue", baselineAdvisorCalls: 1, gateAdvisorCalls: 0, baselineHostedTokens: 600, gateHostedTokens: 0, baselineLatencyMs: 75, gateLatencyMs: 20, baselineOutcome: "accepted", gateOutcome: "accepted", failureClass: "none" },
+  { id: "fixture-005", phase: "closeout", taskClass: "architecture", label: "escalate", baselineDecision: "escalate", gateDecision: "escalate", baselineAdvisorCalls: 1, gateAdvisorCalls: 1, baselineHostedTokens: 1_100, gateHostedTokens: 1_100, baselineLatencyMs: 120, gateLatencyMs: 120, baselineOutcome: "accepted", gateOutcome: "accepted", failureClass: "none" },
+  { id: "fixture-006", phase: "preflight", taskClass: "safety_sensitive", label: "escalate", baselineDecision: "escalate", gateDecision: "escalate", baselineAdvisorCalls: 1, gateAdvisorCalls: 1, baselineHostedTokens: 500, gateHostedTokens: 500, baselineLatencyMs: 60, gateLatencyMs: 60, baselineOutcome: "accepted", gateOutcome: "accepted", failureClass: "none" },
+  { id: "fixture-007", phase: "review", taskClass: "failure", label: "escalate", baselineDecision: "escalate", gateDecision: "escalate", baselineAdvisorCalls: 1, gateAdvisorCalls: 1, baselineHostedTokens: 400, gateHostedTokens: 400, baselineLatencyMs: 100, gateLatencyMs: 100, baselineOutcome: "incomplete", gateOutcome: "incomplete", failureClass: "timeout" },
 ];
 
 const PHASES: readonly GatePhase[] = ["preflight", "review", "closeout"];
-const TASK_CLASSES: readonly GateTaskClass[] = ["quick_edit", "implementation", "debug", "review", "architecture", "safety_sensitive", "trivial"];
+const TASK_CLASSES: readonly GateTaskClass[] = ["quick_edit", "implementation", "debug", "review", "architecture", "safety_sensitive", "trivial", "failure"];
 const FAILURE_CLASSES: Record<string, true> = { none: true, timeout: true, provider_error: true, rate_limit: true, budget: true, other: true };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -78,7 +89,7 @@ function numberField(value: unknown, name: string): number {
 function validateRow(value: unknown): GateEvalRow {
   if (!isRecord(value)) throw new Error("row must be an object");
   const keys = Object.keys(value).sort();
-  const allowed = ["baselineAdvisorCalls", "baselineDecision", "baselineHostedTokens", "baselineOutcome", "failureClass", "gateAdvisorCalls", "gateDecision", "gateHostedTokens", "gateOutcome", "id", "label", "phase", "taskClass"].sort();
+  const allowed = ["baselineAdvisorCalls", "baselineDecision", "baselineHostedTokens", "baselineLatencyMs", "baselineOutcome", "failureClass", "gateAdvisorCalls", "gateDecision", "gateHostedTokens", "gateLatencyMs", "gateOutcome", "id", "label", "phase", "taskClass"].sort();
   if (keys.join(",") !== allowed.join(",")) throw new Error("row contains unknown or missing fields");
   if (typeof value.id !== "string" || !/^[A-Za-z0-9._:-]{1,128}$/.test(value.id)) throw new Error("row.id is invalid");
   if (!PHASES.includes(value.phase as GatePhase)) throw new Error("row.phase is invalid");
@@ -99,6 +110,8 @@ function validateRow(value: unknown): GateEvalRow {
     baselineAdvisorCalls: numberField(value.baselineAdvisorCalls, "row.baselineAdvisorCalls"),
     gateAdvisorCalls: numberField(value.gateAdvisorCalls, "row.gateAdvisorCalls"),
     baselineHostedTokens: numberField(value.baselineHostedTokens, "row.baselineHostedTokens"),
+    baselineLatencyMs: numberField(value.baselineLatencyMs, "row.baselineLatencyMs"),
+    gateLatencyMs: numberField(value.gateLatencyMs, "row.gateLatencyMs"),
     gateHostedTokens: numberField(value.gateHostedTokens, "row.gateHostedTokens"),
     baselineOutcome: value.baselineOutcome as GateOutcome,
     gateOutcome: value.gateOutcome as GateOutcome,
@@ -107,7 +120,7 @@ function validateRow(value: unknown): GateEvalRow {
 }
 
 function emptyMetrics(): GateSliceMetrics {
-  return { rows: 0, baselineEscalations: 0, gateEscalations: 0, baselineAdvisorCalls: 0, gateAdvisorCalls: 0, baselineHostedTokens: 0, gateHostedTokens: 0, falseEscalations: 0, missedEscalations: 0, accuracy: 0, escalationRate: 0, advisorCallReduction: 0, hostedTokenReduction: 0, baselineAcceptedRate: 0, gateAcceptedRate: 0 };
+  return { rows: 0, baselineEscalations: 0, gateEscalations: 0, baselineAdvisorCalls: 0, gateAdvisorCalls: 0, baselineHostedTokens: 0, gateHostedTokens: 0, baselineFalseEscalations: 0, baselineMissedEscalations: 0, falseEscalations: 0, missedEscalations: 0, baselineAccuracy: 0, accuracy: 0, baselineEscalationRate: 0, escalationRate: 0, baselineLatencyMs: 0, gateLatencyMs: 0, failureRows: 0, advisorCallReduction: 0, hostedTokenReduction: 0, baselineAcceptedRate: 0, gateAcceptedRate: 0 };
 }
 
 function metricsFor(rows: readonly GateEvalRow[]): GateSliceMetrics {
@@ -120,12 +133,21 @@ function metricsFor(rows: readonly GateEvalRow[]): GateSliceMetrics {
     result.gateAdvisorCalls += row.gateAdvisorCalls;
     result.baselineHostedTokens += row.baselineHostedTokens;
     result.gateHostedTokens += row.gateHostedTokens;
+    result.baselineFalseEscalations += row.baselineDecision === "escalate" && row.label === "continue" ? 1 : 0;
+    result.baselineMissedEscalations += row.baselineDecision === "continue" && row.label === "escalate" ? 1 : 0;
+    result.baselineLatencyMs += row.baselineLatencyMs;
+    result.gateLatencyMs += row.gateLatencyMs;
+    result.failureRows += row.failureClass === "none" ? 0 : 1;
     result.falseEscalations += row.gateDecision === "escalate" && row.label === "continue" ? 1 : 0;
     result.missedEscalations += row.gateDecision === "continue" && row.label === "escalate" ? 1 : 0;
   }
   const total = result.rows || 1;
   result.accuracy = (result.rows - result.falseEscalations - result.missedEscalations) / total;
   result.escalationRate = result.gateEscalations / total;
+  result.baselineAccuracy = (result.rows - result.baselineFalseEscalations - result.baselineMissedEscalations) / total;
+  result.baselineEscalationRate = result.baselineEscalations / total;
+  result.baselineLatencyMs /= total;
+  result.gateLatencyMs /= total;
   result.advisorCallReduction = result.baselineAdvisorCalls === 0 ? (result.gateAdvisorCalls === 0 ? 0 : -1) : 1 - result.gateAdvisorCalls / result.baselineAdvisorCalls;
   result.hostedTokenReduction = result.baselineHostedTokens === 0 ? (result.gateHostedTokens === 0 ? 0 : -1) : 1 - result.gateHostedTokens / result.baselineHostedTokens;
   result.baselineAcceptedRate = rows.length === 0 ? 0 : rows.filter((row) => row.baselineOutcome === "accepted").length / rows.length;
@@ -145,17 +167,27 @@ export function evaluateHarmonizationGate(rows: readonly GateEvalRow[], sourceKi
   }
   const safetyRows = validated.filter((row) => row.taskClass === "safety_sensitive");
   const safety = metricsFor(safetyRows);
+  const failure = metricsFor(validated.filter((row) => row.failureClass !== "none"));
+  const pairedRegressions = validated.filter((row) => row.baselineOutcome === "accepted" && row.gateOutcome !== "accepted").length;
   const all = metricsFor(validated);
   let recommendation: GateEvalReport["recommendation"] = "hold";
   let recommendationReason = "synthetic or insufficient evidence; do not promote runtime policy";
   const hasUnknownOutcome = validated.some((row) => row.baselineOutcome === "unknown" || row.gateOutcome === "unknown");
+  const phaseCoverage = PHASES.every((phase) => validated.some((row) => row.phase === phase));
+  const taskCoverage = TASK_CLASSES.every((taskClass) => validated.some((row) => row.taskClass === taskClass));
   if (sourceKind === "real_replay") {
     if (safety.missedEscalations > 0) {
       recommendation = "reject";
       recommendationReason = "safety-sensitive missed escalation";
-    } else if (validated.length < 30 || safety.rows === 0 || hasUnknownOutcome) {
+    } else if (all.missedEscalations > 0) {
+      recommendation = "reject";
+      recommendationReason = "missed escalation in a guarded replay slice";
+    } else if (validated.length < 30 || !phaseCoverage || !taskCoverage || safety.rows === 0 || failure.rows === 0 || hasUnknownOutcome) {
       recommendation = "hold";
-      recommendationReason = "insufficient real replay evidence: require at least 30 rows, safety coverage, and known outcomes";
+      recommendationReason = "insufficient real replay evidence: require 30 rows, every phase/task/failure guard slice, and known outcomes";
+    } else if (all.accuracy < 0.87 || all.accuracy < all.baselineAccuracy || all.falseEscalations > 0 || pairedRegressions > 0 || all.gateLatencyMs > all.baselineLatencyMs * 1.2) {
+      recommendation = "hold";
+      recommendationReason = "gate regresses decision quality, paired outcomes, or latency against baseline";
     } else if (all.gateAcceptedRate + 0.05 < all.baselineAcceptedRate || all.gateAdvisorCalls > all.baselineAdvisorCalls || all.gateHostedTokens > all.baselineHostedTokens) {
       recommendation = "hold";
       recommendationReason = "gate has no demonstrated outcome and cost advantage over baseline";
@@ -171,6 +203,7 @@ export function evaluateHarmonizationGate(rows: readonly GateEvalRow[], sourceKi
     phases: byKey(validated, "phase") as Record<GatePhase, GateSliceMetrics>,
     taskClasses: byKey(validated, "taskClass") as Record<GateTaskClass, GateSliceMetrics>,
     safety,
+    failure,
     recommendation,
     recommendationReason,
   };
