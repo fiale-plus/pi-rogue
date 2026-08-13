@@ -75,7 +75,7 @@ export const HARMONIZATION_GATE_FIXTURES: readonly GateEvalRow[] = [
 
 const PHASES: readonly GatePhase[] = ["preflight", "review", "closeout"];
 const TASK_CLASSES: readonly GateTaskClass[] = ["quick_edit", "implementation", "debug", "review", "architecture", "safety_sensitive", "trivial", "failure"];
-const FAILURE_CLASSES: Record<string, true> = { none: true, timeout: true, provider_error: true, rate_limit: true, budget: true, other: true };
+const FAILURE_CLASSES = new Set(["none", "timeout", "provider_error", "rate_limit", "budget", "other"]);
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value && typeof value === "object" && !Array.isArray(value));
@@ -99,7 +99,7 @@ function validateRow(value: unknown): GateEvalRow {
   if (value.gateDecision !== "continue" && value.gateDecision !== "escalate") throw new Error("row.gateDecision is invalid");
   if (value.baselineOutcome !== "accepted" && value.baselineOutcome !== "regressed" && value.baselineOutcome !== "incomplete" && value.baselineOutcome !== "unknown") throw new Error("row.baselineOutcome is invalid");
   if (value.gateOutcome !== "accepted" && value.gateOutcome !== "regressed" && value.gateOutcome !== "incomplete" && value.gateOutcome !== "unknown") throw new Error("row.gateOutcome is invalid");
-  if (typeof value.failureClass !== "string" || !FAILURE_CLASSES[value.failureClass]) throw new Error("row.failureClass is invalid");
+  if (typeof value.failureClass !== "string" || !FAILURE_CLASSES.has(value.failureClass)) throw new Error("row.failureClass is invalid");
   return {
     id: value.id,
     phase: value.phase as GatePhase,
@@ -174,6 +174,9 @@ export function evaluateHarmonizationGate(rows: readonly GateEvalRow[], sourceKi
   let recommendation: GateEvalReport["recommendation"] = "hold";
   let recommendationReason = "synthetic or insufficient evidence; do not promote runtime policy";
   const hasUnknownOutcome = validated.some((row) => row.baselineOutcome === "unknown" || row.gateOutcome === "unknown");
+  const hasIncompleteOutcome = validated.some((row) => row.baselineOutcome === "incomplete" || row.gateOutcome === "incomplete");
+  const hasBothDecisionLabels = ["continue", "escalate"].every((label) => validated.some((row) => row.label === label));
+
   const phaseCoverage = PHASES.every((phase) => validated.some((row) => row.phase === phase));
   const taskCoverage = TASK_CLASSES.every((taskClass) => validated.some((row) => row.taskClass === taskClass));
   const guardedSlices = [safety, failure, ...PHASES.map((phase) => metricsFor(validated.filter((row) => row.phase === phase))), ...TASK_CLASSES.map((taskClass) => metricsFor(validated.filter((row) => row.taskClass === taskClass)))];
@@ -186,9 +189,9 @@ export function evaluateHarmonizationGate(rows: readonly GateEvalRow[], sourceKi
     } else if (all.missedEscalations > 0) {
       recommendation = "reject";
       recommendationReason = "missed escalation in a guarded replay slice";
-    } else if (validated.length < 30 || !phaseCoverage || !taskCoverage || safety.rows === 0 || failure.rows === 0 || hasUnknownOutcome) {
+    } else if (validated.length < 30 || !phaseCoverage || !taskCoverage || safety.rows === 0 || failure.rows === 0 || hasUnknownOutcome || hasIncompleteOutcome || !hasBothDecisionLabels) {
       recommendation = "hold";
-      recommendationReason = "insufficient real replay evidence: require 30 rows, every phase/task/failure guard slice, and known outcomes";
+      recommendationReason = "insufficient real replay evidence: require 30 rows, both decision labels, every phase/task/failure guard slice, and known complete outcomes";
     } else if (all.accuracy < 0.87 || all.accuracy < all.baselineAccuracy || all.falseEscalations > 0 || pairedRegressions > 0 || gateRegressions > 0 || failure.gateAcceptedRate + 0.05 < failure.baselineAcceptedRate || sliceLatencyRegression) {
       recommendation = "hold";
       recommendationReason = "gate regresses decision quality, paired outcomes, or latency against baseline";
@@ -222,7 +225,18 @@ function parseInput(path: string): { sourceKind: GateSourceKind; rows: GateEvalR
   const parsed: unknown = JSON.parse(readFileSync(path, "utf8"));
   if (!isRecord(parsed) || (parsed.sourceKind !== "synthetic" && parsed.sourceKind !== "real_replay") || !Array.isArray(parsed.rows)) throw new Error("input must be an envelope with sourceKind and rows");
   if (Object.keys(parsed).sort().join(",") !== "rows,sourceKind") throw new Error("input contains unknown or missing fields");
+
   return { sourceKind: parsed.sourceKind, rows: parsed.rows.map(validateRow) };
+}
+
+function validateCliArgs(argv: readonly string[]): void {
+  const allowed = new Set(["--input", "--output"]);
+  for (let index = 0; index < argv.length; index += 1) {
+    const flag = argv[index];
+    if (!allowed.has(flag)) throw new Error(`unknown flag: ${flag}`);
+    if (!argv[index + 1] || argv[index + 1].startsWith("--")) throw new Error(`${flag} requires a value`);
+    index += 1;
+  }
 }
 
 function cliValue(argv: readonly string[], flag: string): string | undefined {
@@ -235,6 +249,7 @@ function cliValue(argv: readonly string[], flag: string): string | undefined {
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   const args = process.argv.slice(2);
+  validateCliArgs(args);
   const inputPath = cliValue(args, "--input");
   const outputPath = cliValue(args, "--output");
   const input = inputPath ? parseInput(inputPath) : { sourceKind: "synthetic" as const, rows: [...HARMONIZATION_GATE_FIXTURES] };
