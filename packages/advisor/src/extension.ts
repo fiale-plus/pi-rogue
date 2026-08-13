@@ -65,62 +65,90 @@ import {
   type BoardShadowState,
 } from "./board-shadow.js";
 
-// ── Config: 3 optional fields ────────────────────────────────────────────
+// ── Explicit-only configuration ─────────────────────────────────────────
 
 export type AdvisorProfileId = "budget-board";
 
-export interface AdvisorProfileRestore {
-  mode: "auto" | "manual" | "off";
-  review: "light" | "strict" | "off";
-  checkins: "mid-hour" | "off";
-  checkinIntervalMinutes: number;
-  model?: string;
-  /** Advisor model written by the profile; used to distinguish profile-owned vs user-changed model overrides. */
-  profileModel?: string;
-  /** Active mode written by the profile; used to distinguish profile-owned vs user-changed mode. */
-  profileMode?: "auto" | "manual" | "off";
-  /** Active review setting written by the profile; used to distinguish profile-owned vs user-changed review. */
-  profileReview?: "light" | "strict" | "off";
-  /** Active check-in setting written by the profile; used to distinguish profile-owned vs user-changed check-ins. */
-  profileCheckins?: "mid-hour" | "off";
-  board: BoardShadowConfig;
-  headOfBoard: HeadOfBoardConfig;
-  specialistDispatch: SpecialistDispatchConfig;
+export interface AdvisorModels {
+  advisor?: string;
+  specialist?: string;
+  head?: string;
 }
 
+export interface AdvisorBoardBounds {
+  maxEvidence?: number;
+  maxRisks?: number;
+  maxFailures?: number;
+  maxSubagents?: number;
+  maxTokens?: number;
+  /** Legacy marker accepted only for source compatibility; never normalized. */
+  mode?: "off" | "shadow";
+}
+
+/**
+ * Public configuration intentionally contains only explicit model slots and
+ * compact Board bounds. Legacy fields are accepted by normalization below,
+ * but are never emitted or persisted.
+ */
 export interface AdvisorConfig {
-  /** Explicit Pi-Rogue advisor profile; unset means built-in behavior only. */
-  profile?: AdvisorProfileId;
-  /** Previous advisor settings captured before applying the active profile. */
-  profileRestore?: AdvisorProfileRestore;
-  /** "auto" (preflight+post+cache), "manual" (just /pi-rogue-advisor), "off" */
-  mode: "auto" | "manual" | "off";
-  /** "light" (file changes/errors only) | "strict" (every 3 turns) | "off" */
-  review: "light" | "strict" | "off";
-  /** Opportunistic advisor check-ins during long sessions. */
-  checkins: "mid-hour" | "off";
-  /** Minutes between check-ins; bounded and cheap-gated by recent activity. */
-  checkinIntervalMinutes: number;
-  /** Optional start time (ms since epoch) for the active check-in stream. */
-  checkinStartedAt?: number;
-  /** Optional model override. Auto-detects SOTA (gpt-5.5, claude-opus-4-6…) if unset */
+  models?: AdvisorModels;
+  board?: AdvisorBoardBounds;
+  // Source-compatibility fields for old callers; normalizeAdvisorConfig strips them.
   model?: string;
-  /** Advisor Board phase-1 shadow/probation mode. */
-  board: BoardShadowConfig;
-  /** Isolated Head-of-Board escalation adapter; disabled by default. */
+  mode?: "auto" | "manual" | "off";
+  review?: "light" | "strict" | "off";
+  checkins?: "mid-hour" | "off";
+  checkinIntervalMinutes?: number;
+  checkinStartedAt?: number;
+  profile?: AdvisorProfileId;
+  profileRestore?: unknown;
   headOfBoard: HeadOfBoardConfig;
-  /** Read-only specialist dispatch policy; suggest-only by default. */
   specialistDispatch: SpecialistDispatchConfig;
 }
-
-const DEFAULT_CONFIG: AdvisorConfig = {
-  mode: "auto",
-  review: "light",
-  checkins: "off",
+const DEFAULT_CONFIG = {
+  models: {},
+  board: {
+    maxEvidence: 8,
+    maxRisks: 6,
+    maxFailures: 4,
+    maxSubagents: 6,
+    maxTokens: 1200,
+  },
+  mode: "auto" as const,
+  review: "light" as const,
+  checkins: "off" as const,
   checkinIntervalMinutes: 30,
-  board: defaultBoardShadowConfig(),
   headOfBoard: defaultHeadOfBoardConfig(),
   specialistDispatch: defaultSpecialistDispatchConfig(),
+} satisfies AdvisorConfig & { models: AdvisorModels; board: AdvisorBoardBounds };
+
+export interface AdvisorProfileRestore {
+  mode?: "auto" | "manual" | "off";
+  review?: "light" | "strict" | "off";
+  checkins?: "mid-hour" | "off";
+  checkinIntervalMinutes?: number;
+  model?: string;
+  profileModel?: string;
+  profileMode?: "auto" | "manual" | "off";
+  profileReview?: "light" | "strict" | "off";
+  profileCheckins?: "mid-hour" | "off";
+  board?: AdvisorBoardBounds;
+  headOfBoard?: HeadOfBoardConfig;
+  specialistDispatch?: SpecialistDispatchConfig;
+  [key: string]: unknown;
+}
+
+type LegacyAdvisorConfig = Partial<AdvisorConfig> & {
+  model?: unknown;
+  mode?: unknown;
+  review?: unknown;
+  checkins?: unknown;
+  checkinIntervalMinutes?: unknown;
+  checkinStartedAt?: unknown;
+  profile?: unknown;
+  profileRestore?: unknown;
+  headOfBoard?: unknown;
+  specialistDispatch?: unknown;
 };
 
 const CONFIG_PATH = featureFile("advisor", "config.json");
@@ -307,54 +335,40 @@ function writeJson(path: string, v: unknown) {
   writeText(path, JSON.stringify(v, null, 2) + "\n");
 }
 
-function normalizeProfileRestore(raw: unknown): AdvisorProfileRestore | undefined {
-  if (!raw || typeof raw !== "object") return undefined;
-  const record = raw as Partial<AdvisorProfileRestore>;
-  const interval = Number(record.checkinIntervalMinutes ?? DEFAULT_CONFIG.checkinIntervalMinutes);
-  return {
-    mode: record.mode === "manual" || record.mode === "off" ? record.mode : "auto",
-    review: record.review === "strict" || record.review === "off" ? record.review : "light",
-    checkins: record.checkins === "mid-hour" ? "mid-hour" : DEFAULT_CONFIG.checkins,
-    checkinIntervalMinutes: Math.min(
-      MAX_CHECKIN_INTERVAL_MINUTES,
-      Math.max(
-        MIN_CHECKIN_INTERVAL_MINUTES,
-        Number.isFinite(interval) ? Math.round(interval) : DEFAULT_CONFIG.checkinIntervalMinutes,
-      ),
-    ),
-    model: record.model || undefined,
-    profileModel: record.profileModel || undefined,
-    profileMode: record.profileMode === "manual" || record.profileMode === "off" ? record.profileMode : record.profileMode === "auto" ? "auto" : undefined,
-    profileReview: record.profileReview === "strict" || record.profileReview === "off" ? record.profileReview : record.profileReview === "light" ? "light" : undefined,
-    profileCheckins: record.profileCheckins === "mid-hour" ? "mid-hour" : record.profileCheckins === "off" ? "off" : undefined,
-    board: normalizeBoardShadowConfig(record.board),
-    headOfBoard: normalizeHeadOfBoardConfig(record.headOfBoard),
-    specialistDispatch: normalizeSpecialistDispatchConfig(record.specialistDispatch),
-  };
+function boundedBoardValue(value: unknown, fallback: number, min: number, max: number): number {
+  const number = Number(value);
+  return Number.isFinite(number) ? Math.min(max, Math.max(min, Math.round(number))) : fallback;
 }
 
-export function normalizeAdvisorConfig(raw: Partial<AdvisorConfig> = {}): AdvisorConfig {
-  const interval = Number(raw.checkinIntervalMinutes ?? DEFAULT_CONFIG.checkinIntervalMinutes);
-  const startedAt = Number(raw.checkinStartedAt);
-  return {
-    profile: raw.profile === BUDGET_BOARD_PROFILE_ID ? raw.profile : undefined,
-    profileRestore: raw.profile === BUDGET_BOARD_PROFILE_ID ? normalizeProfileRestore(raw.profileRestore) : undefined,
-    mode: (raw.mode === "manual" || raw.mode === "off") ? raw.mode : "auto",
-    review: (raw.review === "strict" || raw.review === "off") ? raw.review : "light",
-    checkins: raw.checkins === "mid-hour" ? "mid-hour" : DEFAULT_CONFIG.checkins,
-    checkinIntervalMinutes: Math.min(
-      MAX_CHECKIN_INTERVAL_MINUTES,
-      Math.max(
-        MIN_CHECKIN_INTERVAL_MINUTES,
-        Number.isFinite(interval) ? Math.round(interval) : DEFAULT_CONFIG.checkinIntervalMinutes,
-      ),
-    ),
-    checkinStartedAt: Number.isFinite(startedAt) ? startedAt : undefined,
-    model: raw.model || undefined,
-    board: normalizeBoardShadowConfig(raw.board),
-    headOfBoard: normalizeHeadOfBoardConfig(raw.headOfBoard),
-    specialistDispatch: normalizeSpecialistDispatchConfig(raw.specialistDispatch),
+function cleanModelSlot(value: unknown): string | undefined {
+  const model = typeof value === "string" ? value.trim() : "";
+  return model && model.includes("/") ? model : undefined;
+}
+
+export function normalizeAdvisorConfig(raw: Partial<AdvisorConfig> | LegacyAdvisorConfig = {}): AdvisorConfig {
+  const legacy = raw as LegacyAdvisorConfig;
+  const sourceModels = raw.models && typeof raw.models === "object" ? raw.models : {};
+  const legacyHead = legacy.headOfBoard && typeof legacy.headOfBoard === "object" ? legacy.headOfBoard as unknown as Record<string, unknown> : {};
+  const legacySpecialist = legacy.specialistDispatch && typeof legacy.specialistDispatch === "object" ? legacy.specialistDispatch as unknown as Record<string, unknown> : {};
+  const sourceBoard = raw.board && typeof raw.board === "object" ? raw.board as Partial<AdvisorBoardBounds> : {};
+  const models: AdvisorModels = {
+    advisor: cleanModelSlot(sourceModels.advisor) ?? cleanModelSlot(legacy.model),
+    specialist: cleanModelSlot(sourceModels.specialist) ?? cleanModelSlot(legacySpecialist.model),
+    head: cleanModelSlot(sourceModels.head) ?? cleanModelSlot(legacyHead.model),
   };
+  for (const key of Object.keys(models) as Array<keyof AdvisorModels>) {
+    if (!models[key]) delete models[key];
+  }
+  return {
+    models,
+    board: {
+      maxEvidence: boundedBoardValue(sourceBoard.maxEvidence, DEFAULT_CONFIG.board.maxEvidence ?? 8, 1, 32),
+      maxRisks: boundedBoardValue(sourceBoard.maxRisks, DEFAULT_CONFIG.board.maxRisks ?? 6, 1, 16),
+      maxFailures: boundedBoardValue(sourceBoard.maxFailures, DEFAULT_CONFIG.board.maxFailures ?? 4, 1, 12),
+      maxSubagents: boundedBoardValue(sourceBoard.maxSubagents, DEFAULT_CONFIG.board.maxSubagents ?? 6, 1, 16),
+      maxTokens: boundedBoardValue(sourceBoard.maxTokens, DEFAULT_CONFIG.board.maxTokens ?? 1200, 200, 2400),
+    },
+  } as AdvisorConfig;
 }
 
 function loadConfig(): AdvisorConfig {
@@ -536,7 +550,6 @@ function loadStateFromPath(path: string): SessionState {
       lastContextHash: typeof (raw.advisorLoop as { lastContextHash?: unknown }).lastContextHash === "string" ? (raw.advisorLoop as { lastContextHash?: string }).lastContextHash : undefined,
       lastSource: typeof (raw.advisorLoop as { lastSource?: unknown }).lastSource === "string" ? (raw.advisorLoop as { lastSource?: string }).lastSource : undefined,
       lastObservedAt: typeof (raw.advisorLoop as { lastObservedAt?: unknown }).lastObservedAt === "string" ? (raw.advisorLoop as { lastObservedAt?: string }).lastObservedAt : undefined,
-      alerts: normalizeAdvisorLoopAlerts(raw.advisorLoop),
     } : defaultAdvisorLoopState(),
     board: normalizeBoardShadowState(raw.board),
     headOfBoard: raw.headOfBoard && typeof raw.headOfBoard === "object" ? {
@@ -667,7 +680,7 @@ function boardShadowArtifactContext(state: SessionState, result: ReturnType<type
 }
 
 function recordBoardShadowIfEnabled(ctx: any, cfg: AdvisorConfig, state: SessionState, source: string, toolResults?: any[]): void {
-  if (cfg.board.mode !== "shadow") return;
+  if (cfg.board?.mode !== "shadow") return;
   const shadowPath = boardTelemetryPath(ctx, "board-shadow.jsonl");
   const flightPath = boardTelemetryPath(ctx, "board-flight.jsonl");
   if (!shadowPath || !flightPath) return;
@@ -711,7 +724,7 @@ function recordBoardShadowIfEnabled(ctx: any, cfg: AdvisorConfig, state: Session
 
 function headOfBoardStatusText(cfg: AdvisorConfig, state: SessionState): string {
   return [
-    `Advisor Head-of-Board: ${cfg.headOfBoard.mode}`,
+    `Advisor Head-of-Board: explicit-only`,
     `Calls: ${state.headOfBoard?.calls ?? 0}`,
     state.headOfBoard?.lastAt ? `Last: ${state.headOfBoard.lastAt}` : "Last: never",
     state.headOfBoard?.lastModel ? `Last model: ${state.headOfBoard.lastModel}` : undefined,
@@ -735,13 +748,23 @@ async function runHeadOfBoardCommand(ctx: any, cfg: AdvisorConfig, state: Sessio
   const ledger = currentBoardLedger(ctx, state);
   const decision = decideBoardAction(ledger);
   state.headOfBoard = state.headOfBoard ?? { calls: 0 };
-  const result = await callHeadOfBoardAdapter(cfg.headOfBoard, { ledger, decision, question, reason: "user_request" }, async (systemPrompt, messages, options) => {
-    return completeWithHigherAdvisorModel(ctx, cfg, systemPrompt, messages, { ...options, allowRegularFallback: false, maxAttempts: 1 });
+  const headConfig = {
+    ...defaultHeadOfBoardConfig(),
+    mode: "enabled" as const,
+    maxEvidence: cfg.board?.maxEvidence ?? DEFAULT_CONFIG.board.maxEvidence,
+    maxRisks: cfg.board?.maxRisks ?? DEFAULT_CONFIG.board.maxRisks,
+    maxFailures: cfg.board?.maxFailures ?? DEFAULT_CONFIG.board.maxFailures,
+    maxSubagents: cfg.board?.maxSubagents ?? DEFAULT_CONFIG.board.maxSubagents,
+    maxTokens: cfg.board?.maxTokens ?? DEFAULT_CONFIG.board.maxTokens,
+  };
+  const modelConfig = { ...cfg, models: { ...(cfg.models ?? {}), advisor: cfg.models?.head ?? cfg.models?.advisor } };
+  const result = await callHeadOfBoardAdapter(headConfig, { ledger, decision, question, reason: "user_request" }, async (systemPrompt, messages, options) => {
+    return completeWithHigherAdvisorModel(ctx, modelConfig, systemPrompt, messages, { ...options, allowRegularFallback: false, maxAttempts: 1 });
   });
   if (result.skipped) {
     state.headOfBoard.lastSkipped = result.skipped;
     saveState(state);
-    ctx.ui.notify(`Head-of-Board skipped: ${result.skipped}. Enable with /pi-rogue-advisor board head on.`, "info");
+    ctx.ui.notify(`Head-of-Board skipped: ${result.skipped}`, "info");
     return;
   }
   if (!result.response) {
@@ -760,14 +783,11 @@ async function runHeadOfBoardCommand(ctx: any, cfg: AdvisorConfig, state: Sessio
 
 function specialistDispatchStatusText(cfg: AdvisorConfig, state: SessionState): string {
   return [
-    `Advisor Specialists: ${cfg.specialistDispatch.mode}`,
+    "Advisor Specialists: explicit-only",
     `Calls: ${state.specialistDispatch?.calls ?? 0}`,
     state.specialistDispatch?.lastRole ? `Last role: ${state.specialistDispatch.lastRole}` : "Last role: none",
-    state.specialistDispatch?.lastNote ? `Last note: ${truncate(sanitizeAdvisorText(state.specialistDispatch.lastNote), 240)}` : undefined,
-    state.specialistDispatch?.lastDenied ? `Last denied: ${state.specialistDispatch.lastDenied}` : undefined,
-    `Policy: cooldown=${cfg.specialistDispatch.cooldownTurns} turns, maxCalls=${cfg.specialistDispatch.maxCallsPerSession}, maxCost=${cfg.specialistDispatch.maxCostTier}`,
-    "Constraints: read-only specialists only, compact ledger input, strict JSON result schema.",
-  ].filter(Boolean).join("\n");
+    "Constraints: read/search/context_lookup tools only, compact ledger input, bounded output.",
+  ].join("\n");
 }
 
 function specialistById(roleId: string) {
@@ -795,22 +815,27 @@ async function runSpecialistCommand(ctx: any, cfg: AdvisorConfig, state: Session
     ctx.ui.notify(found.diagnostic ?? "Specialist unavailable.", "error");
     return;
   }
-  state.specialistDispatch = state.specialistDispatch ?? defaultSpecialistCallState();
+  const specialistConfig = {
+    ...defaultSpecialistDispatchConfig(),
+    mode: "suggest" as const,
+    maxTokens: Math.min(defaultSpecialistDispatchConfig().maxTokens, cfg.board?.maxTokens ?? DEFAULT_CONFIG.board.maxTokens),
+  };
+  const modelConfig = { ...cfg, models: { ...(cfg.models ?? {}), advisor: cfg.models?.specialist ?? cfg.models?.advisor } };
   const result = await callReadOnlySpecialist({
     role: found.role,
     ledger: currentBoardLedger(ctx, state),
     task,
-    config: cfg.specialistDispatch,
-    state: state.specialistDispatch,
+    config: specialistConfig,
+    state: state.specialistDispatch!,
     currentTurn: state.turns,
     complete: async (systemPrompt, messages, options) => {
-      const resp = await completeWithHigherAdvisorModel(ctx, cfg, systemPrompt, messages, { maxTokens: options.maxTokens, reasoning: "medium", allowRegularFallback: false, maxAttempts: 1 });
+      const resp = await completeWithHigherAdvisorModel(ctx, modelConfig, systemPrompt, messages, { maxTokens: options.maxTokens, reasoning: "medium", allowRegularFallback: false, maxAttempts: 1 });
       if (!resp || resp.rateLimited) throw new Error(resp?.text || "specialist model unavailable");
       return resp.text;
     },
   });
   if ("denied" in result) {
-    state.specialistDispatch.lastDenied = result.denied;
+    state.specialistDispatch!.lastDenied = result.denied;
     saveState(state);
     ctx.ui.notify(`Specialist dispatch denied: ${result.denied}`, "warning");
     return;
@@ -1848,74 +1873,6 @@ function resetTaskScopedStateForSwitch(state: SessionState): void {
   };
 }
 
-function retainExplicitAdvisorLoopHistory(state: SessionState): void {
-  const loop = state.advisorLoop;
-  if (!loop) return;
-  const recent = loop.recent.filter((entry) => entry.source === "question");
-  const alerts = (loop.alerts ?? []).filter((entry) => entry.source === "question");
-  const last = recent.at(-1);
-  state.advisorLoop = recent.length || alerts.length
-    ? {
-        repeatCount: last?.repeatCount ?? 0,
-        recent,
-        lastOutputHash: last?.outputHash,
-        lastOutputText: last?.outputText,
-        lastContextHash: last?.contextHash,
-        lastSource: last?.source,
-        lastObservedAt: last?.at,
-        alerts,
-      }
-    : defaultAdvisorLoopState();
-}
-
-function clearDisabledAdvisorReplay(state: SessionState, mode: "manual" | "off"): boolean {
-  const hasAutomaticLoopState = Boolean(
-    state.advisorLoop?.recent.some((entry) => entry.source !== "question")
-    || state.advisorLoop?.alerts?.some((entry) => entry.source !== "question"),
-  );
-  const hadReplay = Boolean(
-    state.followUp
-    || state.reviewSignals.length
-    || state.reviewControl.pending
-    || state.reviewControl.running
-    || hasAutomaticLoopState,
-  );
-  if (!hadReplay) return false;
-
-  appendAdvisorDiagnostic("advisor_replay_cleared_disabled", {
-    mode,
-    task: state.lastTask,
-    followUp: Boolean(state.followUp),
-    reviewSignals: state.reviewSignals.length,
-    reviewPending: state.reviewControl.pending,
-  });
-  state.followUp = "";
-  state.followUpTask = undefined;
-  state.reviewSignals = [];
-  state.reviewSignalsTask = undefined;
-  state.reviewControl = {
-    ...state.reviewControl,
-    status: "consumed",
-    pending: false,
-    consumed: true,
-    running: false,
-    lastMaterialSignature: undefined,
-    lastDecision: "defer",
-    lastReason: `automatic advisor replay cleared (mode=${mode})`,
-    lastAppliedAt: new Date().toISOString(),
-  };
-  retainExplicitAdvisorLoopHistory(state);
-  if (state.router.review) {
-    state.router.review = {
-      ...state.router.review,
-      review: "off",
-      escalate: false,
-      reason: `advisor mode=${mode}`,
-    };
-  }
-  return true;
-}
-
 function reviewMaterialSignature(state: SessionState, delta: string, meta: ReviewMaterialMeta): string {
   const signals = normalizeReviewSignals(meta.materialSignals);
   return hash(
@@ -2069,18 +2026,6 @@ function hasActiveTerminalEvidence(state: SessionState): boolean {
   return isTaskContinuation(evidence.task, state.lastTask);
 }
 
-function hasBlockingEvidenceAfterTimestamp(state: SessionState, at: string): boolean {
-  const cutoff = Date.parse(at);
-  if (!Number.isFinite(cutoff)) return false;
-  return (state.evidenceLedger ?? []).some((entry) => {
-    const entryTime = Date.parse(entry.timestamp);
-    if (!Number.isFinite(entryTime) || entryTime <= cutoff) return false;
-    if (entry.kind === "validation" && entry.result === "fail") return true;
-    if (entry.kind === "merge" && (entry.result === "not_merged" || entry.result === "error")) return true;
-    return false;
-  });
-}
-
 function hasCleanCloseoutEvidence(delta: string, meta: ReviewMaterialMeta): boolean {
   if (!meta.isAgentEnd || meta.failed) return false;
   if (hasStructuredCleanCloseoutEvidence(delta, meta)) return true;
@@ -2155,14 +2100,6 @@ type AdvisorLoopEntry = {
   at: string;
 };
 
-type AdvisorLoopAlert = {
-  outputHash: string;
-  outputText: string;
-  familyHash: string;
-  source: string;
-  at: string;
-};
-
 type AdvisorLoopState = {
   repeatCount: number;
   recent: AdvisorLoopEntry[];
@@ -2171,30 +2108,10 @@ type AdvisorLoopState = {
   lastContextHash?: string;
   lastSource?: string;
   lastObservedAt?: string;
-  alerts?: AdvisorLoopAlert[];
 };
 
-function normalizeAdvisorLoopAlerts(raw: Partial<SessionState>["advisorLoop"]): AdvisorLoopAlert[] {
-  if (!raw || typeof raw !== "object") return [];
-  const candidate = raw as AdvisorLoopState & { alert?: unknown };
-  const entries = [
-    ...(Array.isArray(candidate.alerts) ? candidate.alerts : []),
-    candidate.alert && typeof candidate.alert === "object" ? candidate.alert as Partial<AdvisorLoopAlert> : undefined,
-  ];
-  return entries
-    .filter((entry): entry is Partial<AdvisorLoopAlert> => Boolean(entry?.outputHash && entry?.outputText && entry?.familyHash && entry?.source))
-    .map((entry) => ({
-      outputHash: String(entry.outputHash),
-      outputText: String(entry.outputText),
-      familyHash: String(entry.familyHash),
-      source: String(entry.source),
-      at: String(entry.at ?? ""),
-    }))
-    .slice(-8);
-}
-
 function defaultAdvisorLoopState(): AdvisorLoopState {
-  return { repeatCount: 0, recent: [], alerts: [] };
+  return { repeatCount: 0, recent: [] };
 }
 
 type ReviewMaterialMeta = {
@@ -2340,17 +2257,13 @@ function advisorLoopWarning(source: string, repeatCount: number): string {
   return `Advisor loop detected: ${source} repeated near-identical guidance across changing context ${repeatCount} times. Re-anchor to the latest brief before repeating it.`;
 }
 
-function advisorLoopAlertText(source: string, repeatCount: number, outputText: string): string {
-  return `${advisorLoopWarning(source, repeatCount)}\nLatest guidance retained for review:\n${outputText}`;
-}
-
 function advisorLoopFamilyHash(parts: string[]): string {
   return hash("advisor-loop-family", ...parts.map((part) => squish(part, 300)));
 }
 
-export function observeAdvisorLoop(state: SessionState, source: string, familyHash: string, contextHash: string, outputText: string): { text: string; loopDetected: boolean; repeatCount: number; alertEmitted: boolean; suppressed: boolean } {
+function observeAdvisorLoop(state: SessionState, source: string, familyHash: string, contextHash: string, outputText: string): { text: string; loopDetected: boolean; repeatCount: number } {
   const normalized = comparableAdvisorLoopText(outputText);
-  if (!normalized) return { text: outputText, loopDetected: false, repeatCount: 0, alertEmitted: false, suppressed: false };
+  if (!normalized) return { text: outputText, loopDetected: false, repeatCount: 0 };
 
   const outputHash = hash("advisor-loop-output", normalized);
   const previous = state.advisorLoop ?? defaultAdvisorLoopState();
@@ -2363,20 +2276,6 @@ export function observeAdvisorLoop(state: SessionState, source: string, familyHa
   const loopDetected = repeatCount >= ADVISOR_LOOP_REPEAT_LIMIT;
   const now = new Date().toISOString();
   const outputSnapshot = sanitizeAdvisorText(outputText).trim().slice(0, 1200);
-  const previousAlerts = previous.alerts ?? [];
-  const previousAlert = previousAlerts.find((entry) => entry.source === source && entry.familyHash === familyHash);
-  const sameAlert = Boolean(previousAlert
-    && (previousAlert.outputHash === outputHash || isRepeatedAdvisorOutput(previousAlert.outputText, outputText)));
-  const alertEmitted = loopDetected && !sameAlert;
-  // Automatic review/check-in output should be silent after its one useful alert;
-  // explicit /pi-rogue-advisor questions continue to receive their answer.
-  const suppressRepeated = source !== "question";
-  const suppressed = loopDetected && sameAlert && suppressRepeated;
-  const alerts = alertEmitted
-    ? [...previousAlerts.filter((entry) => !(entry.source === source && entry.familyHash === familyHash)), { outputHash, outputText: outputSnapshot, familyHash, source, at: now }].slice(-8)
-    : !loopDetected
-      ? previousAlerts.filter((entry) => !(entry.source === source && entry.familyHash === familyHash))
-      : previousAlerts;
 
   state.advisorLoop = {
     repeatCount,
@@ -2386,25 +2285,16 @@ export function observeAdvisorLoop(state: SessionState, source: string, familyHa
     lastContextHash: contextHash,
     lastSource: source,
     lastObservedAt: now,
-    alerts,
   };
 
-  if (alertEmitted) {
+  if (loopDetected) {
     appendAdvisorDiagnostic("advisor_loop_detected", { source, repeatCount, contextHash, familyHash, output: outputSnapshot });
   }
 
   return {
-    text: suppressed
-      ? ""
-      : alertEmitted
-        ? advisorLoopAlertText(source, repeatCount, outputText)
-        : loopDetected && source !== "question"
-          ? advisorLoopWarning(source, repeatCount)
-          : outputText,
+    text: loopDetected ? advisorLoopWarning(source, repeatCount) : outputText,
     loopDetected,
     repeatCount,
-    alertEmitted,
-    suppressed,
   };
 }
 
@@ -2426,17 +2316,15 @@ function sendAdvisorHint(pi: ExtensionAPI, state: SessionState, familyHash: stri
   const limitedActions = normalizeAdvisorActions(actions);
   const advisorText = advisorHandoffText(decision, cleanReason, cleanSummary, limitedActions);
   const loop = observeAdvisorLoop(state, "handoff", familyHash, contextHash, advisorText);
-  if (loop.text) {
-    pi.sendMessage(
-      {
-        customType: "advisor:llm",
-        content: loop.text,
-        display: true,
-        details: { kind: "handoff", decision, reason: cleanReason, summary: cleanSummary, actions: limitedActions, loopDetected: loop.loopDetected, loopRepeatCount: loop.repeatCount },
-      },
-      { deliverAs: "followUp" },
-    );
-  }
+  pi.sendMessage(
+    {
+      customType: "advisor:llm",
+      content: loop.text,
+      display: true,
+      details: { kind: "handoff", decision, reason: cleanReason, summary: cleanSummary, actions: limitedActions, loopDetected: loop.loopDetected, loopRepeatCount: loop.repeatCount },
+    },
+    { deliverAs: "followUp" },
+  );
   return loop;
 }
 
@@ -2539,9 +2427,10 @@ function responseText(resp: { content?: Array<{ type?: string; text?: string }> 
 }
 
 function mergeRouteReview(configReview: AdvisorConfig["review"], route?: ReviewPolicy): ReviewPolicy {
-  if (configReview === "off") return "off";
-  if (!route) return configReview;
-  return mergeReviewPolicy(configReview, route);
+  const review = configReview ?? "light";
+  if (review === "off") return "off";
+  if (!route) return review;
+  return mergeReviewPolicy(review, route);
 }
 
 function sessionKey(ctx: any): string {
@@ -2641,9 +2530,8 @@ export function shouldRunCheckin(config: AdvisorConfig, state: SessionState, now
 
   const lastTurn = state.checkin.lastTurn ?? 0;
   if (state.turns <= lastTurn) return null;
-
   const lastAt = state.checkin.lastAt ? Date.parse(state.checkin.lastAt) : 0;
-  const intervalMs = normalized.checkinIntervalMinutes * 60_000;
+  const intervalMs = (normalized.checkinIntervalMinutes ?? 30) * 60_000;
   const streamStartedAt = Number.isFinite(normalized.checkinStartedAt ?? NaN)
     ? (normalized.checkinStartedAt as number)
     : startedAt;
@@ -2874,6 +2762,22 @@ function piRogueSubsystemRows(config: AdvisorConfig, state: SessionState, ctx: a
     ].join(" · "),
   };
 
+  const fusionPaths = fusionRecipeCandidatePaths(ctx, root);
+  const fusionPath = fusionPaths.find((path) => existsSync(path)) || fusionPaths[0];
+  const parsedFusion = fusionPath ? readJsonLoose(fusionPath) : undefined;
+  const fusionRecipes = Array.isArray(parsedFusion?.recipes) ? parsedFusion.recipes : [];
+  const fusionIds = fusionRecipes.map((recipe: any) => String(recipe?.id ?? "").trim()).filter(Boolean);
+  const fusionStatus: SubsystemStatusRow = {
+    subsystem: "fusion",
+    status: fusionIds.length > 0 ? "on" : "off",
+    details: [
+      `source=${fusionPaths[0] && fusionPaths[0] === String(process.env.PI_ROGUE_FUSION_RECIPES ?? "").trim() ? "env" : "user-root"}`,
+      `recipes=${fusionIds.length}`,
+      `ids=${fusionIds.length > 0 ? `${fusionIds.slice(0, 2).join(", ")}${fusionIds.length > 2 ? `, +${fusionIds.length - 2} more` : ""}` : "none"}`,
+      `file=${existsSync(fusionPath || "") ? "user-root" : "not-created"}`,
+    ].join(" · "),
+  };
+
   const contextEnabled = contextBrokerEnabledByDefault();
   const contextConfigPath = join(root, "context-broker", "config.json");
   const contextDbPath = join(root, "context-broker", "artifacts.sqlite");
@@ -2901,6 +2805,7 @@ function piRogueSubsystemRows(config: AdvisorConfig, state: SessionState, ctx: a
   return [
     advisorRow,
     routerStatus,
+    fusionStatus,
     contextRow,
     {
       subsystem: "orchestration",
@@ -2923,7 +2828,7 @@ function piRogueCockpitText(config: AdvisorConfig, state: SessionState, _current
     `posture: ${activePostureText()}`,
     formatSubsystemStatusRows(rows),
     "",
-    "Commands: /pi-rogue status · /pi-rogue-advisor|router|orchestration|context status",
+    "Commands: /pi-rogue status · /pi-rogue-advisor|router|fusion|orchestration|context status",
   ].filter(Boolean).join("\n");
 }
 
@@ -2941,12 +2846,14 @@ export interface PiRogueConfigurePlan {
   advisorModel: string;
   workerModel: string;
   smartModel: string;
-  activeRouterProfile: "balanced";
+  activeRouterProfile: "balanced" | "fusion-smart";
+  fusionRecipeId?: string;
   files: {
     summary: string;
     advisor: string;
     router: string;
     routerCards: string;
+    fusionRecipes: string;
     contextBroker: string;
   };
   warnings: string[];
@@ -3001,6 +2908,24 @@ function readJsonLoose(path: string): any | undefined {
   }
 }
 
+function fusionRecipeCandidatePaths(_ctx: any, root = piRogueRootDir()): string[] {
+  const configured = String(process.env.PI_ROGUE_FUSION_RECIPES ?? "").trim();
+  return [
+    configured,
+    join(root, "fusion", "recipes.json"),
+  ].filter(Boolean);
+}
+
+function configuredFusionRecipeIds(ctx: any, root = piRogueRootDir()): string[] {
+  for (const path of fusionRecipeCandidatePaths(ctx, root)) {
+    const parsed = readJsonLoose(path);
+    const recipes = Array.isArray(parsed?.recipes) ? parsed.recipes : [];
+    const ids = recipes.map((recipe: any) => String(recipe?.id ?? "").trim()).filter(Boolean);
+    if (ids.length > 0) return ids;
+  }
+  return [];
+}
+
 export function buildPiRogueConfigurePlan(ctx: any, mode: PiRogueConfigureMode = "status"): PiRogueConfigurePlan {
   const root = piRogueRootDir();
   const available = availableTextModels(ctx);
@@ -3010,23 +2935,27 @@ export function buildPiRogueConfigurePlan(ctx: any, mode: PiRogueConfigureMode =
     "openai-codex/gpt-5.4-mini",
     advisorModel,
   ].filter((id) => id && !id.startsWith("<"))) ?? advisorModel;
-  const smartModel = advisorModel;
+  const fusionRecipeId = configuredFusionRecipeIds(ctx, root)[0];
+  const smartModel = fusionRecipeId ? `fusion/${fusionRecipeId}` : advisorModel;
   return {
     mode,
     root,
     advisorModel,
     workerModel,
     smartModel,
-    activeRouterProfile: "balanced",
+    activeRouterProfile: fusionRecipeId ? "fusion-smart" : "balanced",
+    fusionRecipeId,
     files: {
       summary: join(root, "config.json"),
       advisor: CONFIG_PATH,
       router: join(root, "router", "config.json"),
       routerCards: join(root, "router", "model-cards.jsonl"),
+      fusionRecipes: join(root, "fusion", "recipes.json"),
       contextBroker: join(root, "context-broker", "artifacts.sqlite"),
     },
     warnings: [
       available.length === 0 ? "No text models were detected; configure a Pi model provider before applying." : "",
+      fusionRecipeId ? "" : "No fusion recipe was detected; router will use the strongest single model for smart/review roles.",
     ].filter(Boolean),
   };
 }
@@ -3046,57 +2975,24 @@ export interface AdvisorBoardProfilePlan {
 
 export function buildAdvisorBoardProfilePlan(ctx: any, current: AdvisorConfig = normalizeAdvisorConfig({})): AdvisorBoardProfilePlan {
   const normalized = normalizeAdvisorConfig(current);
-  const available = availableTextModels(ctx);
-  const preferredAdvisor = SOTA_CHAIN.map((item) => `${item.provider}/${item.model}`);
-  const configuredPreferredAdvisor = normalized.model && preferredAdvisor.includes(normalized.model) && (available.includes(normalized.model) || modelRegistryHas(ctx, normalized.model)) ? normalized.model : undefined;
-  const advisorModel = configuredPreferredAdvisor ?? firstPreferredDetected(ctx, available, preferredAdvisor) ?? "<no preferred strong advisor model detected>";
-  const driverModel = firstPreferredDetected(ctx, available, CHEAP_DRIVER_CHAIN) ?? "<no preferred cheap driver model detected>";
-  const restore: AdvisorProfileRestore = normalized.profileRestore ?? {
-    mode: normalized.mode,
-    review: normalized.review,
-    checkins: normalized.checkins,
-    checkinIntervalMinutes: normalized.checkinIntervalMinutes,
-    model: normalized.model,
-    profileModel: advisorModel.startsWith("<") ? normalized.model : advisorModel,
-    profileMode: "manual",
-    profileReview: "off",
-    profileCheckins: "off",
-    board: normalized.board,
-    headOfBoard: normalized.headOfBoard,
-    specialistDispatch: normalized.specialistDispatch,
-  };
-  const advisorConfig = normalizeAdvisorConfig({
-    ...normalized,
-    profile: BUDGET_BOARD_PROFILE_ID,
-    profileRestore: restore,
-    mode: "manual",
-    review: "off",
-    checkins: "off",
-    model: advisorModel.startsWith("<") ? normalized.model : advisorModel,
-    board: { mode: "shadow" },
-    headOfBoard: profileHeadOfBoardConfig(),
-    specialistDispatch: profileSpecialistDispatchConfig(),
-  });
+  const advisorModel = normalized.models?.advisor ?? `${SOTA_CHAIN[0].provider}/${SOTA_CHAIN[0].model}`;
+  const specialistModel = normalized.models?.specialist ?? advisorModel;
+  const headModel = normalized.models?.head ?? advisorModel;
   return {
     id: BUDGET_BOARD_PROFILE_ID,
-    active: normalized.profile === BUDGET_BOARD_PROFILE_ID,
-    driverModel,
+    active: false,
+    driverModel: advisorModel,
     advisorModel,
-    headOfBoardModel: advisorModel,
-    specialistModel: advisorModel,
+    headOfBoardModel: headModel,
+    specialistModel,
     mutatesGlobalDriver: false,
-    advisorConfig,
+    advisorConfig: normalized,
     files: { advisor: CONFIG_PATH },
-    warnings: [
-      available.length === 0 ? "No text models were detected; configure Pi model providers before enabling this profile." : "",
-      driverModel.startsWith("<") ? "No preferred cheap driver candidate was detected; status is advisory and will not mutate the global main model." : "",
-      advisorModel.startsWith("<") ? "No preferred strong advisor/head model was detected; profile enable will fail instead of falling back silently." : "",
-    ].filter(Boolean),
+    warnings: [],
   };
 }
 
 export function applyAdvisorBoardProfilePlan(plan: AdvisorBoardProfilePlan): AdvisorConfig {
-  if (plan.advisorModel.startsWith("<")) throw new Error("cannot enable budget-board profile without a detected strong advisor model");
   writeJson(plan.files.advisor, plan.advisorConfig);
   return plan.advisorConfig;
 }
@@ -3111,80 +3007,30 @@ function profileSpecialistDispatchConfig(): SpecialistDispatchConfig {
 
 export function budgetBoardEscalationPolicyText(config: AdvisorConfig): string {
   const cfg = normalizeAdvisorConfig(config);
-  const active = cfg.profile === BUDGET_BOARD_PROFILE_ID;
   return [
-    "Budget-board escalation policy:",
-    `  profile: ${active ? "active" : "inactive"}`,
-    `  strong-model loop: ${cfg.mode === "manual" && cfg.review === "off" ? "off (manual slash/tool calls only)" : `advisor mode=${cfg.mode}, review=${cfg.review}`}`,
-    `  Head-of-Board: ${cfg.headOfBoard.mode}; triggers=user_request or material Board risk; maxTokens=${cfg.headOfBoard.maxTokens}; reasoning=${cfg.headOfBoard.reasoning}`,
-    `  Specialists: ${cfg.specialistDispatch.mode}; read-only; cooldown=${cfg.specialistDispatch.cooldownTurns} turns; maxCalls=${cfg.specialistDispatch.maxCallsPerSession}; maxCost=${cfg.specialistDispatch.maxCostTier}; maxTokens=${cfg.specialistDispatch.maxTokens}`,
-    "  Denials/skips are explicit: disabled, not_material, rate_limited, cooldown, budget, cost_tier, or tool_escalation.",
+    "Advisor Board policy: explicit-only model calls.",
+    `  advisor: ${cfg.models?.advisor ?? "preferred candidate"}`,
+    `  specialist: ${cfg.models?.specialist ?? "preferred candidate"}`,
+    `  head: ${cfg.models?.head ?? "preferred candidate"}`,
+    `  bounds: ${JSON.stringify(cfg.board)}`,
   ].join("\n");
 }
 
 export function disableAdvisorBoardProfile(current: AdvisorConfig): AdvisorConfig {
-  const normalized = normalizeAdvisorConfig(current);
-  if (normalized.profile !== BUDGET_BOARD_PROFILE_ID) return normalized;
-  const restore = normalized.profileRestore ?? {
-    mode: DEFAULT_CONFIG.mode,
-    review: DEFAULT_CONFIG.review,
-    checkins: DEFAULT_CONFIG.checkins,
-    checkinIntervalMinutes: DEFAULT_CONFIG.checkinIntervalMinutes,
-    model: normalized.model,
-    profileModel: normalized.model,
-    board: defaultBoardShadowConfig(),
-    headOfBoard: defaultHeadOfBoardConfig(),
-    specialistDispatch: defaultSpecialistDispatchConfig(),
-  };
-  const profileBoard: BoardShadowConfig = { mode: "shadow" };
-  const profileHead = profileHeadOfBoardConfig();
-  const profileSpecialists = profileSpecialistDispatchConfig();
-  const currentModelIsProfileOwned = restore.profileModel !== undefined && normalized.model === restore.profileModel;
-  const profileMode = restore.profileMode ?? "manual";
-  const profileReview = restore.profileReview ?? "off";
-  const profileCheckins = restore.profileCheckins ?? "off";
-  return normalizeAdvisorConfig({
-    ...normalized,
-    profile: undefined,
-    profileRestore: undefined,
-    mode: normalized.mode !== profileMode ? normalized.mode : restore.mode,
-    review: normalized.review !== profileReview ? normalized.review : restore.review,
-    checkins: normalized.checkins !== profileCheckins ? normalized.checkins : restore.checkins,
-    checkinIntervalMinutes: normalized.checkinIntervalMinutes,
-    model: currentModelIsProfileOwned ? restore.model : normalized.model,
-    board: JSON.stringify(normalized.board) !== JSON.stringify(profileBoard) ? normalized.board : restore.board,
-    headOfBoard: JSON.stringify(normalized.headOfBoard) !== JSON.stringify(profileHead) ? normalized.headOfBoard : restore.headOfBoard,
-    specialistDispatch: JSON.stringify(normalized.specialistDispatch) !== JSON.stringify(profileSpecialists) ? normalized.specialistDispatch : restore.specialistDispatch,
-  });
+  return normalizeAdvisorConfig(current);
 }
 
 function advisorBoardProfileText(plan: AdvisorBoardProfilePlan): string {
   return [
-    "Pi-Rogue advisor profile: budget-board",
-    `Status: ${plan.active ? "active" : "available (explicit opt-in required)"}`,
-    "",
-    "Role → model mapping:",
-    `  driver/main: ${plan.driverModel} (recommended only; global main model is not mutated)`,
-    `  advisor/head-of-board: ${plan.headOfBoardModel}`,
-    `  read-only specialists: ${plan.specialistModel}`,
-    "",
-    "Board modes if enabled:",
-    `  advisor.mode: ${plan.advisorConfig.mode} (manual slash/tool calls only)`,
-    `  advisor.review: ${plan.advisorConfig.review} (no always-on expensive review loop)`,
-    `  board.shadow: ${plan.advisorConfig.board.mode}`,
-    `  headOfBoard: ${plan.advisorConfig.headOfBoard.mode}`,
-    `  specialists: ${plan.advisorConfig.specialistDispatch.mode} (read-only, maxCost=${plan.advisorConfig.specialistDispatch.maxCostTier}, maxCalls=${plan.advisorConfig.specialistDispatch.maxCallsPerSession})`,
-    "",
+    "Pi-Rogue advisor profile: explicit-only Board",
+    `Status: ${plan.active ? "active" : "available"}`,
+    `advisor: ${plan.advisorModel}`,
+    `specialist: ${plan.specialistModel}`,
+    `head: ${plan.headOfBoardModel}`,
     budgetBoardEscalationPolicyText(plan.advisorConfig),
-    "",
-    `Writes on enable: ${plan.files.advisor}`,
-    "Safety: explicit, reversible, no global driver/default model mutation, specialists remain read-only and suggest/explicit-call gated.",
-    plan.warnings.length ? "" : undefined,
-    ...plan.warnings.map((warning) => `Warning: ${warning}`),
-    "",
-    "Commands: /pi-rogue-advisor profile budget-board · /pi-rogue-advisor profile off",
-  ].filter(Boolean).join("\n");
+  ].join("\n");
 }
+
 
 function modelCardFor(modelId: string, roleHints: string[], generatedAt: string): any {
   const [provider, ...rest] = modelId.split("/");
@@ -3279,12 +3125,14 @@ export async function buildPiRoguePosturePlan(ctx: any, postureValue: unknown, o
 function guardedRouterProfiles(advisorModel: string): Record<string, any> {
   const spark = "openai-codex/gpt-5.3-codex-spark";
   const local = "llamacpp-qwen-unsloth/qwen3.6-35b-a3b-ud-q4-k-m";
+  const fusion = "fusion/opencode-go-qwen-deepseek-gpt55";
   return {
     "all-smart": { worker: advisorModel, smart: advisorModel, teacher: advisorModel, reviewer: advisorModel, explore: advisorModel, debug_diagnose: advisorModel, review: advisorModel, verify: advisorModel },
     "spark-smart": { worker: spark, smart: advisorModel, teacher: advisorModel, reviewer: advisorModel, explore: spark, debug_diagnose: advisorModel, review: advisorModel, verify: spark },
     "local-smart": { worker: local, smart: advisorModel, teacher: advisorModel, reviewer: advisorModel, explore: local, debug_diagnose: advisorModel, review: advisorModel, verify: local },
     quick: { worker: spark, smart: spark, teacher: spark, reviewer: spark },
     balanced: { worker: spark, smart: advisorModel, teacher: advisorModel, reviewer: advisorModel },
+    "fusion-smart": { worker: fusion, smart: fusion, teacher: fusion, reviewer: fusion, explore: fusion, debug_diagnose: fusion, review: fusion, verify: fusion },
   };
 }
 
@@ -3295,8 +3143,8 @@ export function applyPiRoguePosturePlan(plan: PiRoguePosturePlan): PiRoguePostur
     : new Date().toISOString();
   const existingAdvisor = readJson<Partial<AdvisorConfig>>(plan.files.advisor, {});
   const normalizedExistingAdvisor = normalizeAdvisorConfig(existingAdvisor);
-  const baseRestore: AdvisorProfileRestore = normalizedExistingAdvisor.profile === BUDGET_BOARD_PROFILE_ID && normalizedExistingAdvisor.profileRestore
-    ? normalizedExistingAdvisor.profileRestore
+  const baseRestore: AdvisorProfileRestore = normalizedExistingAdvisor.profileRestore
+    ? normalizedExistingAdvisor.profileRestore as AdvisorProfileRestore
     : {
       mode: normalizedExistingAdvisor.mode,
       review: normalizedExistingAdvisor.review,
@@ -3306,7 +3154,7 @@ export function applyPiRoguePosturePlan(plan: PiRoguePosturePlan): PiRoguePostur
       board: normalizedExistingAdvisor.board,
       headOfBoard: normalizedExistingAdvisor.headOfBoard,
       specialistDispatch: normalizedExistingAdvisor.specialistDispatch,
-    };
+    } satisfies AdvisorProfileRestore;
   const profileRestore: AdvisorProfileRestore = {
     ...baseRestore,
     profileModel: plan.advisorModel,
@@ -3334,6 +3182,7 @@ export function applyPiRoguePosturePlan(plan: PiRoguePosturePlan): PiRoguePostur
     advisor: { model: plan.advisorModel },
     context: { enabled: true, durable: true, store: join(plan.root, "context-broker", "artifacts.sqlite"), rewriteThresholdBytes: 2048 },
     router: { enabled: false, mode: "auto_model", activeProfile: "spark-smart", config: plan.files.router },
+    fusion: { enabled: false, recipeId: "opencode-go-qwen-deepseek-gpt55", recipes: join(plan.root, "fusion", "recipes.json") },
     storage: { root: plan.root },
   });
   writeJson(plan.files.router, {
@@ -3341,7 +3190,7 @@ export function applyPiRoguePosturePlan(plan: PiRoguePosturePlan): PiRoguePostur
     mode: "auto_model",
     print: "off",
     activeProfile: "spark-smart",
-    profileOrder: ["spark-smart", "local-smart", "balanced", "quick", "all-smart"],
+    profileOrder: ["spark-smart", "local-smart", "balanced", "quick", "all-smart", "fusion-smart"],
     profiles: guardedRouterProfiles(plan.advisorModel),
   });
   const existingContext = readJson<Record<string, unknown>>(plan.files.contextBrokerConfig, {});
@@ -3369,31 +3218,15 @@ export async function applyPiRoguePostureConfig(ctx: any, input: { posture?: unk
 
 function piRoguePostureText(result: PiRoguePostureApplyResult): string {
   return [
-    `posture: ${result.posture}`,
-    "Applied guarded posture:",
-    `  advisor: mode=${result.advisor.mode}, review=${result.advisor.review}, model=${result.advisor.model ?? "auto"}`,
-    `  board: ${result.advisor.board.mode}; head=${result.advisor.headOfBoard.mode}; specialists=${result.advisor.specialistDispatch.mode}/${result.advisor.specialistDispatch.maxCostTier}/maxCalls=${result.advisor.specialistDispatch.maxCallsPerSession}`,
-    "  router: off; default profile=spark-smart",
-    "  context: on",
-    "Verify: /pi-rogue status · /pi-rogue-advisor gate status",
+    `  advisor models: ${result.advisor.models?.advisor ?? "preferred candidate"}`,
+    `  Board bounds: ${JSON.stringify(result.advisor.board)}`,
+    "  lifecycle model work: explicit-only",
+    "Verify: /pi-rogue-advisor status",
   ].join("\n");
 }
 
-export function isGuardedPostureConfig(summary: any, advisor: AdvisorConfig, router: any): boolean {
-  const cfg = normalizeAdvisorConfig(advisor);
-  return parsePiRoguePosture(summary?.posture) === "guarded" &&
-    cfg.profile === BUDGET_BOARD_PROFILE_ID &&
-    cfg.mode === "auto" &&
-    cfg.review === "light" &&
-    cfg.board.mode === "shadow" &&
-    cfg.headOfBoard.mode === "enabled" &&
-    cfg.specialistDispatch.mode === "suggest" &&
-    cfg.specialistDispatch.maxCostTier === "cheap" &&
-    cfg.specialistDispatch.maxCallsPerSession === 3 &&
-    summary?.router?.enabled === false &&
-    summary?.router?.activeProfile === "spark-smart" &&
-    router?.enabled === false &&
-    router?.activeProfile === "spark-smart";
+export function isGuardedPostureConfig(_summary: unknown, _advisor: AdvisorConfig, _router: unknown): boolean {
+  return false;
 }
 
 function activePostureText(): string {
@@ -3428,6 +3261,7 @@ export function applyPiRogueConfigurePlan(plan: PiRogueConfigurePlan): void {
     advisor: { model: plan.advisorModel },
     context: { enabled: true, durable: true, store: plan.files.contextBroker },
     router: { enabled: true, mode: "observe", activeProfile: plan.activeRouterProfile, config: plan.files.router },
+    fusion: { enabled: true, recipeId: plan.fusionRecipeId, recipes: plan.files.fusionRecipes },
     storage: { root: plan.root },
   });
   const existingAdvisor = readJson<Partial<AdvisorConfig>>(plan.files.advisor, {});
@@ -3441,17 +3275,19 @@ export function applyPiRogueConfigurePlan(plan: PiRogueConfigurePlan): void {
   const quick = { worker: plan.workerModel, smart: plan.workerModel, teacher: plan.workerModel, reviewer: plan.workerModel };
   const balanced = { worker: plan.workerModel, smart: plan.advisorModel, teacher: plan.advisorModel, reviewer: plan.advisorModel };
   const profiles: Record<string, any> = { quick, balanced };
+  if (plan.fusionRecipeId) profiles["fusion-smart"] = { worker: plan.workerModel, smart: plan.smartModel, teacher: plan.smartModel, reviewer: plan.smartModel };
   writeJson(plan.files.router, {
     enabled: true,
     mode: "observe",
     print: "mismatch_only",
     activeProfile: plan.activeRouterProfile,
-    profileOrder: ["balanced", "quick"],
+    profileOrder: plan.fusionRecipeId ? ["fusion-smart", "balanced", "quick"] : ["balanced", "quick"],
     profiles,
   });
   upsertModelCards(plan.files.routerCards, [
     modelCardFor(plan.workerModel, ["worker", "quick"], now),
     modelCardFor(plan.advisorModel, ["advisor", "smart", "reviewer", "teacher"], now),
+    ...(plan.fusionRecipeId ? [modelCardFor(plan.smartModel, ["smart", "reviewer", "teacher", "fusion"], now)] : []),
   ]);
 }
 
@@ -3463,11 +3299,13 @@ function piRogueConfigText(): string {
     `  advisor: ${CONFIG_PATH}`,
     `  router: ${join(root, "router", "config.json")}`,
     `  router cards: ${join(root, "router", "model-cards.jsonl")}`,
+    `  fusion recipes: ${join(root, "fusion", "recipes.json")}`,
     `  context broker: ${join(root, "context-broker", "artifacts.sqlite")}`,
+    `  fusion traces: ${join(root, "fusion", "runs")}`,
     `  orchestration: ${ORCHESTRATION_DIR}`,
     "",
     "Layering: built-in defaults → user-root Pi-Rogue config → session state.",
-    "Use /pi-rogue-router status to see the currently active router paths.",
+    "Use /pi-rogue-router status and /pi-rogue-fusion status to see the currently active subsystem paths.",
   ].join("\n");
 }
 
@@ -3481,12 +3319,14 @@ function piRogueConfigureText(plan: PiRogueConfigurePlan): string {
     `  router profile: ${plan.activeRouterProfile}`,
     `  worker: ${plan.workerModel}`,
     `  smart/teacher/reviewer: ${plan.smartModel}`,
+    plan.fusionRecipeId ? `  fusion recipe: fusion/${plan.fusionRecipeId}` : "  fusion recipe: not detected",
     "",
     "Files:",
     `  summary: ${plan.files.summary}`,
     `  advisor: ${plan.files.advisor}`,
     `  router: ${plan.files.router}`,
     `  router cards: ${plan.files.routerCards}`,
+    `  fusion recipes: ${plan.files.fusionRecipes}`,
     `  context broker: ${plan.files.contextBroker}`,
     plan.warnings.length ? "" : "",
     ...plan.warnings.map((warning) => `Warning: ${warning}`),
@@ -3522,6 +3362,7 @@ function piRogueDoctorText(ctx: any): string {
     `${existsSync(join(root, "config.json")) ? "ok" : "info"}: global summary config ${join(root, "config.json")}`,
     `${existsSync(join(root, "router", "config.json")) ? "ok" : "info"}: global router config ${join(root, "router", "config.json")}`,
     `${existsSync(join(String(ctx?.cwd ?? process.cwd()), ".pi", "router", "config.json")) ? "info" : "ok"}: repo router override ${join(String(ctx?.cwd ?? process.cwd()), ".pi", "router", "config.json")}`,
+    `${existsSync(join(root, "fusion", "recipes.json")) || configuredFusionRecipeIds(ctx, root).length ? "ok" : "info"}: fusion recipes expose fusion/<recipe-id> models when present`,
   ];
   return [
     "Pi-Rogue doctor:",
@@ -3542,39 +3383,30 @@ type ModelResolutionOptions = { allowRegularFallback?: boolean; maxAttempts?: nu
 type AdvisorCompletionResult = { text: string; model: string; fallback?: boolean; rateLimited?: boolean; retryAfterSeconds?: number };
 
 async function resolveModelCandidatesWithinWork(ctx: any, config: AdvisorConfig, options: ModelResolutionOptions, signal: AbortSignal): Promise<ResolvedAdvisorModel[]> {
-  const { allowRegularFallback = true } = options;
   const candidates: ResolvedAdvisorModel[] = [];
+  const explicit = config.models?.advisor;
+  const preferred = SOTA_CHAIN[0];
+  const specs = explicit
+    ? [{ id: explicit, label: explicit, fallback: false }, { id: `${preferred.provider}/${preferred.model}`, label: preferred.label, fallback: true }]
+    : [{ id: `${preferred.provider}/${preferred.model}`, label: preferred.label, fallback: false }];
+  const maxAttempts = Math.min(2, Math.max(1, options.maxAttempts ?? specs.length));
   const seen = new Set<string>();
-  const add = async (found: any, label: string, fallback = false) => {
-    if (!found) return;
-    const key = piRogueModelId(found) ?? label;
-    if (seen.has(key)) return;
-    seen.add(key);
-    let auth: any;
+  for (const spec of specs) {
+    if (candidates.length >= maxAttempts || seen.has(spec.id)) continue;
+    seen.add(spec.id);
+    const [provider, ...modelParts] = spec.id.split("/");
+    const found = ctx.modelRegistry?.find(provider, modelParts.join("/"));
+    if (!found) continue;
     try {
-      auth = await awaitAdvisorWork(ctx.modelRegistry?.getApiKeyAndHeaders(found), signal);
+      const auth = await awaitAdvisorWork(ctx.modelRegistry?.getApiKeyAndHeaders(found), signal);
+      if (auth?.ok && auth.apiKey) candidates.push({ model: found, auth, label: spec.label, fallback: spec.fallback });
     } catch (error) {
-      // Providers can use AbortError for ordinary request failures. Only the work
-      // signal establishes cancellation; otherwise continue through the fallback chain.
       if (signal.aborted) throw error;
       appendAdvisorDiagnostic("model_auth_resolution_failed", {
-        model: key,
-        provider: String(found.provider || "unknown"),
+        model: spec.id,
+        provider,
         category: "auth_lookup_error",
       });
-      return;
-    }
-    if (auth?.ok && auth.apiKey) candidates.push({ model: found, auth, label, fallback });
-  };
-
-  if (config.model && config.model.includes("/")) {
-    const [p, ...m] = config.model.split("/");
-    await add(ctx.modelRegistry?.find(p, m.join("/")), p + "/" + m.join("/"));
-  }
-  for (const sota of SOTA_CHAIN) await add(ctx.modelRegistry?.find(sota.provider, sota.model), sota.label);
-  if (allowRegularFallback) {
-    for (const model of (ctx.modelRegistry?.getAvailable() ?? []).filter((candidate: any) => candidate.input?.includes?.("text"))) {
-      await add(model, model.id || "regular model", true);
     }
   }
   return candidates;
@@ -3664,7 +3496,7 @@ async function askAdvisor(pi: ExtensionAPI, ctx: any, question: string, scope: s
   const brokerBrief = includeWork ? contextBrokerBrief(pi, ctx) : "";
   const ck = hash(JSON.stringify({
     version: "advisor-answer-v2",
-    model: config.model ?? "auto",
+    model: config.models?.advisor ?? "auto",
     question: normalizedQuestion,
     scope: normalizedScope,
     includeRecentWork: includeWork,
@@ -3692,7 +3524,7 @@ async function askAdvisor(pi: ExtensionAPI, ctx: any, question: string, scope: s
   }
   const text = completed.text;
   const loopFamilyHash = advisorLoopFamilyHash(["question", question, scope, state.lastTask || ""]);
-  const loopContextHash = advisorLoopContextHash(["question", config.model ?? "auto", question, scope, includeWork ? brief(state) : "", brokerBrief]);
+  const loopContextHash = advisorLoopContextHash(["question", config.models?.advisor ?? "auto", question, scope, includeWork ? brief(state) : "", brokerBrief]);
   const loop = observeAdvisorLoop(state, "question", loopFamilyHash, loopContextHash, text);
   if (!loop.loopDetected && text && text !== "(empty)") { cache[ck] = text; saveCache(cache); }
   state.advisorCalls++;
@@ -3732,19 +3564,6 @@ async function doReview(pi: ExtensionAPI, ctx: any, trigger: string, delta: stri
   if (terminalReason) {
     clearResolvedReviewWarning(state, ctx, terminalReason);
     markReviewApplied(state, signature, trigger, "continue", terminalReason, true);
-    persistReviewState(state, true);
-    return;
-  }
-  const terminalEvidence = normalizeTerminalEvidence(state.reviewControl.terminalEvidence);
-  if (
-    terminalEvidence
-    && hasActiveTerminalEvidence(state)
-    && !meta.failed
-    && !hasBlockingEvidenceAfterTimestamp(state, terminalEvidence.at)
-  ) {
-    const reason = terminalEvidence.reason || "terminal clean closeout evidence";
-    clearResolvedReviewWarning(state, ctx, reason);
-    markReviewApplied(state, signature, trigger, "continue", reason, true);
     persistReviewState(state, true);
     return;
   }
@@ -3895,16 +3714,6 @@ async function doReview(pi: ExtensionAPI, ctx: any, trigger: string, delta: stri
       ].join("\n"), timestamp: new Date().toISOString() },
     ] as any[];
     const completed = await completeWithModelFallback(ctx, config, REVIEW_SYSTEM, msgs, { maxTokens: 400, reasoning: "low" as ThinkingLevel, maxAttempts: 2 });
-    const latestConfig = loadConfig();
-    if (latestConfig.mode === "manual" || latestConfig.mode === "off") {
-      clearDisabledAdvisorReplay(state, latestConfig.mode);
-      finalDecision = "defer";
-      finalReason = `review discarded because advisor mode=${latestConfig.mode}`;
-      markReviewApplied(state, signature, trigger, finalDecision, finalReason, true);
-      persistReviewState(state, true);
-      finalized = true;
-      return;
-    }
     if (completed?.rateLimited) {
       recordRateLimit(state, ctx, { reason: completed.text || "advisor rate limit (429)", retryAfterSeconds: completed.retryAfterSeconds });
       finalDecision = "defer";
@@ -3977,7 +3786,7 @@ async function doReview(pi: ExtensionAPI, ctx: any, trigger: string, delta: stri
       const intendedFollowUp = [sanitizeAdvisorText(parsed.summary), ...parsed.taskActions].filter(Boolean).join(" — ");
       const hint = sendAdvisorHint(pi, state, reviewFamilyHash, reviewContextHash, decision, finalReason, parsed.summary || "", parsed.taskActions);
       state.followUp = hint.loopDetected ? hint.text : intendedFollowUp;
-      state.followUpTask = state.followUp ? reviewTask : undefined;
+      state.followUpTask = reviewTask;
     } else {
       state.followUp = "";
       state.followUpTask = undefined;
@@ -3986,22 +3795,15 @@ async function doReview(pi: ExtensionAPI, ctx: any, trigger: string, delta: stri
     const advisoryText = buildAdvisorySignalsBlock(reviewTask, parsed.advisorySignals, parsed.pivot);
     if (advisoryText) {
       const advisoryLoop = observeAdvisorLoop(state, "review-signals", reviewFamilyHash, reviewContextHash, advisoryText);
-      if (advisoryLoop.text) {
-        state.reviewSignals = [advisoryLoop.text];
-        state.reviewSignalsTask = reviewTask;
-        sendAdvisorAnswer(pi, advisoryLoop.text);
-      } else {
-        // A repeated automatic signal has already been surfaced once. Do not
-        // re-inject the stale signal into the next prompt or emit another UI message.
-        state.reviewSignals = [];
-        state.reviewSignalsTask = undefined;
-      }
+      state.reviewSignals = [advisoryLoop.text];
+      state.reviewSignalsTask = reviewTask;
+      sendAdvisorAnswer(pi, advisoryLoop.text);
     } else {
       state.reviewSignals = [];
       state.reviewSignalsTask = undefined;
     }
 
-    markReviewApplied(state, signature, trigger, finalDecision, finalReason, !state.followUp);
+    markReviewApplied(state, signature, trigger, finalDecision, finalReason, !hasTaskActions);
     persistReviewState(state, true);
     finalized = true;
   } finally {
@@ -4066,20 +3868,15 @@ export function registerAdvisor(pi: ExtensionAPI): void {
     pi.registerMessageRenderer(customType, renderAdvisorHint);
   }
 
+  // Lifecycle is deliberately limited to state ownership. It never resolves a
+  // model, completes a prompt, mutates a system prompt, or calls a router.
   pi.on("session_start", (_event, ctx) => {
     const key = sessionKey(ctx);
-    // session_start also covers a resumed/reloaded session and reopens its stable key.
     closedAdvisorSessions.delete(key);
     abortAdvisorWork(ctx, "superseded");
     checkinLocks.delete(key);
-    const state = loadState(ctx);
-    recoverReviewControl(state);
-    saveState(state);
-    setPiRogueStatus(ctx, loadConfig(), state);
-    // No timer is owned by advisor itself anymore; check-ins are triggered
-    // from active goal/loop/autoresearch flow progression.
+    saveState(loadState(ctx));
   });
-
   pi.on("session_shutdown", (_event, ctx) => {
     const key = sessionKey(ctx);
     closedAdvisorSessions.add(key);
@@ -4088,39 +3885,14 @@ export function registerAdvisor(pi: ExtensionAPI): void {
     ctx.ui.setStatus("pi-rogue", undefined);
   });
 
-  // ── Tools ──────────────────────────────────────────────────────────────
-  pi.registerTool({
-    name: "cfg",
-    label: "Pi-Rogue Config",
-    description: "Apply compact Pi-Rogue configuration presets. Use { posture: \"guarded\" } to enable guarded posture.",
-    parameters: Type.Object({
-      posture: Type.Optional(Type.String({ description: "Supported: guarded" })),
-    }),
-    async execute(_id, params, _signal, onUpdate, ctx) {
-      const posture = parsePiRoguePosture(params?.posture);
-      if (!posture) {
-        return { content: [{ type: "text", text: "Unsupported cfg posture. Usage: { \"posture\": \"guarded\" }" }], details: { error: "unsupported_posture" } };
-      }
-      try {
-        const result = await applyPiRoguePostureConfig(ctx, { posture });
-        setPiRogueStatus(ctx, result.advisor, loadState(ctx));
-        onUpdate?.({ content: [{ type: "text", text: `Applied posture ${result.posture}` }], details: { posture: result.posture } });
-        return { content: [{ type: "text", text: piRoguePostureText(result) }], details: { posture: result.posture } };
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        return { content: [{ type: "text", text: message }], details: { error: "guarded_posture_unavailable" } };
-      }
-    },
-  });
-
   pi.registerTool({
     name: "advisor",
     label: "Advisor",
-    description: "Strategic advisor. Call before architecture/refactor/tradeoff decisions. Uses best available model (default gpt-5.5).",
+    description: "Explicit senior engineering advice. No lifecycle or background calls.",
     parameters: Type.Object({
-      question: Type.String({ description: "1 concise question" }),
+      question: Type.String({ description: "One concise question" }),
       scope: Type.Optional(Type.String({ description: "architecture|implementation|debug|review|planning" })),
-      includeRecentWork: Type.Optional(Type.Boolean({ description: "default: true" })),
+      includeRecentWork: Type.Optional(Type.Boolean({ description: "Include compact session evidence (default true)" })),
     }),
     async execute(_id, params, signal, onUpdate, ctx) {
       const r = await askAdvisor(pi, ctx, String(params.question || ""), String(params.scope || ""), params.includeRecentWork !== false, signal);
@@ -4129,454 +3901,32 @@ export function registerAdvisor(pi: ExtensionAPI): void {
     },
   });
 
-  // ── Preflight (heuristics only — no LLM call, <1ms) ──────────────────
-  pi.on("before_agent_start", async (event: any, ctx: any) => {
-    const cfg = loadConfig();
-    const state = loadState(ctx);
-    const rateLimitReason = activeRateLimitReason(state);
-    if (rateLimitReason) {
-      clearRateLimitedReviewReplay(state, ctx, rateLimitReason);
-      saveState(state);
-      setPiRogueStatus(ctx, cfg, state);
-      return { systemPrompt: event.systemPrompt };
-    }
-    const hasFollowUp = Boolean(state.followUp);
-    if (cfg.mode === "off" || cfg.mode === "manual") {
-      if (clearDisabledAdvisorReplay(state, cfg.mode)) {
-        saveState(state);
-      }
-      setPiRogueStatus(ctx, cfg, state);
-      return { systemPrompt: event.systemPrompt };
-    }
-    if (isAdvisorAutoRunSuppressed(state, state.turns) && !hasFollowUp) {
-      return { systemPrompt: event.systemPrompt };
-    }
-    setPiRogueStatus(ctx, cfg, state);
-    const prompt = typeof event.prompt === "string" && event.prompt.trim() ? squish(event.prompt, 1000) : "";
-    if (prompt) {
-      if (looksLikeExplicitTaskSwitch(state.lastTask, prompt)) resetTaskScopedStateForSwitch(state);
-      state.lastTask = prompt;
-    }
-    const currentTask = state.lastTask || "";
-    const briefText = brief(state);
-    const brokerBrief = contextBrokerBrief(pi, ctx);
-    const intent = prompt ? classifyIntent(prompt) : "";
-    const mode = prompt ? classifyMode(prompt) : "";
-    const intentTag = intent ? `Intent: ${intent}` : "";
-    const modeTag = mode ? `Mode: ${mode}` : "";
-    // Enrich preflight text with session context so the binary gate has more signal
-    const enrichedText = [prompt, event.systemPrompt || "", briefText ? `Brief: ${briefText}` : "", brokerBrief ? `Context broker: ${brokerBrief}` : "", intentTag, modeTag].filter(Boolean).join(" ");
-    const routeInput: AdvisorRouteInput = { phase: "preflight", text: enrichedText || prompt || event.systemPrompt || briefText || brokerBrief || intentTag || modeTag || "", brief: [briefText, brokerBrief].filter(Boolean).join("\n\n") };
-
-    const trajectory = buildTrajectoryContext(ctx, {
-      phase: "preflight",
-      turns: state.turns,
-    });
-    const gatePrediction = binaryGatePredict(routeInput.text, "preflight", trajectory);
-    const heuristic = { ...heuristicRoute(routeInput), trajectory };
-    const route = applyPreflightGatePrediction(heuristic, gatePrediction);
-    appendRouteLog(route);
-    state.router.preflight = route;
-
-    const hadFollowUp = Boolean(state.followUp);
-    const follow = consumeTaskScopedFollowUp(state, currentTask);
-    const reviewSignals = consumeTaskScopedReviewSignals(state, currentTask);
-    if (hadFollowUp) {
-      consumeReviewFollowUp(state);
-    }
-    saveState(state);
-
-    const note = routeNote(route);
-    const control = state.reviewControl;
-    const controlTag = control.status === "needed" || control.status === "running" ? `Review-control: ${control.status}${control.lastDecision ? ` (${control.lastDecision})` : ""}` : "";
-    writeText(advisorCurrentPath(ctx), `${note}\n`);
-    return {
-      systemPrompt: [
-        event.systemPrompt,
-        follow ? `Advisor follow-up:\n${follow}` : "",
-        note,
-        reviewSignals ? `Advisor signals (non-commanding):\n${reviewSignals}` : "",
-        controlTag,
-        briefText ? `Brief (cache-aware):\n${briefText}` : "",
-        brokerBrief ? `Context broker brief (lookup-first):\n${brokerBrief}` : "",
-      ].filter(Boolean).join("\n\n"),
-    };
-  });
-
-  // ── Post-review (turn_end) ─────────────────────────────────────────────
-  pi.on("turn_end", async (event: any, ctx: any) => {
-    const cfg = loadConfig();
-    if (cfg.mode === "off") {
-      const disabledState = loadState(ctx);
-      if (clearDisabledAdvisorReplay(disabledState, cfg.mode)) saveState(disabledState);
-      setPiRogueStatus(ctx, cfg, disabledState);
-      return;
-    }
-    const state = loadState(ctx);
-    if (cfg.mode === "manual") clearDisabledAdvisorReplay(state, cfg.mode);
-    const suppressedThisTurn = isAdvisorAutoRunSuppressedForTurnContext(state, state.turns);
-    const toolResults = event.toolResults || [];
-    const tools = toolResults.map((t: any) => String(t?.toolName || t?.name || "tool"));
-    const fileChanged = tools.some((t: string) => /^(edit|write)$/i.test(t));
-    const text = squish(contentText(event.message?.content));
-    observeWorkflowEvidence(state, ctx, "turn_end", toolResults, text);
-    const failed = effectiveFailureFromTools(state, toolResults);
-    if (text && text !== state.notes[state.notes.length - 1]) state.notes.push(text);
-    state.turns++;
-    if (state.advisorPauseUntilTurn && isAdvisorPaused(state, state.turns) === false) {
-      state.advisorPauseUntilTurn = undefined;
-    }
-    recordBoardShadowIfEnabled(ctx, cfg, state, "turn_end", toolResults);
-    saveState(state);
-    setPiRogueStatus(ctx, cfg, state);
-    if (cfg.mode === "auto" && cfg.review !== "off" && !suppressedThisTurn) {
-      await doReview(pi, ctx, `turn-${state.turns}`, text, {
-        fileChanged,
-        failed,
-        isAgentEnd: false,
-        materialSignals: tools,
-      });
-    }
-
-    const post = loadState(ctx);
-    if (cfg.mode === "auto" && !isAdvisorAutoRunSuppressed(post, post.turns)) {
-      containAdvisorCheckin(maybeAdvisorCheckin(pi, ctx, "turn_end"), "turn_end");
-    }
-  });
-
-  // ── Post-review (agent_end) ────────────────────────────────────────────
-  pi.on("agent_end", async (event: any, ctx: any) => {
-    const cfg = loadConfig();
-    if (cfg.mode === "off") {
-      const disabledState = loadState(ctx);
-      if (clearDisabledAdvisorReplay(disabledState, cfg.mode)) saveState(disabledState);
-      setPiRogueStatus(ctx, cfg, disabledState);
-      return;
-    }
-    const state = loadState(ctx);
-    if (cfg.mode === "manual") clearDisabledAdvisorReplay(state, cfg.mode);
-    const msgs = (event.messages || []).filter((m: any) => m.role === "assistant" || m.role === "toolResult");
-    const last = msgs[msgs.length - 1];
-    const delta = contentText(last?.content) || "(none)";
-    const fileChanged = msgs.some((m: any) => /(?:write|edit)/i.test(JSON.stringify(m)));
-    observeWorkflowEvidence(state, ctx, "agent_end", msgs, delta);
-    const failed = effectiveFailureFromTools(state, msgs);
-    const signals = msgs.map((m: any) => {
-      const sig = contentText(m?.content);
-      return `${m?.role || "msg"}: ${sig ? squish(sig, 120) : "(empty)"}`;
-    });
-    const suppressed = isAdvisorAutoRunSuppressedForTurnContext(state, state.turns);
-    if (cfg.mode !== "auto" || cfg.review === "off" || suppressed) {
-      recordBoardShadowIfEnabled(ctx, cfg, state, "agent_end", msgs);
-      saveState(state);
-      if (cfg.mode === "auto" && !suppressed) {
-        containAdvisorCheckin(maybeAdvisorCheckin(pi, ctx, "agent_end"), "agent_end");
-      }
-      return;
-    }
-    recordBoardShadowIfEnabled(ctx, cfg, state, "agent_end", msgs);
-    saveState(state);
-    await doReview(pi, ctx, "agent-end", delta, {
-      fileChanged,
-      failed,
-      isAgentEnd: true,
-      materialSignals: signals,
-    });
-
-    const post = loadState(ctx);
-    if (!isAdvisorAutoRunSuppressed(post, post.turns)) {
-      containAdvisorCheckin(maybeAdvisorCheckin(pi, ctx, "agent_end"), "agent_end");
-    }
-  });
-
-  // ── /pi-rogue management root ──────────────────────────────────────────
-  pi.registerCommand("pi-rogue", {
-    description: "Pi-Rogue management root. Usage: /pi-rogue status|help|doctor",
-    getArgumentCompletions: (prefix: string) => piRogueArgumentCompletions(prefix),
-    handler: async (args, ctx) => {
-      const cfg = loadConfig();
-      const state = loadState(ctx);
-      const arg = String(args ?? "").trim().toLowerCase();
-      setPiRogueStatus(ctx, cfg, state);
-
-      if (!arg || arg === "status") {
-        ctx.ui.notify(piRogueCockpitText(cfg, state, readText(advisorCurrentPath(ctx)).trim(), ctx), "info");
-        return;
-      }
-
-      if (arg === "help") {
-        ctx.ui.notify([
-          "Pi-Rogue commands:",
-          "  /pi-rogue status              read-only status dashboard + aggregate setup",
-          "  /pi-rogue doctor              read-only setup checks",
-          "  /cfg posture guarded          apply compact posture preset",
-          "",
-          "Subsystems:",
-          `  /pi-rogue-advisor ${ADVISOR_CANONICAL_CONTROL_LEAVES.join("|")}`,
-          "  /pi-rogue-router status||mode|profile|print|models|profiles|cycle|configure",
-          "  /pi-rogue-orchestration status|goal|loop|autoresearch|lab",
-          "",
-          "No nested /pi-rogue router/status/config aliases are registered; use the subsystem roots above.",
-        ].join("\n"), "info");
-        return;
-      }
-
-      if (arg === "configure" || arg.startsWith("configure ")) {
-        ctx.ui.notify("/pi-rogue configure was replaced by /pi-rogue status (read-only).", "info");
-        return;
-      }
-
-      if (arg.startsWith("doctor")) {
-        ctx.ui.notify(piRogueDoctorText(ctx), "info");
-        return;
-      }
-
-      ctx.ui.notify("Usage: /pi-rogue status|help|doctor", "error");
-    },
-  });
-
-  // ── /cfg compact configuration command ────────────────────────────────
-  pi.registerCommand("cfg", {
-    description: "Compact Pi-Rogue config. Usage: /cfg posture guarded",
-    getArgumentCompletions: (prefix: string) => {
-      const q = prefix.trimStart().toLowerCase();
-      const values = q.startsWith("posture ") ? ["guarded"] : ["posture"];
-      return values.filter((value) => value.startsWith(q.split(/\s+/).pop() || "")).map((value) => ({ value, label: value }));
-    },
-    handler: async (args, ctx) => {
-      const posture = parseCfgPostureArgs(args);
-      if (!posture) {
-        ctx.ui.notify("Usage: /cfg posture guarded", "error");
-        return;
-      }
-      try {
-        const result = await applyPiRoguePostureConfig(ctx, { posture });
-        setPiRogueStatus(ctx, result.advisor, loadState(ctx));
-        ctx.ui.notify(piRoguePostureText(result), "info");
-      } catch (error) {
-        ctx.ui.notify(error instanceof Error ? error.message : String(error), "error");
-      }
-    },
-  });
-
-  // ── /pi-rogue-advisor command ──────────────────────────────────────────
   pi.registerCommand("pi-rogue-advisor", {
-    description: `Senior engineering advisor. Usage: /pi-rogue-advisor [|${ADVISOR_CANONICAL_CONTROL_LEAVES.join("|")}|question]`,
+    description: "Explicit Advisor and Board calls. Usage: /pi-rogue-advisor [board specialist|head ...|question]",
     getArgumentCompletions: (prefix: string) => advisorArgumentCompletions(prefix),
     handler: async (args, ctx) => {
       const rawArg = String(args ?? "").trim();
-      const rawParts = rawArg ? rawArg.split(/\s+/) : [];
-      const cmd = String(rawParts[0] ?? "").toLowerCase();
-      const rawRest = rawParts.slice(1);
-      const rest = rawRest.map((part) => part.toLowerCase());
+      const parts = rawArg ? rawArg.split(/\s+/) : [];
+      const command = String(parts[0] ?? "").toLowerCase();
       const cfg = loadConfig();
       const state = loadState(ctx);
 
-      if (!rawArg || cmd === "status") {
-        const note = readText(advisorCurrentPath(ctx)).trim();
+      if (!rawArg || command === "status" || command === "settings" || command === "config") {
         const resolved = await resolveModel(ctx, cfg);
-        const route = state.router.review ?? state.router.preflight;
-        const pause = advisorPauseRemaining(state, state.turns);
-        const loop = state.advisorLoop;
         ctx.ui.notify([
-          note ? `🧭 ${truncate(note, 200)}` : "",
-          route ? `Router: ${summarizeRoute(route)}${route.safety ? " · safety" : ""}` : "",
-          "",
-          `Mode: ${cfg.mode} | Profile: ${cfg.profile ?? "off"} | Review: ${cfg.review} | Check-ins: ${checkinDescription(cfg)} (orchestration-managed) | Model: ${resolved?.label || cfg.model || "auto"}`,
-          formatAdvisorBinaryGateStatus(cfg, state),
-          `Board shadow: ${cfg.board.mode} | Runs: ${state.board?.counters.runs ?? 0} | Last: ${state.board?.lastDecision?.action ?? "none"}`,
-          pause > 0 ? `Advisor pause: ${pause} turn${pause === 1 ? "" : "s"} remaining` : "Advisor pause: off",
-          loop?.repeatCount && loop.repeatCount > 1 ? `Advisor loop guard: ${loop.repeatCount} repeated outputs across changing context` : "Advisor loop guard: idle",
-          `Turns: ${state.turns} | Calls: ${state.advisorCalls} | Cache hits: ${state.cacheHits}`,
-          state.checkin.lastAt ? `Last check-in: ${new Date(state.checkin.lastAt).toLocaleString()} (${state.checkin.lastReason || "mid-hour"})` : "Last check-in: never",
-          state.checkin.queued ? `Queued check-in: ${state.checkin.queuedReason || "due"}` : "",
-          orchestrationSnapshotText(ctx),
-          "",
-          "Tip: SOTA models auto-detected. No config needed.",
-        ].filter(Boolean).join("\n"), "info");
-        return;
-      }
-
-      if (cmd === "on") {
-        const next = { ...cfg, mode: "auto" as const };
-        saveConfig(next);
-        setPiRogueStatus(ctx, next, state);
-        ctx.ui.notify("Advisor enabled (auto mode).", "info");
-        return;
-      }
-      if (cmd === "off") {
-        const next = { ...cfg, mode: "off" as const };
-        saveConfig(next);
-        setPiRogueStatus(ctx, next, state);
-        ctx.ui.notify("Advisor disabled.", "info");
-        return;
-      }
-      if (cmd === "mode") {
-        const v = rest[0];
-        if (v === "auto" || v === "manual") {
-          const next: AdvisorConfig = { ...cfg, mode: v };
-          saveConfig(next);
-          setPiRogueStatus(ctx, next, state);
-          ctx.ui.notify(`Mode set to ${v}.`, "info");
-          return;
-        }
-        if (v === "off") {
-          const next = { ...cfg, mode: "off" as const };
-          saveConfig(next);
-          setPiRogueStatus(ctx, next, state);
-          ctx.ui.notify("Advisor disabled.", "info");
-          return;
-        }
-        ctx.ui.notify("Usage: /pi-rogue-advisor mode auto|manual|off", "error");
-        return;
-      }
-      if (cmd === "profile") {
-        const action = rest[0] || "status";
-        if (action === "status" || action === "show") {
-          ctx.ui.notify(advisorBoardProfileText(buildAdvisorBoardProfilePlan(ctx, cfg)), "info");
-          return;
-        }
-        if (action === BUDGET_BOARD_PROFILE_ID || action === "on" || action === "enable") {
-          const plan = buildAdvisorBoardProfilePlan(ctx, cfg);
-          try {
-            const next = applyAdvisorBoardProfilePlan(plan);
-            setPiRogueStatus(ctx, next, state);
-            ctx.ui.notify(`${advisorBoardProfileText({ ...plan, active: true })}\n\nEnabled budget-board profile.`, "info");
-          } catch (error) {
-            ctx.ui.notify(error instanceof Error ? error.message : String(error), "error");
-          }
-          return;
-        }
-        if (action === "off" || action === "disable") {
-          const next = disableAdvisorBoardProfile(cfg);
-          saveConfig(next);
-          setPiRogueStatus(ctx, next, state);
-          ctx.ui.notify("Budget-board profile disabled; pre-profile advisor settings restored where available, with user changes made while active preserved.", "info");
-          return;
-        }
-        ctx.ui.notify("Usage: /pi-rogue-advisor profile status|budget-board|off", "error");
-        return;
-      }
-      if (cmd === "gate" || cmd === "binary-gate" || cmd === "binary") {
-        const action = rest[0] || "status";
-        if (action === "status" || action === "show") {
-          ctx.ui.notify(formatAdvisorBinaryGateStatus(cfg, state), "info");
-          return;
-        }
-        ctx.ui.notify("Usage: /pi-rogue-advisor gate status", "error");
-        return;
-      }
-      if (cmd === "model") {
-        const v = rawRest.join(" ").trim();
-        if (!v || !v.includes("/")) {
-          const resolved = await resolveModel(ctx, cfg);
-          ctx.ui.notify([
-            `Current: ${resolved?.label || "auto"}`,
-            "",
-            "Usage: /pi-rogue-advisor model <provider>/<model>",
-            '(e.g. "openai-codex/gpt-5.5" or "anthropic/claude-opus-4-6")',
-            "Run /pi-rogue-advisor status for SOTA options.",
-          ].join("\n"), "info");
-          return;
-        }
-        saveConfig({ ...cfg, model: v });
-        ctx.ui.notify(`Model set to ${v}. Remove field to auto-detect.`, "info");
-        return;
-      }
-      if (cmd === "settings" || cmd === "config") {
-        const pause = advisorPauseRemaining(state, state.turns);
-        ctx.ui.notify([
-          "Advisor config (check-ins are orchestration-managed):",
-          `  profile: "${cfg.profile ?? "off"}" — budget-board is explicit opt-in; off is built-in behavior`,
-          `  mode: "${cfg.mode}" — auto (preflight+post+cache) | manual | off`,
-          `  review: "${cfg.review}" — light (changes/errors) | strict (every 3) | off`,
-          formatAdvisorBinaryGateStatus(cfg, state).split("\n").map((line) => `  ${line}`).join("\n"),
-          `  checkins: "${cfg.checkins}" — set by active /pi-rogue-orchestration goal or loop lifecycle`,
-          `  checkinIntervalMinutes: ${cfg.checkinIntervalMinutes}`,
-          pause > 0 ? `  advisorPauseUntilTurn: ${pause} turn${pause === 1 ? "" : "s"} remaining` : "  advisorPauseUntilTurn: off",
-          `  model: "${cfg.model || "auto"}" — optional override for higher/advanced advisor model`,
-          `  board.mode: "${cfg.board.mode}" — off | shadow (phase-1 deterministic logging only)`,
-          `  headOfBoard.mode: "${cfg.headOfBoard.mode}" — off | enabled (isolated read-only adapter)`,
-          `  specialistDispatch.mode: "${cfg.specialistDispatch.mode}" — off | suggest | auto (read-only specialists)`,
-          "",
-          "Router logs: evals/advisor-router.jsonl",
-          "Run /pi-rogue-advisor <question> for immediate advice.",
+          `Advisor model: ${resolved?.label ?? cfg.models?.advisor ?? "preferred candidate"}`,
+          `Specialist model: ${cfg.models?.specialist ?? cfg.models?.advisor ?? "preferred candidate"}`,
+          `Head-of-Board model: ${cfg.models?.head ?? cfg.models?.advisor ?? "preferred candidate"}`,
+          `Board bounds: evidence=${cfg.board?.maxEvidence ?? DEFAULT_CONFIG.board.maxEvidence}, risks=${cfg.board?.maxRisks ?? DEFAULT_CONFIG.board.maxRisks}, failures=${cfg.board?.maxFailures ?? DEFAULT_CONFIG.board.maxFailures}, subagents=${cfg.board?.maxSubagents ?? DEFAULT_CONFIG.board.maxSubagents}, tokens=${cfg.board?.maxTokens ?? DEFAULT_CONFIG.board.maxTokens}`,
+          `Explicit calls: ${state.advisorCalls} advisor, ${state.specialistDispatch?.calls ?? 0} specialist, ${state.headOfBoard?.calls ?? 0} head`,
         ].join("\n"), "info");
         return;
       }
-      if (cmd === "review") {
-        const v = rest[0];
-        if (v === "light" || v === "strict" || v === "off") { const next: AdvisorConfig = { ...cfg, review: v }; saveConfig(next); setPiRogueStatus(ctx, next, state); ctx.ui.notify(`Review set to ${v}.`, "info"); return; }
-        ctx.ui.notify("Usage: /pi-rogue-advisor review light|strict|off", "error");
-        return;
-      }
-      if (cmd === "board") {
-        const v = rest[0] || "status";
-        if (v === "status") {
-          const flightPath = boardTelemetryPath(ctx, "board-flight.jsonl");
-          const flightRecords = flightPath ? loadBoardFlightRecords(flightPath, 20) : [];
-          ctx.ui.notify(`${formatBoardShadowStatus(cfg.board, state.board)}\n\n${formatBoardFlightStatus(flightRecords, state.board, { telemetryPath: flightPath })}\n\n${headOfBoardStatusText(cfg, state)}\n\n${specialistDispatchStatusText(cfg, state)}${cfg.profile === BUDGET_BOARD_PROFILE_ID ? `\n\n${budgetBoardEscalationPolicyText(cfg)}` : ""}`, "info");
-          return;
-        }
-        if (v === "why") {
-          const flightPath = boardTelemetryPath(ctx, "board-flight.jsonl");
-          const flightRecords = flightPath ? loadBoardFlightRecords(flightPath, 20) : [];
-          ctx.ui.notify(formatBoardFlightWhy(flightRecords[0], state.board), "info");
-          return;
-        }
-        if (v === "report") {
-          const flightPath = boardTelemetryPath(ctx, "board-flight.jsonl");
-          const flightRecords = flightPath ? loadBoardFlightRecords(flightPath, 20) : [];
-          ctx.ui.notify(formatBoardFlightReport(flightRecords, state.board, { telemetryPath: flightPath }), "info");
-          return;
-        }
-        if (v === "shadow" || v === "on") {
-          const next: AdvisorConfig = { ...cfg, board: { mode: "shadow" } };
-          saveConfig(next);
-          setPiRogueStatus(ctx, next, state);
-          ctx.ui.notify("Advisor Board shadow mode enabled. Phase 1 logs deterministic BoardDecision data only; no live whispers, models, specialists, head-of-board, or steer.", "info");
-          return;
-        }
-        if (v === "off") {
-          const next: AdvisorConfig = { ...cfg, board: { mode: "off" }, headOfBoard: { ...cfg.headOfBoard, mode: "off" }, specialistDispatch: { ...cfg.specialistDispatch, mode: "off" } };
-          saveConfig(next);
-          setPiRogueStatus(ctx, next, state);
-          ctx.ui.notify("Advisor Board shadow mode, Head-of-Board adapter, and specialist dispatch disabled.", "info");
-          return;
-        }
-        if (v === "reset") {
-          state.board = defaultBoardShadowState();
-          state.headOfBoard = { calls: 0 };
-          state.specialistDispatch = defaultSpecialistCallState();
-          saveState(state);
-          ctx.ui.notify("Advisor Board shadow and Head-of-Board counters reset.", "info");
-          return;
-        }
-        if (v === "discover-specialists" || v === "discover") {
-          const action = rest[1] || "status";
-          const cachePath = featureFile("advisor", "personal-specialist-discovery.json");
-          if (action === "status" || action === "show") {
-            ctx.ui.notify(formatPersonalSpecialistDiscoverySnapshot(loadPersonalSpecialistDiscoverySnapshot(cachePath)), "info");
-            return;
-          }
-          if (!/^(allow|yes|on|enable)$/i.test(action)) {
-            ctx.ui.notify("Usage: /pi-rogue-advisor board discover-specialists status|allow — explicit consent required; refresh runs in the background.", "error");
-            return;
-          }
-          const result = queuePersonalSpecialistDiscoveryRefresh({
-            sessionRoot: join(homedir(), ".pi", "agent", "sessions"),
-            cwdContains: inferBoardDiscoveryRoot(ctx),
-            allowPastSessionDiscovery: true,
-            cachePath,
-          });
-          ctx.ui.notify([
-            result.queued ? "Personal specialist discovery refresh queued in the background." : "Personal specialist discovery is already refreshing.",
-            formatPersonalSpecialistDiscoverySnapshot(result.snapshot),
-          ].join("\n"), "info");
-          return;
-        }
-        if (v === "specialist" || v === "specialists") {
-          const action = rest[1] || "status";
+
+      if (command === "board") {
+        const area = String(parts[1] ?? "status").toLowerCase();
+        if (area === "specialist" || area === "specialists") {
+          const action = String(parts[2] ?? "status").toLowerCase();
           if (action === "status") {
             ctx.ui.notify(specialistDispatchStatusText(cfg, state), "info");
             return;
@@ -4585,23 +3935,9 @@ export function registerAdvisor(pi: ExtensionAPI): void {
             ctx.ui.notify(suggestedSpecialistText(ctx, state), "info");
             return;
           }
-          if (action === "off" || action === "disable") {
-            const next: AdvisorConfig = { ...cfg, specialistDispatch: { ...cfg.specialistDispatch, mode: "off" } };
-            saveConfig(next);
-            setPiRogueStatus(ctx, next, state);
-            ctx.ui.notify("Advisor specialist dispatch disabled.", "info");
-            return;
-          }
-          if (action === "suggest-mode" || action === "suggestions") {
-            const next: AdvisorConfig = { ...cfg, specialistDispatch: { ...cfg.specialistDispatch, mode: "suggest" } };
-            saveConfig(next);
-            setPiRogueStatus(ctx, next, state);
-            ctx.ui.notify("Advisor specialist dispatch set to suggest mode.", "info");
-            return;
-          }
           if (action === "ask") {
-            const roleId = rawParts[3];
-            const task = rawParts.slice(4).join(" ").trim();
+            const roleId = parts[3];
+            const task = parts.slice(4).join(" ").trim();
             if (!roleId || !task) {
               ctx.ui.notify("Usage: /pi-rogue-advisor board specialist ask <role-id> <task>", "error");
               return;
@@ -4609,31 +3945,17 @@ export function registerAdvisor(pi: ExtensionAPI): void {
             await runSpecialistCommand(ctx, cfg, state, roleId, task);
             return;
           }
-          ctx.ui.notify("Usage: /pi-rogue-advisor board specialist status|suggest|suggest-mode|off|ask <role-id> <task>", "error");
+          ctx.ui.notify("Usage: board specialist status|suggest|ask <role-id> <task>", "error");
           return;
         }
-        if (v === "head") {
-          const action = rest[1] || "status";
+        if (area === "head") {
+          const action = String(parts[2] ?? "status").toLowerCase();
           if (action === "status") {
-            ctx.ui.notify(headOfBoardStatusText(cfg, state), "info");
-            return;
-          }
-          if (action === "on" || action === "enable") {
-            const next: AdvisorConfig = { ...cfg, headOfBoard: { ...cfg.headOfBoard, mode: "enabled" } };
-            saveConfig(next);
-            setPiRogueStatus(ctx, next, state);
-            ctx.ui.notify("Advisor Head-of-Board adapter enabled. Calls are isolated, read-only, episodic, and use compact board ledger input only.", "info");
-            return;
-          }
-          if (action === "off" || action === "disable") {
-            const next: AdvisorConfig = { ...cfg, headOfBoard: { ...cfg.headOfBoard, mode: "off" } };
-            saveConfig(next);
-            setPiRogueStatus(ctx, next, state);
-            ctx.ui.notify("Advisor Head-of-Board adapter disabled.", "info");
+            ctx.ui.notify(`Advisor Head-of-Board: explicit-only\nCalls: ${state.headOfBoard?.calls ?? 0}\nConstraints: read-only compact Board ledger`, "info");
             return;
           }
           if (action === "ask") {
-            const question = rawParts.slice(3).join(" ").trim();
+            const question = parts.slice(3).join(" ").trim();
             if (!question) {
               ctx.ui.notify("Usage: /pi-rogue-advisor board head ask <decision question>", "error");
               return;
@@ -4641,54 +3963,19 @@ export function registerAdvisor(pi: ExtensionAPI): void {
             await runHeadOfBoardCommand(ctx, cfg, state, question);
             return;
           }
-          ctx.ui.notify("Usage: /pi-rogue-advisor board head status|on|off|ask <decision question>", "error");
+          ctx.ui.notify("Usage: board head status|ask <decision question>", "error");
           return;
         }
-        ctx.ui.notify("Usage: /pi-rogue-advisor board status|shadow|off|reset|head status|head on|head off|head ask <question>|specialist status|specialist suggest|specialist ask <role-id> <task>", "error");
-        return;
-      }
-      if (cmd === "checkins" || cmd === "checkin") {
-        ctx.ui.notify([
-          "Advisor check-ins are orchestration-managed now.",
-          `Current: ${checkinDescription(cfg)}`,
-          "Create or resume /pi-rogue-orchestration goal or loop to activate scheduled higher-model check-ins; stop or clear either to disable them.",
-          orchestrationSnapshotText(ctx),
-        ].join("\n"), "info");
+        ctx.ui.notify("Usage: board specialist status|suggest|ask or board head status|ask", "error");
         return;
       }
 
-      if (cmd === "pause") {
-        const value = rest[0];
-        const turns = Number.parseInt(String(value || ""), 10);
-        if (!Number.isFinite(turns) || turns <= 0) {
-          if (value === "off" || value === "cancel" || value === "clear") {
-            state.advisorPauseUntilTurn = undefined;
-            saveState(state);
-            ctx.ui.notify("Advisor pause cleared.", "info");
-            return;
-          }
-          return;
-        }
-        state.advisorPauseUntilTurn = state.turns + turns;
-        saveState(state);
-        ctx.ui.notify(`Advisor pause enabled for next ${turns} turn${turns === 1 ? "" : "s"}.`, "info");
+      const result = await askAdvisor(pi, ctx, rawArg, "slash", true);
+      if (result.error) {
+        ctx.ui.notify(result.text, "warning");
         return;
       }
-
-      if (cmd === "unpause") {
-        state.advisorPauseUntilTurn = undefined;
-        saveState(state);
-        ctx.ui.notify("Advisor pause cleared.", "info");
-        return;
-      }
-
-      // Anything else: treat as a question to the advisor
-      const r = await askAdvisor(pi, ctx, rawArg, "slash", true);
-      if (r.error) {
-        ctx.ui.notify(r.text, "warning");
-        return;
-      }
-      sendAdvisorAnswer(pi, r.text);
+      sendAdvisorAnswer(pi, result.text);
     },
   });
 }
