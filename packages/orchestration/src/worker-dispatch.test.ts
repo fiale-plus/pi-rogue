@@ -397,7 +397,8 @@ describe("dispatchWorker", () => {
     const ctx = makeCtxWithTempSession(registry);
     enableWorker(ctx, "local/qwen3.6-35b-a3b");
 
-    const promise = dispatchWorker(pi, ctx, { task: "bounded task" }, undefined, { waitForCompletion: true });
+    const ledgerPath = join(tmpdir(), `worker-ledger-${randomUUID()}.jsonl`);
+    const promise = dispatchWorker(pi, ctx, { task: "bounded task" }, undefined, { waitForCompletion: true, telemetry: { parentSessionId: "parent-1", ledgerPath } });
     const spawn = eventBus.emitted[0].data as any;
     eventBus.emit(`${RPC_REPLY_PREFIX}${spawn.requestId}`, {
       requestId: spawn.requestId,
@@ -409,10 +410,13 @@ describe("dispatchWorker", () => {
     eventBus.emit(`${RPC_REPLY_PREFIX}${status.requestId}`, {
       requestId: status.requestId,
       success: true,
-      data: { text: "completed output", details: { state: "complete" } },
+      data: { text: "completed output", details: { state: "complete", budgetKind: "tool", budgetUsed: 4, budgetLimit: 8 } },
     });
 
     await expect(promise).resolves.toMatchObject({ runId: "run-1", text: "completed output" });
+    const events = readFileSync(ledgerPath, "utf8").trim().split("\n").map((line) => JSON.parse(line));
+    expect(events[1]).toMatchObject({ outcome: "success", budgetKind: "tool", budgetUsed: 4, budgetLimit: 8 });
+    rmSync(ledgerPath, { force: true });
     cleanupCtx(ctx);
   });
 

@@ -127,6 +127,7 @@ export async function dispatchWorker(
       events.emit(RPC_REQUEST, {
         version: RPC_VERSION,
         requestId: randomUUID(),
+        method: "stop",
         // The deterministic RPC execution id also resolves the run if spawn ack is lost.
         params: runId ? { runId } : { id: spawnExecutionId },
         source: { extension: "pi-rogue-orchestration" },
