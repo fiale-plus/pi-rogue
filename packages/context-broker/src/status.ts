@@ -12,19 +12,21 @@ export interface ContextBrokerStatusSource {
 
 /** Read-only Context Broker status adapter. It reports a supplied runtime marker and never touches storage. */
 export function contextBrokerFeatureStatus(source: ContextBrokerStatusSource): FeatureStatusV1 {
-  const sourceShapeValid = typeof source.enabled === "boolean"
-    && typeof source.registered === "boolean"
-    && (source.durable === undefined || typeof source.durable === "boolean")
-    && (source.error === undefined || typeof source.error === "boolean");
-  const enabled = sourceShapeValid && source.enabled;
-  const registered = sourceShapeValid && source.registered;
-  const durable = sourceShapeValid && typeof source.durable === "boolean" ? source.durable : undefined;
-  const knownBackend = sourceShapeValid && (source.backend === "memory" || source.backend === "memory(degraded)" || source.backend === "sqlite" || source.backend === "jsonl")
-    ? source.backend
-    : sourceShapeValid && source.backend === undefined ? (durable === false ? "memory" : undefined) : undefined;
-  const backendInvalid = (source.backend !== undefined && knownBackend === undefined) || (registered && knownBackend === undefined);
+  const candidate = source && typeof source === "object" && !Array.isArray(source) ? source : undefined;
+  const sourceShapeValid = candidate !== undefined
+    && typeof candidate.enabled === "boolean"
+    && typeof candidate.registered === "boolean"
+    && (candidate.durable === undefined || typeof candidate.durable === "boolean")
+    && (candidate.error === undefined || typeof candidate.error === "boolean");
+  const enabled = sourceShapeValid && candidate.enabled;
+  const registered = sourceShapeValid && candidate.registered;
+  const durable = sourceShapeValid && typeof candidate.durable === "boolean" ? candidate.durable : undefined;
+  const knownBackend = sourceShapeValid && (candidate.backend === "memory" || candidate.backend === "memory(degraded)" || candidate.backend === "sqlite" || candidate.backend === "jsonl")
+    ? candidate.backend
+    : sourceShapeValid && candidate.backend === undefined ? (durable === false ? "memory" : undefined) : undefined;
+  const backendInvalid = (candidate?.backend !== undefined && knownBackend === undefined) || (registered && knownBackend === undefined);
   const degraded = knownBackend === "memory(degraded)";
-  const health = !sourceShapeValid || source.error || backendInvalid ? "error" : !enabled ? "disabled" : !registered ? "unavailable" : degraded ? "degraded" : "ready";
+  const health = !sourceShapeValid || candidate?.error || backendInvalid ? "error" : !enabled ? "disabled" : !registered ? "unavailable" : degraded ? "degraded" : "ready";
   const mode = registered && knownBackend ? knownBackend : "unavailable";
   return createFeatureStatusV1({
     feature: "context-broker",

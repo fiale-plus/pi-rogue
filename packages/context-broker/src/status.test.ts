@@ -18,4 +18,9 @@ describe("contextBrokerFeatureStatus", () => {
     expect(serialized).not.toContain("/");
     expect(serialized).not.toContain("path");
   });
+
+  it("fails closed for null and undefined sources", () => {
+    expect(contextBrokerFeatureStatus(null as never)).toMatchObject({ health: "error", enabled: false, mode: "unavailable" });
+    expect(contextBrokerFeatureStatus(undefined as never)).toMatchObject({ health: "error", enabled: false, mode: "unavailable" });
+  });
 });
