@@ -18,7 +18,8 @@
   },
   "main": "./orchestration/index.ts",
   "exports": {
-    ".": "./orchestration/index.ts"
+    ".": "./orchestration/index.ts",
+    "./status": "./src/status.ts"
   },
   "pi": {
     "extensions": [

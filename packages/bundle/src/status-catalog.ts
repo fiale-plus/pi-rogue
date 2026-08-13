@@ -4,10 +4,10 @@ import {
   validateFeatureStatusV1,
   type FeatureStatusV1,
 } from "@fiale-plus/pi-core";
-import { advisorFeatureStatus } from "@fiale-plus/pi-rogue-advisor";
-import { contextBrokerFeatureStatus, type ContextBrokerStatusSource } from "@fiale-plus/pi-rogue-context-broker";
-import { orchestrationFeatureStatus } from "@fiale-plus/pi-rogue-orchestration";
-import { routerFeatureStatus } from "@fiale-plus/pi-rogue-router";
+import { advisorFeatureStatus } from "@fiale-plus/pi-rogue-advisor/status";
+import { contextBrokerFeatureStatus, type ContextBrokerStatusSource } from "@fiale-plus/pi-rogue-context-broker/status";
+import { orchestrationFeatureStatus } from "@fiale-plus/pi-rogue-orchestration/status";
+import { routerFeatureStatus } from "@fiale-plus/pi-rogue-router/status";
 
 export const HARMONIZATION_STATUS_CATALOG_SCHEMA = "pi-rogue.harmonization-status.v1" as const;
 
