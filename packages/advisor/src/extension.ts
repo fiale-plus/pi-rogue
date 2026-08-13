@@ -30,9 +30,6 @@ import { classifyIntent, classifyMode } from "./preflight-signals.js";
 import { findMissingArtifactReferences } from "./artifact-preflight.js";
 import { findMissingReviewArtifacts } from "./review-preflight.js";
 import { buildBoardLedger, decideBoardAction } from "./board.js";
-import { appendBoardFlightRecord, buildBoardFlightRecord } from "./board-flight-recorder.js";
-import { boardTelemetryPath } from "./board-telemetry.js";
-import { formatBoardFlightWhy, formatBoardFlightReport, formatBoardFlightStatus, loadBoardFlightRecords } from "./board-flight-ux.js";
 import {
   callHeadOfBoardAdapter,
   defaultHeadOfBoardConfig,
@@ -40,8 +37,6 @@ import {
   normalizeHeadOfBoardConfig,
   type HeadOfBoardConfig,
 } from "./board-head.js";
-import { loadBoardRoleBody, loadBoardRoleCatalog } from "./board-roles.js";
-import { formatPersonalSpecialistDiscoverySnapshot, loadPersonalSpecialistDiscoverySnapshot, queuePersonalSpecialistDiscoveryRefresh } from "./personal-specialist-discovery.js";
 import {
   callReadOnlySpecialist,
   defaultSpecialistCallState,
@@ -51,49 +46,30 @@ import {
   type SpecialistCallState,
   type SpecialistDispatchConfig,
 } from "./board-specialist.js";
-import {
-  applyBoardTelemetryWritePlan,
-  boardEventsFromAdvisorState,
-  defaultBoardShadowConfig,
-  defaultBoardShadowState,
-  formatBoardShadowStatus,
-  normalizeBoardShadowConfig,
-  normalizeBoardShadowState,
-  planBoardTelemetryWrite,
-  runBoardShadowDecision,
-  type BoardShadowConfig,
-  type BoardShadowState,
-} from "./board-shadow.js";
+import { loadBoardRoleBody, loadBoardRoleCatalog } from "./board-roles.js";
 
 // ── Explicit-only configuration ─────────────────────────────────────────
-
-export type AdvisorProfileId = "budget-board";
 
 export interface AdvisorModels {
   advisor?: string;
   specialist?: string;
   head?: string;
 }
-
-export interface AdvisorBoardBounds {
+export interface AdvisorBoardConfig {
+  specialists: "suggest" | "off";
+  maxSpecialistCalls: number;
+  specialistMaxTokens: number;
+  headMaxTokens: number;
   maxEvidence?: number;
   maxRisks?: number;
   maxFailures?: number;
   maxSubagents?: number;
   maxTokens?: number;
-  /** Legacy marker accepted only for source compatibility; never normalized. */
-  mode?: "off" | "shadow";
 }
 
-/**
- * Public configuration intentionally contains only explicit model slots and
- * compact Board bounds. Legacy fields are accepted by normalization below,
- * but are never emitted or persisted.
- */
 export interface AdvisorConfig {
-  models?: AdvisorModels;
-  board?: AdvisorBoardBounds;
-  // Source-compatibility fields for old callers; normalizeAdvisorConfig strips them.
+  models: AdvisorModels;
+  board: AdvisorBoardConfig;
   model?: string;
   mode?: "auto" | "manual" | "off";
   review?: "light" | "strict" | "off";
@@ -101,54 +77,38 @@ export interface AdvisorConfig {
   checkinIntervalMinutes?: number;
   checkinStartedAt?: number;
   profile?: AdvisorProfileId;
-  profileRestore?: unknown;
-  headOfBoard: HeadOfBoardConfig;
-  specialistDispatch: SpecialistDispatchConfig;
-}
-const DEFAULT_CONFIG = {
-  models: {},
-  board: {
-    maxEvidence: 8,
-    maxRisks: 6,
-    maxFailures: 4,
-    maxSubagents: 6,
-    maxTokens: 1200,
-  },
-  mode: "auto" as const,
-  review: "light" as const,
-  checkins: "off" as const,
-  checkinIntervalMinutes: 30,
-  headOfBoard: defaultHeadOfBoardConfig(),
-  specialistDispatch: defaultSpecialistDispatchConfig(),
-} satisfies AdvisorConfig & { models: AdvisorModels; board: AdvisorBoardBounds };
-
-export interface AdvisorProfileRestore {
-  mode?: "auto" | "manual" | "off";
-  review?: "light" | "strict" | "off";
-  checkins?: "mid-hour" | "off";
-  checkinIntervalMinutes?: number;
-  model?: string;
-  profileModel?: string;
-  profileMode?: "auto" | "manual" | "off";
-  profileReview?: "light" | "strict" | "off";
-  profileCheckins?: "mid-hour" | "off";
-  board?: AdvisorBoardBounds;
+  profileRestore?: AdvisorProfileRestore;
   headOfBoard?: HeadOfBoardConfig;
   specialistDispatch?: SpecialistDispatchConfig;
-  [key: string]: unknown;
 }
 
-type LegacyAdvisorConfig = Partial<AdvisorConfig> & {
+export type AdvisorProfileId = "budget-board";
+
+export interface AdvisorProfileRestore {
+  [key: string]: unknown;
+}
+type LegacyAdvisorConfig = {
+  models?: unknown;
+  board?: unknown;
   model?: unknown;
   mode?: unknown;
   review?: unknown;
   checkins?: unknown;
   checkinIntervalMinutes?: unknown;
-  checkinStartedAt?: unknown;
   profile?: unknown;
   profileRestore?: unknown;
   headOfBoard?: unknown;
   specialistDispatch?: unknown;
+};
+
+const DEFAULT_CONFIG: AdvisorConfig = {
+  models: {},
+  board: {
+    specialists: "suggest",
+    maxSpecialistCalls: 3,
+    specialistMaxTokens: 420,
+    headMaxTokens: 720,
+  },
 };
 
 const CONFIG_PATH = featureFile("advisor", "config.json");
@@ -165,23 +125,18 @@ const MAX_FILES = 8;
 const MAX_ERRORS = 5;
 const MAX_EVIDENCE = 32;
 const DEFAULT_RATE_LIMIT_BACKOFF_SECONDS = 15 * 60;
-const MIN_CHECKIN_INTERVAL_MINUTES = 10;
-const MAX_CHECKIN_INTERVAL_MINUTES = 240;
 const STATE_VERSION = 1;
 /** Maximum wall-clock time for one advisor model-resolution/completion work item. */
 export const DEFAULT_ADVISOR_WORK_TIMEOUT_MS = 60_000;
 const checkinLocks = new Set<string>();
 const reviewLocks = new Set<string>();
-/** Sessions that have shut down; prevents already-running event continuations from starting new work. */
 const closedAdvisorSessions = new Set<string>();
+const advisorWorks = new Map<string, AdvisorWork>();
 
 type AdvisorWork = {
   controller: AbortController;
   deadlineAt: number;
 };
-
-/** One owned model operation per session; newer work safely supersedes older work. */
-const advisorWorks = new Map<string, AdvisorWork>();
 
 class AdvisorWorkAbortError extends Error {
   constructor(readonly reason: "deadline" | "superseded" | "session_shutdown") {
@@ -239,7 +194,6 @@ interface SessionState {
   workflow?: WorkflowState;
   rateLimit?: AdvisorRateLimitState;
   advisorLoop?: AdvisorLoopState;
-  board?: BoardShadowState;
   headOfBoard?: {
     calls: number;
     lastAt?: string;
@@ -316,7 +270,6 @@ function defaultState(): SessionState {
     evidenceLedger: [],
     workflow: {},
     advisorLoop: defaultAdvisorLoopState(),
-    board: defaultBoardShadowState(),
     headOfBoard: { calls: 0 },
     specialistDispatch: defaultSpecialistCallState(),
   };
@@ -347,10 +300,10 @@ function cleanModelSlot(value: unknown): string | undefined {
 
 export function normalizeAdvisorConfig(raw: Partial<AdvisorConfig> | LegacyAdvisorConfig = {}): AdvisorConfig {
   const legacy = raw as LegacyAdvisorConfig;
-  const sourceModels = raw.models && typeof raw.models === "object" ? raw.models : {};
-  const legacyHead = legacy.headOfBoard && typeof legacy.headOfBoard === "object" ? legacy.headOfBoard as unknown as Record<string, unknown> : {};
-  const legacySpecialist = legacy.specialistDispatch && typeof legacy.specialistDispatch === "object" ? legacy.specialistDispatch as unknown as Record<string, unknown> : {};
-  const sourceBoard = raw.board && typeof raw.board === "object" ? raw.board as Partial<AdvisorBoardBounds> : {};
+  const sourceModels = legacy.models && typeof legacy.models === "object" ? legacy.models as Record<string, unknown> : {};
+  const sourceBoard = legacy.board && typeof legacy.board === "object" ? legacy.board as Record<string, unknown> : {};
+  const legacyHead = legacy.headOfBoard && typeof legacy.headOfBoard === "object" ? legacy.headOfBoard as Record<string, unknown> : {};
+  const legacySpecialist = legacy.specialistDispatch && typeof legacy.specialistDispatch === "object" ? legacy.specialistDispatch as Record<string, unknown> : {};
   const models: AdvisorModels = {
     advisor: cleanModelSlot(sourceModels.advisor) ?? cleanModelSlot(legacy.model),
     specialist: cleanModelSlot(sourceModels.specialist) ?? cleanModelSlot(legacySpecialist.model),
@@ -359,16 +312,16 @@ export function normalizeAdvisorConfig(raw: Partial<AdvisorConfig> | LegacyAdvis
   for (const key of Object.keys(models) as Array<keyof AdvisorModels>) {
     if (!models[key]) delete models[key];
   }
+  const specialistMode = sourceBoard.specialists === "off" || legacySpecialist.mode === "off" ? "off" : "suggest";
   return {
     models,
     board: {
-      maxEvidence: boundedBoardValue(sourceBoard.maxEvidence, DEFAULT_CONFIG.board.maxEvidence ?? 8, 1, 32),
-      maxRisks: boundedBoardValue(sourceBoard.maxRisks, DEFAULT_CONFIG.board.maxRisks ?? 6, 1, 16),
-      maxFailures: boundedBoardValue(sourceBoard.maxFailures, DEFAULT_CONFIG.board.maxFailures ?? 4, 1, 12),
-      maxSubagents: boundedBoardValue(sourceBoard.maxSubagents, DEFAULT_CONFIG.board.maxSubagents ?? 6, 1, 16),
-      maxTokens: boundedBoardValue(sourceBoard.maxTokens, DEFAULT_CONFIG.board.maxTokens ?? 1200, 200, 2400),
+      specialists: specialistMode,
+      maxSpecialistCalls: boundedBoardValue(sourceBoard.maxSpecialistCalls ?? legacySpecialist.maxCallsPerSession, DEFAULT_CONFIG.board.maxSpecialistCalls, 0, 8),
+      specialistMaxTokens: boundedBoardValue(sourceBoard.specialistMaxTokens ?? legacySpecialist.maxTokens, DEFAULT_CONFIG.board.specialistMaxTokens, 100, 2000),
+      headMaxTokens: boundedBoardValue(sourceBoard.headMaxTokens ?? legacyHead.maxTokens ?? sourceBoard.maxTokens, DEFAULT_CONFIG.board.headMaxTokens, 100, 3000),
     },
-  } as AdvisorConfig;
+  };
 }
 
 function loadConfig(): AdvisorConfig {
@@ -551,7 +504,6 @@ function loadStateFromPath(path: string): SessionState {
       lastSource: typeof (raw.advisorLoop as { lastSource?: unknown }).lastSource === "string" ? (raw.advisorLoop as { lastSource?: string }).lastSource : undefined,
       lastObservedAt: typeof (raw.advisorLoop as { lastObservedAt?: unknown }).lastObservedAt === "string" ? (raw.advisorLoop as { lastObservedAt?: string }).lastObservedAt : undefined,
     } : defaultAdvisorLoopState(),
-    board: normalizeBoardShadowState(raw.board),
     headOfBoard: raw.headOfBoard && typeof raw.headOfBoard === "object" ? {
       calls: Math.max(0, Math.floor(Number((raw.headOfBoard as { calls?: unknown }).calls) || 0)),
       lastAt: typeof (raw.headOfBoard as { lastAt?: unknown }).lastAt === "string" ? (raw.headOfBoard as { lastAt?: string }).lastAt : undefined,
@@ -574,157 +526,10 @@ function saveState(s: SessionState) {
   atomicWriteText(statePathFor(s), JSON.stringify(s, null, 2) + "\n");
 }
 
-const BOARD_SHADOW_COMMON_SECRET_RE = /\b(?:sk|ghp|gho|github_pat|xox[abprs]|hf|AKIA)[-_][A-Za-z0-9_\-]{8,}\b/g;
-const BOARD_SHADOW_AUTH_BEARER_RE = /\bauthorization\b\s*[:=]\s*["']?bearer\s+[A-Za-z0-9._~+/=-]{4,}/gi;
-const BOARD_SHADOW_BARE_BEARER_RE = /\bbearer\s+[A-Za-z0-9._~+/=-]{8,}/gi;
-const BOARD_SHADOW_KEYED_SECRET_RE = /\b(?:api[_-]?key|token|secret|password|authorization)\b\s*[:=]\s*["']?[^\s"',;}]{4,}/gi;
-const BOARD_SHADOW_NAMED_SECRET_RE = /\b[A-Z0-9_]*(?:SECRET|TOKEN|PASSWORD|API_KEY)[A-Z0-9_]*_[A-Za-z0-9_=-]{4,}\b/gi;
 
-function redactBoardShadowText(text: unknown): string {
-  return sanitizeAdvisorText(text)
-    .replace(BOARD_SHADOW_AUTH_BEARER_RE, (match) => `${match.split(/[:=]/, 1)[0]}=[secret]`)
-    .replace(BOARD_SHADOW_BARE_BEARER_RE, "Bearer [secret]")
-    .replace(BOARD_SHADOW_COMMON_SECRET_RE, "[secret]")
-    .replace(BOARD_SHADOW_KEYED_SECRET_RE, (match) => `${match.split(/[:=]/, 1)[0]}=[secret]`)
-    .replace(BOARD_SHADOW_NAMED_SECRET_RE, "[secret]");
-}
-
-function compactEvidenceEntry(entry: EvidenceLedgerEntry | undefined): Record<string, unknown> | undefined {
-  if (!entry) return undefined;
-  return {
-    kind: entry.kind,
-    result: entry.result,
-    source: entry.source,
-    command: entry.command ? truncate(redactBoardShadowText(entry.command), 240) : undefined,
-    timestamp: entry.timestamp,
-    exitCode: entry.exitCode,
-    sha: entry.sha,
-    pr: entry.pr,
-  };
-}
-
-function boardRouteSnapshot(route: AdvisorRouteDecision | undefined): Record<string, unknown> | undefined {
-  if (!route) return undefined;
-  const raw = route as unknown as Record<string, unknown>;
-  return {
-    summary: summarizeRoute(route),
-    label: raw.label,
-    source: raw.source,
-    confidence: raw.confidence,
-    safety: Boolean(raw.safety),
-    reason: typeof raw.reason === "string" ? truncate(sanitizeAdvisorText(raw.reason), 240) : undefined,
-    trajectory: raw.trajectory,
-  };
-}
-
-function boardShadowArtifactContext(state: SessionState, result: ReturnType<typeof runBoardShadowDecision>): Record<string, unknown> {
-  const latestValidation = latestEvidence(state, "validation");
-  const latestMerge = latestEvidence(state, "merge");
-  const repeatCount = state.advisorLoop?.repeatCount ?? 0;
-  return {
-    sessionOutcome: {
-      terminal: state.workflow?.terminal,
-      latestValidation: compactEvidenceEntry(latestValidation),
-      latestMerge: compactEvidenceEntry(latestMerge),
-      evidenceTail: (state.evidenceLedger ?? []).slice(-8).map(compactEvidenceEntry).filter(Boolean),
-      outcomeKnown: Boolean(state.workflow?.terminal || latestMerge || latestValidation),
-    },
-    advisor: {
-      calls: state.advisorCalls,
-      cacheHits: state.cacheHits,
-      followUpQueued: Boolean(state.followUp),
-      reviewSignalCount: state.reviewSignals.length,
-      reviewControl: {
-        status: state.reviewControl.status,
-        pending: state.reviewControl.pending,
-        consumed: state.reviewControl.consumed,
-        running: state.reviewControl.running,
-        lastDecision: state.reviewControl.lastDecision,
-        lastReason: state.reviewControl.lastReason ? truncate(sanitizeAdvisorText(state.reviewControl.lastReason), 240) : undefined,
-        lastTrigger: state.reviewControl.lastTrigger,
-        terminalEvidence: state.reviewControl.terminalEvidence,
-      },
-      loop: {
-        repeatCount,
-        lastSource: state.advisorLoop?.lastSource,
-        lastObservedAt: state.advisorLoop?.lastObservedAt,
-        recent: (state.advisorLoop?.recent ?? []).slice(-4).map((entry) => ({
-          outputHash: entry.outputHash,
-          contextHash: entry.contextHash,
-          familyHash: entry.familyHash,
-          source: entry.source,
-          repeatCount: entry.repeatCount,
-          at: entry.at,
-        })),
-      },
-    },
-    router: {
-      preflight: boardRouteSnapshot(state.router.preflight),
-      review: boardRouteSnapshot(state.router.review),
-    },
-    probationMeasurements: {
-      falsePositiveRate: null,
-      usefulEdgeMomentCatchCandidates: result.decision.action === "would_whisper" ? 1 : 0,
-      tokenCostOverheadUsd: 0,
-      modelCalls: 0,
-      liveWhispers: 0,
-      specialistDispatches: 0,
-      seniorAdvisorEscalations: state.headOfBoard?.calls ?? 0,
-      steerActions: 0,
-      mutatingToolAccess: 0,
-      duplicateAdviceSignals: Math.max(0, repeatCount - 1),
-      staleEvidenceRisks: result.risks.filter((risk) => risk.type === "stale_evidence").length,
-      outcomeKnown: Boolean(state.workflow?.terminal),
-    },
-  };
-}
-
-function recordBoardShadowIfEnabled(ctx: any, cfg: AdvisorConfig, state: SessionState, source: string, toolResults?: any[]): void {
-  if (cfg.board?.mode !== "shadow") return;
-  const shadowPath = boardTelemetryPath(ctx, "board-shadow.jsonl");
-  const flightPath = boardTelemetryPath(ctx, "board-flight.jsonl");
-  if (!shadowPath || !flightPath) return;
-  const started = Date.now();
-  const previousBoard = state.board;
-  const result = runBoardShadowDecision({
-    sessionId: sessionKey(ctx),
-    worktree: String(ctx?.cwd || ""),
-    turns: state.turns,
-    evidenceLedger: state.evidenceLedger,
-    toolResults,
-  }, previousBoard);
-  const latencyMs = Math.max(0, Date.now() - started);
-  const writePlan = planBoardTelemetryWrite(previousBoard, result.decision, result.risks);
-  state.board = applyBoardTelemetryWritePlan(result.state, writePlan);
-  if (!writePlan.write) return;
-  const ledger = buildBoardLedger(result.events);
-  const flight = buildBoardFlightRecord({
-    ledger,
-    decision: result.decision,
-    source,
-    mode: "shadow",
-    at: result.state.lastAt,
-    latencyMs,
-    modelCalls: 0,
-    estimatedInputTokens: 0,
-    estimatedOutputTokens: 0,
-    estimatedCostUsd: 0,
-  });
-  appendText(shadowPath, `${JSON.stringify({
-    schema: "pi-rogue.advisor-board.shadow.v1",
-    at: result.state.lastAt,
-    source,
-    decision: result.decision,
-    riskIds: result.risks.map((risk) => risk.id),
-    risks: result.risks,
-    context: boardShadowArtifactContext(state, result),
-  })}\n`);
-  appendBoardFlightRecord(flightPath, flight);
-}
-
-function headOfBoardStatusText(cfg: AdvisorConfig, state: SessionState): string {
+function headOfBoardStatusText(_cfg: AdvisorConfig, state: SessionState): string {
   return [
-    `Advisor Head-of-Board: explicit-only`,
+    "Advisor Head-of-Board: explicit-only",
     `Calls: ${state.headOfBoard?.calls ?? 0}`,
     state.headOfBoard?.lastAt ? `Last: ${state.headOfBoard.lastAt}` : "Last: never",
     state.headOfBoard?.lastModel ? `Last model: ${state.headOfBoard.lastModel}` : undefined,
@@ -734,15 +539,21 @@ function headOfBoardStatusText(cfg: AdvisorConfig, state: SessionState): string 
 }
 
 function currentBoardLedger(ctx: any, state: SessionState) {
-  const events = boardEventsFromAdvisorState({
-    sessionId: sessionKey(ctx),
-    worktree: String(ctx?.cwd || ""),
-    turns: state.turns,
-    pendingFiles: state.board?.pendingFiles,
-    evidenceLedger: state.evidenceLedger,
-  });
-  return mergeHeadOfBoardRisks(buildBoardLedger(events), state.board?.lastRisks);
+  const events = [
+    { type: "session" as const, id: sessionKey(ctx), worktree: String(ctx?.cwd || "") },
+    ...state.evidenceLedger.map((entry, index) => ({
+      type: "validation" as const,
+      command: entry.command ?? entry.source,
+      exitCode: entry.exitCode ?? (entry.result === "pass" || entry.result === "merged" ? 0 : 1),
+      status: (entry.result === "pass" || entry.result === "merged" ? "green" : "red") as "green" | "red",
+      turn: index + 1,
+      timestamp: entry.timestamp,
+      terminal: Boolean(state.workflow?.terminal),
+    })),
+  ];
+  return buildBoardLedger(events);
 }
+
 
 async function runHeadOfBoardCommand(ctx: any, cfg: AdvisorConfig, state: SessionState, question: string): Promise<void> {
   const ledger = currentBoardLedger(ctx, state);
@@ -751,15 +562,12 @@ async function runHeadOfBoardCommand(ctx: any, cfg: AdvisorConfig, state: Sessio
   const headConfig = {
     ...defaultHeadOfBoardConfig(),
     mode: "enabled" as const,
-    maxEvidence: cfg.board?.maxEvidence ?? DEFAULT_CONFIG.board.maxEvidence,
-    maxRisks: cfg.board?.maxRisks ?? DEFAULT_CONFIG.board.maxRisks,
-    maxFailures: cfg.board?.maxFailures ?? DEFAULT_CONFIG.board.maxFailures,
-    maxSubagents: cfg.board?.maxSubagents ?? DEFAULT_CONFIG.board.maxSubagents,
-    maxTokens: cfg.board?.maxTokens ?? DEFAULT_CONFIG.board.maxTokens,
+    maxTokens: cfg.board.headMaxTokens,
   };
-  const modelConfig = { ...cfg, models: { ...(cfg.models ?? {}), advisor: cfg.models?.head ?? cfg.models?.advisor } };
+  const modelConfig = cfg;
+
   const result = await callHeadOfBoardAdapter(headConfig, { ledger, decision, question, reason: "user_request" }, async (systemPrompt, messages, options) => {
-    return completeWithHigherAdvisorModel(ctx, modelConfig, systemPrompt, messages, { ...options, allowRegularFallback: false, maxAttempts: 1 });
+    return completeWithHigherAdvisorModel(ctx, modelConfig, systemPrompt, messages, { ...options, role: "head", maxAttempts: 2 });
   });
   if (result.skipped) {
     state.headOfBoard.lastSkipped = result.skipped;
@@ -818,9 +626,10 @@ async function runSpecialistCommand(ctx: any, cfg: AdvisorConfig, state: Session
   const specialistConfig = {
     ...defaultSpecialistDispatchConfig(),
     mode: "suggest" as const,
-    maxTokens: Math.min(defaultSpecialistDispatchConfig().maxTokens, cfg.board?.maxTokens ?? DEFAULT_CONFIG.board.maxTokens),
+    maxCallsPerSession: cfg.board.maxSpecialistCalls,
+    maxTokens: cfg.board.specialistMaxTokens,
   };
-  const modelConfig = { ...cfg, models: { ...(cfg.models ?? {}), advisor: cfg.models?.specialist ?? cfg.models?.advisor } };
+  const modelConfig = cfg;
   const result = await callReadOnlySpecialist({
     role: found.role,
     ledger: currentBoardLedger(ctx, state),
@@ -829,7 +638,7 @@ async function runSpecialistCommand(ctx: any, cfg: AdvisorConfig, state: Session
     state: state.specialistDispatch!,
     currentTurn: state.turns,
     complete: async (systemPrompt, messages, options) => {
-      const resp = await completeWithHigherAdvisorModel(ctx, modelConfig, systemPrompt, messages, { maxTokens: options.maxTokens, reasoning: "medium", allowRegularFallback: false, maxAttempts: 1 });
+      const resp = await completeWithHigherAdvisorModel(ctx, modelConfig, systemPrompt, messages, { maxTokens: options.maxTokens, reasoning: "medium", role: "specialist", maxAttempts: 2 });
       if (!resp || resp.rateLimited) throw new Error(resp?.text || "specialist model unavailable");
       return resp.text;
     },
@@ -3378,35 +3187,88 @@ function piRogueDoctorText(ctx: any): string {
 }
 
 // ── Model resolution (higher/advanced first, then optional regular fallback) ──
-type ResolvedAdvisorModel = { model: any; auth: any; label: string; fallback?: boolean };
-type ModelResolutionOptions = { allowRegularFallback?: boolean; maxAttempts?: number };
+type AdvisorRole = "advisor" | "specialist" | "head";
+type ResolvedAdvisorModel = { model: unknown; auth: { apiKey: string; headers?: Record<string, string> }; label: string; fallback?: boolean };
+type ModelResolutionOptions = { role?: AdvisorRole; allowRegularFallback?: boolean; maxAttempts?: number };
 type AdvisorCompletionResult = { text: string; model: string; fallback?: boolean; rateLimited?: boolean; retryAfterSeconds?: number };
+type AdvisorCompletionOptions = {
+  maxTokens: number;
+  reasoning: ThinkingLevel;
+  role?: AdvisorRole;
+  allowRegularFallback?: boolean;
+  maxAttempts?: number;
+  signal?: AbortSignal;
+};
+
+const ROLE_PREFERENCES: Record<AdvisorRole, string[]> = {
+  advisor: SOTA_CHAIN.map((item) => `${item.provider}/${item.model}`),
+  head: SOTA_CHAIN.map((item) => `${item.provider}/${item.model}`),
+  specialist: CHEAP_DRIVER_CHAIN,
+};
+
+function modelId(model: unknown): string {
+  if (!model || typeof model !== "object") return "";
+  const value = model as { provider?: unknown; id?: unknown; model?: unknown };
+  const provider = String(value.provider ?? "").trim();
+  const id = String(value.id ?? value.model ?? "").trim();
+  return provider && id && !id.startsWith(`${provider}/`) ? `${provider}/${id}` : id;
+}
+
+function isTextModel(model: unknown): boolean {
+  if (!model || typeof model !== "object") return false;
+  const input = (model as { input?: unknown }).input;
+  return !Array.isArray(input) || input.length === 0 || input.includes("text");
+}
 
 async function resolveModelCandidatesWithinWork(ctx: any, config: AdvisorConfig, options: ModelResolutionOptions, signal: AbortSignal): Promise<ResolvedAdvisorModel[]> {
+  const role = options.role ?? "advisor";
+  const explicit = config.models[role];
+  const preferred = ROLE_PREFERENCES[role];
+  const available = (): unknown[] => {
+    try {
+      const rows = ctx.modelRegistry?.getAvailable?.();
+      return Array.isArray(rows) ? rows.filter(isTextModel) : [];
+    } catch {
+      return [];
+    }
+  };
+  const specs = explicit ? [explicit, preferred.find((id) => id !== explicit)] : [preferred[0]];
   const candidates: ResolvedAdvisorModel[] = [];
-  const explicit = config.models?.advisor;
-  const preferred = SOTA_CHAIN[0];
-  const specs = explicit
-    ? [{ id: explicit, label: explicit, fallback: false }, { id: `${preferred.provider}/${preferred.model}`, label: preferred.label, fallback: true }]
-    : [{ id: `${preferred.provider}/${preferred.model}`, label: preferred.label, fallback: false }];
-  const maxAttempts = Math.min(2, Math.max(1, options.maxAttempts ?? specs.length));
   const seen = new Set<string>();
-  for (const spec of specs) {
-    if (candidates.length >= maxAttempts || seen.has(spec.id)) continue;
-    seen.add(spec.id);
-    const [provider, ...modelParts] = spec.id.split("/");
-    const found = ctx.modelRegistry?.find(provider, modelParts.join("/"));
-    if (!found) continue;
+  for (const [index, id] of specs.entries()) {
+    if (!id || seen.has(id) || candidates.length >= 2) continue;
+    seen.add(id);
+    const [provider, ...parts] = id.split("/");
+    let found = ctx.modelRegistry?.find?.(provider, parts.join("/"));
+    if (!found && !explicit && index === 0) {
+      found = available().find((item) => modelId(item) === id);
+    }
+    if (!found && explicit && index === 1) {
+      found = available().find((item) => preferred.includes(modelId(item)));
+    }
+    if (!found || !isTextModel(found)) continue;
     try {
       const auth = await awaitAdvisorWork(ctx.modelRegistry?.getApiKeyAndHeaders(found), signal);
-      if (auth?.ok && auth.apiKey) candidates.push({ model: found, auth, label: spec.label, fallback: spec.fallback });
+      if (auth?.ok && typeof auth.apiKey === "string" && auth.apiKey) {
+        candidates.push({ model: found, auth: { apiKey: auth.apiKey, headers: auth.headers }, label: modelId(found) || id, fallback: index > 0 });
+      }
     } catch (error) {
       if (signal.aborted) throw error;
-      appendAdvisorDiagnostic("model_auth_resolution_failed", {
-        model: spec.id,
-        provider,
-        category: "auth_lookup_error",
-      });
+      appendAdvisorDiagnostic("model_auth_resolution_failed", { model: id, category: "auth_lookup_error" });
+    }
+  }
+  if (!explicit && candidates.length === 0) {
+    for (const found of available().sort((a, b) => preferred.indexOf(modelId(a)) - preferred.indexOf(modelId(b)))) {
+      if (candidates.length >= 1 || seen.has(modelId(found))) break;
+      const id = modelId(found);
+      if (!id) continue;
+      seen.add(id);
+      try {
+        const auth = await awaitAdvisorWork(ctx.modelRegistry?.getApiKeyAndHeaders(found), signal);
+        if (auth?.ok && typeof auth.apiKey === "string" && auth.apiKey) candidates.push({ model: found, auth: { apiKey: auth.apiKey, headers: auth.headers }, label: id });
+      } catch (error) {
+        if (signal.aborted) throw error;
+      }
     }
   }
   return candidates;
@@ -3416,18 +3278,10 @@ export async function resolveModelCandidates(ctx: any, config: AdvisorConfig, op
   return (await withAdvisorWork(ctx, undefined, (signal) => resolveModelCandidatesWithinWork(ctx, config, options, signal))) ?? [];
 }
 
-async function resolveModel(ctx: any, config: AdvisorConfig): Promise<ResolvedAdvisorModel | null> {
-  return (await resolveModelCandidates(ctx, config))[0] ?? null;
+async function resolveModel(ctx: any, config: AdvisorConfig, role: AdvisorRole = "advisor"): Promise<ResolvedAdvisorModel | null> {
+  return (await resolveModelCandidates(ctx, config, { role }))[0] ?? null;
 }
 
-type AdvisorCompletionOptions = {
-  maxTokens: number;
-  reasoning: ThinkingLevel;
-  allowRegularFallback?: boolean;
-  maxAttempts?: number;
-  /** Caller-owned cancellation is propagated rather than treated as fallback failure. */
-  signal?: AbortSignal;
-};
 
 async function completeAdvisorWork(
   ctx: any,
@@ -3447,7 +3301,8 @@ async function completeAdvisorWork(
       attempts += 1;
       try {
         const timeoutMs = Math.max(1, deadlineAt - Date.now());
-        const resp = await awaitAdvisorWork(completeSimple(resolved.model, { systemPrompt, messages }, {
+        const selectedModel = resolved.model as Parameters<typeof completeSimple>[0];
+        const resp = await awaitAdvisorWork(completeSimple(selectedModel, { systemPrompt, messages }, {
           apiKey: resolved.auth.apiKey,
           headers: resolved.auth.headers,
           maxTokens: options.maxTokens,
@@ -3896,13 +3751,29 @@ export function registerAdvisor(pi: ExtensionAPI): void {
     }),
     async execute(_id, params, signal, onUpdate, ctx) {
       const r = await askAdvisor(pi, ctx, String(params.question || ""), String(params.scope || ""), params.includeRecentWork !== false, signal);
-      onUpdate?.({ content: [{ type: "text", text: r.cached ? "(cached)" : r.model ? `Consulting ${r.model}…` : "" }], details: {} });
-      return { content: [{ type: "text", text: r.text }], details: { cached: r.cached, error: r.error } };
+      onUpdate?.({ content: [{ type: "text", text: r.cached ? "(cached)" : r.model ? `Consulting ${r.model}…` : "" }], details: { model: r.model, fallback: r.fallback } });
+      return { content: [{ type: "text", text: r.text }], details: { cached: r.cached, error: r.error, model: r.model, fallback: r.fallback } };
+    },
+  });
+
+  pi.registerCommand("pi-rogue", {
+    description: "Pi-Rogue management: status|help|doctor",
+    getArgumentCompletions: (prefix: string) => piRogueArgumentCompletions(prefix),
+    handler: async (args, ctx) => {
+      const command = String(args ?? "").trim().toLowerCase();
+      const config = loadConfig();
+      const state = loadState(ctx);
+      const text = command === "doctor"
+        ? piRogueDoctorText(ctx)
+        : command === "help"
+          ? "Pi-Rogue commands:\n/pi-rogue status|help|doctor\n/pi-rogue-advisor status|model <provider>/<model>|board ..."
+          : piRogueCockpitText(config, state, "", ctx);
+      ctx.ui.notify(text, "info");
     },
   });
 
   pi.registerCommand("pi-rogue-advisor", {
-    description: "Explicit Advisor and Board calls. Usage: /pi-rogue-advisor [board specialist|head ...|question]",
+    description: `Explicit Advisor and Board calls (${ADVISOR_CANONICAL_CONTROL_LEAVES.join("|")}). Usage: /pi-rogue-advisor model <provider>/<model> or a question`,
     getArgumentCompletions: (prefix: string) => advisorArgumentCompletions(prefix),
     handler: async (args, ctx) => {
       const rawArg = String(args ?? "").trim();
@@ -3911,13 +3782,25 @@ export function registerAdvisor(pi: ExtensionAPI): void {
       const cfg = loadConfig();
       const state = loadState(ctx);
 
+      if (command === "model") {
+        const selected = cleanModelSlot(parts[1]);
+        if (!selected) {
+          ctx.ui.notify("Usage: /pi-rogue-advisor model <provider>/<model>", "error");
+          return;
+        }
+        const next = normalizeAdvisorConfig({ ...cfg, models: { ...cfg.models, advisor: selected } });
+        saveConfig(next);
+        ctx.ui.notify(`Advisor model set to ${selected}. Future explicit calls may use one fallback.`, "info");
+        return;
+      }
+
       if (!rawArg || command === "status" || command === "settings" || command === "config") {
         const resolved = await resolveModel(ctx, cfg);
         ctx.ui.notify([
-          `Advisor model: ${resolved?.label ?? cfg.models?.advisor ?? "preferred candidate"}`,
-          `Specialist model: ${cfg.models?.specialist ?? cfg.models?.advisor ?? "preferred candidate"}`,
-          `Head-of-Board model: ${cfg.models?.head ?? cfg.models?.advisor ?? "preferred candidate"}`,
-          `Board bounds: evidence=${cfg.board?.maxEvidence ?? DEFAULT_CONFIG.board.maxEvidence}, risks=${cfg.board?.maxRisks ?? DEFAULT_CONFIG.board.maxRisks}, failures=${cfg.board?.maxFailures ?? DEFAULT_CONFIG.board.maxFailures}, subagents=${cfg.board?.maxSubagents ?? DEFAULT_CONFIG.board.maxSubagents}, tokens=${cfg.board?.maxTokens ?? DEFAULT_CONFIG.board.maxTokens}`,
+          `Advisor model: ${resolved?.label ?? cfg.models.advisor ?? "no compatible model"}`,
+          `Specialist model: ${cfg.models.specialist ?? "preferred cheapest compatible text model"}`,
+          `Head-of-Board model: ${cfg.models.head ?? "preferred strongest compatible text model"}`,
+          `Board: specialists=${cfg.board.specialists}, maxSpecialistCalls=${cfg.board.maxSpecialistCalls}, specialistMaxTokens=${cfg.board.specialistMaxTokens}, headMaxTokens=${cfg.board.headMaxTokens}`,
           `Explicit calls: ${state.advisorCalls} advisor, ${state.specialistDispatch?.calls ?? 0} specialist, ${state.headOfBoard?.calls ?? 0} head`,
         ].join("\n"), "info");
         return;

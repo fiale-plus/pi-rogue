@@ -15,18 +15,17 @@ function model(provider: string, id: string): TestModel {
 }
 
 describe("Advisor PR1 configuration", () => {
-  it("normalizes to explicit model slots and bounded Board settings", () => {
+  it("normalizes the exact explicit Board configuration shape", () => {
     const config = normalizeAdvisorConfig({
       model: "anthropic/claude-sonnet-4-6",
-      board: { maxEvidence: 99, maxRisks: 0, maxFailures: 99, maxSubagents: -1, maxTokens: 99999 },
+      board: { specialists: "off", maxSpecialistCalls: 99, specialistMaxTokens: 99, headMaxTokens: 99999 },
       mode: "auto",
       review: "strict",
-      checkins: "mid-hour",
       profile: "budget-board",
     });
     expect(config).toEqual({
       models: { advisor: "anthropic/claude-sonnet-4-6" },
-      board: { maxEvidence: 32, maxRisks: 1, maxFailures: 12, maxSubagents: 1, maxTokens: 2400 },
+      board: { specialists: "off", maxSpecialistCalls: 8, specialistMaxTokens: 100, headMaxTokens: 3000 },
     });
     expect("mode" in config).toBe(false);
     expect("review" in config).toBe(false);
