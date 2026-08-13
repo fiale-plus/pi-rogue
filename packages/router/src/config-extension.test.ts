@@ -393,6 +393,26 @@ describe("auto-model policy planning", () => {
 });
 
 describe("router extension", () => {
+  it("keeps status and help read-only when router config is absent", async () => {
+    const { pi, commands } = piMock();
+    const ctx = ctxMock();
+    registerRouter(pi);
+
+    await commands.get("pi-rogue-router").handler("status", ctx);
+    expect(existsSync(routerGlobalConfigPath())).toBe(false);
+
+    await commands.get("pi-rogue-router").handler("help", ctx);
+    expect(existsSync(routerGlobalConfigPath())).toBe(false);
+  });
+
+  it("keeps explicit configure as the state-creation boundary", async () => {
+    const { pi, commands } = piMock();
+    const ctx = ctxMock();
+    registerRouter(pi);
+
+    await commands.get("pi-rogue-router").handler("configure", ctx);
+    expect(existsSync(routerGlobalConfigPath())).toBe(true);
+  });
   it("registers slash command, ctrl-alt-p profile cycling, and observe hook", async () => {
     const { pi, commands, shortcuts, handlers } = piMock();
     const ctx = ctxMock();

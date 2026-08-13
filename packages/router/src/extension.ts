@@ -120,7 +120,7 @@ export function registerRouter(pi: ExtensionAPI): void {
         return;
       }
 
-      const config = ensureRouterConfig(ctx);
+      const config = loadRouterConfig(ctx);
       if (cmd === "help") {
         ctx.ui.notify(helpText(ctx, config), "info");
         return;
