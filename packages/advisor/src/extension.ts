@@ -793,7 +793,7 @@ function specialistDispatchStatusText(cfg: AdvisorConfig, state: SessionState): 
 function specialistById(roleId: string) {
   const catalog = loadBoardRoleCatalog();
   if (catalog.diagnostics.length > 0) return { diagnostic: catalog.diagnostics[0]?.message ?? "catalog diagnostics" };
-  const summary = catalog.roles.find((role) => role.id === roleId);
+  const summary = catalog.roles.find((role) => role.id === roleId && role.kind === "specialist");
   if (!summary) return { diagnostic: `unknown specialist '${roleId}'` };
   const loaded = loadBoardRoleBody(summary);
   if (loaded.diagnostic) return { diagnostic: loaded.diagnostic.message };
@@ -854,7 +854,7 @@ async function runSpecialistCommand(ctx: any, cfg: AdvisorConfig, state: Session
 function suggestedSpecialistText(ctx: any, state: SessionState): string {
   const catalog = loadBoardRoleCatalog();
   if (catalog.diagnostics.length > 0) return `Role catalog diagnostics: ${catalog.diagnostics.map((item) => item.message).join("; ")}`;
-  const suggestions = suggestSpecialistRoles(catalog.roles, currentBoardLedger(ctx, state));
+  const suggestions = suggestSpecialistRoles(catalog.roles.filter((role) => role.kind === "specialist"), currentBoardLedger(ctx, state));
   if (suggestions.length === 0) return "No specialist suggestion from current compact board ledger.";
   return suggestions.map((role) => `${role.id} — ${role.summary}`).join("\n");
 }
