@@ -21,7 +21,7 @@ export interface GateEvalRow {
   gateHostedTokens: number;
   baselineOutcome: GateOutcome;
   gateOutcome: GateOutcome;
-  failureClass?: "none" | "timeout" | "provider_error" | "rate_limit" | "budget" | "other";
+  failureClass: "none" | "timeout" | "provider_error" | "rate_limit" | "budget" | "other";
 }
 
 export interface GateSliceMetrics {
@@ -88,7 +88,7 @@ function validateRow(value: unknown): GateEvalRow {
   if (value.gateDecision !== "continue" && value.gateDecision !== "escalate") throw new Error("row.gateDecision is invalid");
   if (value.baselineOutcome !== "accepted" && value.baselineOutcome !== "regressed" && value.baselineOutcome !== "incomplete" && value.baselineOutcome !== "unknown") throw new Error("row.baselineOutcome is invalid");
   if (value.gateOutcome !== "accepted" && value.gateOutcome !== "regressed" && value.gateOutcome !== "incomplete" && value.gateOutcome !== "unknown") throw new Error("row.gateOutcome is invalid");
-  if (value.failureClass !== undefined && (typeof value.failureClass !== "string" || !FAILURE_CLASSES[value.failureClass])) throw new Error("row.failureClass is invalid");
+  if (typeof value.failureClass !== "string" || !FAILURE_CLASSES[value.failureClass]) throw new Error("row.failureClass is invalid");
   return {
     id: value.id,
     phase: value.phase as GatePhase,
@@ -102,7 +102,7 @@ function validateRow(value: unknown): GateEvalRow {
     gateHostedTokens: numberField(value.gateHostedTokens, "row.gateHostedTokens"),
     baselineOutcome: value.baselineOutcome as GateOutcome,
     gateOutcome: value.gateOutcome as GateOutcome,
-    ...(value.failureClass !== undefined ? { failureClass: value.failureClass as GateEvalRow["failureClass"] } : {}),
+    failureClass: value.failureClass as GateEvalRow["failureClass"],
   };
 }
 
@@ -126,8 +126,8 @@ function metricsFor(rows: readonly GateEvalRow[]): GateSliceMetrics {
   const total = result.rows || 1;
   result.accuracy = (result.rows - result.falseEscalations - result.missedEscalations) / total;
   result.escalationRate = result.gateEscalations / total;
-  result.advisorCallReduction = result.baselineAdvisorCalls === 0 ? 0 : 1 - result.gateAdvisorCalls / result.baselineAdvisorCalls;
-  result.hostedTokenReduction = result.baselineHostedTokens === 0 ? 0 : 1 - result.gateHostedTokens / result.baselineHostedTokens;
+  result.advisorCallReduction = result.baselineAdvisorCalls === 0 ? (result.gateAdvisorCalls === 0 ? 0 : -1) : 1 - result.gateAdvisorCalls / result.baselineAdvisorCalls;
+  result.hostedTokenReduction = result.baselineHostedTokens === 0 ? (result.gateHostedTokens === 0 ? 0 : -1) : 1 - result.gateHostedTokens / result.baselineHostedTokens;
   result.baselineAcceptedRate = rows.length === 0 ? 0 : rows.filter((row) => row.baselineOutcome === "accepted").length / rows.length;
   result.gateAcceptedRate = rows.length === 0 ? 0 : rows.filter((row) => row.gateOutcome === "accepted").length / rows.length;
   return result;
@@ -148,10 +148,14 @@ export function evaluateHarmonizationGate(rows: readonly GateEvalRow[], sourceKi
   const all = metricsFor(validated);
   let recommendation: GateEvalReport["recommendation"] = "hold";
   let recommendationReason = "synthetic or insufficient evidence; do not promote runtime policy";
+  const hasUnknownOutcome = validated.some((row) => row.baselineOutcome === "unknown" || row.gateOutcome === "unknown");
   if (sourceKind === "real_replay") {
     if (safety.missedEscalations > 0) {
       recommendation = "reject";
       recommendationReason = "safety-sensitive missed escalation";
+    } else if (validated.length < 30 || safety.rows === 0 || hasUnknownOutcome) {
+      recommendation = "hold";
+      recommendationReason = "insufficient real replay evidence: require at least 30 rows, safety coverage, and known outcomes";
     } else if (all.gateAcceptedRate + 0.05 < all.baselineAcceptedRate || all.gateAdvisorCalls > all.baselineAdvisorCalls || all.gateHostedTokens > all.baselineHostedTokens) {
       recommendation = "hold";
       recommendationReason = "gate has no demonstrated outcome and cost advantage over baseline";
