@@ -71,7 +71,14 @@ function budgetMetadata(details: unknown): WorkerBudgetMetadata | undefined {
   if (typeof budgetLimit === "number" && Number.isFinite(budgetLimit) && budgetLimit >= 0) metadata.budgetLimit = budgetLimit;
   return Object.keys(metadata).length > 0 ? metadata : undefined;
 }
+function workerErrorMetadata(details: unknown): { outcome: ReturnType<typeof classifyWorkerOutcome>; budget?: WorkerBudgetMetadata } {
+  const budget = budgetMetadata(details);
+  return {
+    budget,
+    outcome: classifyWorkerOutcome({ hasError: true, endpointFailure: detailValue(details, "endpointFailure") === true, modelMismatch: detailValue(details, "modelMismatch") === true, ...budget }),
+  };
 
+}
 export async function dispatchWorker(
   pi: Pick<ExtensionAPI, "events">,
   ctx: any,
@@ -136,6 +143,7 @@ export async function dispatchWorker(
     const finish = (fn: () => void, outcome?: ReturnType<typeof classifyWorkerOutcome>, outputSummary?: string, budget?: WorkerBudgetMetadata): void => {
       if (settled) return;
       settled = true;
+      if (timer) clearTimeout(timer);
       if (pollTimer) clearTimeout(pollTimer);
       unsubscribe?.();
       signal?.removeEventListener("abort", onAbort);
@@ -162,7 +170,8 @@ export async function dispatchWorker(
         if (statusTimer) clearTimeout(statusTimer);
         removeStatusListener?.();
         if (!raw.success) {
-          finish(() => reject(new Error(raw.error?.message || "Worker status failed.")), classifyWorkerOutcome({ hasError: true }), raw.error?.message);
+          const errorMetadata = workerErrorMetadata(raw.error);
+          finish(() => reject(new Error(raw.error?.message || "Worker status failed.")), errorMetadata.outcome, raw.error?.message, errorMetadata.budget);
           return;
         }
         const data = raw.data ?? {};
@@ -172,11 +181,12 @@ export async function dispatchWorker(
           const cancelled = status === "cancelled";
           const abandoned = status === "stopped" || status === "interrupted";
           const failed = status === "failed";
+          const budget = budgetMetadata(statusDetails);
           finish(
             () => resolve({ requestId, runId, asyncDir, text: typeof data.text === "string" ? data.text : "", details: statusDetails }),
-            classifyWorkerOutcome({ hasError: failed, cancelled, abandoned, hasOutput: !failed && !cancelled && !abandoned }),
+            classifyWorkerOutcome({ hasError: failed, cancelled, abandoned, hasOutput: !failed && !cancelled && !abandoned, ...budget }),
             typeof data.text === "string" ? data.text : status,
-            budgetMetadata(statusDetails),
+            budget,
           );
           return;
         }
@@ -197,7 +207,8 @@ export async function dispatchWorker(
     unsubscribe = events.on(replyEvent, (raw: any) => {
       if (!raw || raw.requestId !== requestId) return;
       if (!raw.success) {
-        finish(() => reject(new Error(raw.error?.message || "Worker dispatch failed.")), classifyWorkerOutcome({ hasError: true }), raw.error?.message);
+        const errorMetadata = workerErrorMetadata(raw.error);
+        finish(() => reject(new Error(raw.error?.message || "Worker dispatch failed.")), errorMetadata.outcome, raw.error?.message, errorMetadata.budget);
         return;
       }
       const data = raw.data ?? {};
