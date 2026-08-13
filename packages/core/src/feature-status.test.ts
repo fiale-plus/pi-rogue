@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { createFeatureStatusV1, serializeFeatureStatusV1 } from "./feature-status.js";
+import { createFeatureStatusV1, serializeFeatureStatusV1, validateFeatureStatusV1 } from "./feature-status.js";
 
 describe("FeatureStatusV1", () => {
   it("creates a versioned passive snapshot", () => {
@@ -46,5 +46,19 @@ describe("FeatureStatusV1", () => {
       diagnostics: { futureField: "ignored by older consumers" },
     });
     expect(status.diagnostics?.futureField).toBe("ignored by older consumers");
+    expect(() => validateFeatureStatusV1(status)).not.toThrow();
+  });
+
+  it("fails closed for prohibited diagnostics and unknown top-level fields", () => {
+    const status = createFeatureStatusV1({ feature: "router", owner: "router", health: "idle", enabled: true });
+    expect(() => serializeFeatureStatusV1({ ...status, diagnostics: { prompt: "no" } })).toThrow(/prohibited field/);
+    expect(() => serializeFeatureStatusV1({ ...status, diagnostics: { detail: "/private/user/secret" } })).toThrow(/unsafe or unbounded text/);
+    expect(() => validateFeatureStatusV1({ ...status, unknown: true } as typeof status)).toThrow(/unknown field/);
+    const inherited = Object.create({ health: "ready" });
+    Object.assign(inherited, { schema: "FeatureStatusV1", feature: "router", owner: "router", enabled: true });
+    expect(() => validateFeatureStatusV1(inherited)).toThrow(/expected a plain object/);
+    const cyclic: Record<string, unknown> = {};
+    cyclic.self = cyclic;
+    expect(() => serializeFeatureStatusV1({ ...status, diagnostics: cyclic })).toThrow(/cyclic diagnostics/);
   });
 });

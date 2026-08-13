@@ -12,6 +12,7 @@
   "main": "./src/index.ts",
   "exports": {
     ".": "./src/index.ts",
+    "./status": "./src/status.ts",
     "./extension": "./src/extension.ts"
   },
   "pi": {

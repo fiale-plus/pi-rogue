@@ -90,12 +90,10 @@ export function routerFeatureStatus(ctx: any): FeatureStatusV1 {
     health,
     enabled: config.enabled,
     mode: config.mode,
-    summary: config.enabled ? `profile=${config.activeProfile} worker=${profile.worker}` : "router is disabled",
+    summary: config.enabled ? "router is enabled" : "router is disabled",
     diagnostics: {
-      configPath,
       configSource: configRead.present ? "global" : "built-in-defaults",
       configValid,
-      statePath,
       statePresent: stateRead.present,
       stateValid: stateRead.valid && stateShapeValid,
       sessionScoped: hasSessionIdentity,

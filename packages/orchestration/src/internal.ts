@@ -87,7 +87,7 @@ export function sessionDir(feature: string, ctx: any): string {
 }
 
 export function featureFile(feature: string, filename: string): string {
-  return join(featureDir(feature), filename);
+  return join(ROOT_DIR, feature, filename);
 }
 
 export function sessionFile(feature: string, ctx: any, filename: string): string {

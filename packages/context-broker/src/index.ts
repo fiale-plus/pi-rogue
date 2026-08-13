@@ -55,6 +55,9 @@ export function sourceIdFor(input: ContextArtifactInput): string | undefined {
   return sourceId;
 }
 
+export { contextBrokerFeatureStatus, serializeContextBrokerFeatureStatus } from "./status.js";
+export type { ContextBrokerBackend, ContextBrokerStatusSource } from "./status.js";
+
 export function sourceKey(sessionId: string, sourceId: string): string {
   return `${sessionId}\u0000${sourceId}`;
 }

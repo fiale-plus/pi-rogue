@@ -16,7 +16,7 @@ export function featureDir(feature: string): string {
 }
 
 export function featureFile(feature: string, filename: string): string {
-  return join(featureDir(feature), filename);
+  return join(ROOT_DIR, feature, filename);
 }
 
 export function truncate(text: string, max: number): string {

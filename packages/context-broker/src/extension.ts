@@ -666,6 +666,11 @@ export async function registerContextBrokerBeta(pi: ExtensionAPI, options: Conte
   } else {
     broker = createInMemoryContextBroker(brokerOptions);
   }
+  p.__piRogueContextBrokerEffective = {
+    backend: effectiveBackend,
+    durable: durable && effectiveBackend !== "memory" && effectiveBackend !== "memory(degraded)",
+    degraded: effectiveBackend === "memory(degraded)",
+  };
 
   const seenSourceIds = new Set<string>();
   const sourceHandles = new Map<string, string>();
