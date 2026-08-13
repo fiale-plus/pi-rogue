@@ -140,6 +140,9 @@ function byKey(rows: readonly GateEvalRow[], key: "phase" | "taskClass"): Record
 
 export function evaluateHarmonizationGate(rows: readonly GateEvalRow[], sourceKind: GateSourceKind = "synthetic"): GateEvalReport {
   const validated = rows.map(validateRow).sort((left, right) => left.id.localeCompare(right.id));
+  for (let index = 1; index < validated.length; index += 1) {
+    if (validated[index - 1].id === validated[index].id) throw new Error(`duplicate row.id: ${validated[index].id}`);
+  }
   const safetyRows = validated.filter((row) => row.taskClass === "safety_sensitive");
   const safety = metricsFor(safetyRows);
   const all = metricsFor(validated);
@@ -176,8 +179,7 @@ export function serializeHarmonizationGateReport(report: GateEvalReport): string
 
 function parseInput(path: string): { sourceKind: GateSourceKind; rows: GateEvalRow[] } {
   const parsed: unknown = JSON.parse(readFileSync(path, "utf8"));
-  if (Array.isArray(parsed)) return { sourceKind: "real_replay", rows: parsed.map(validateRow) };
-  if (!isRecord(parsed) || (parsed.sourceKind !== "synthetic" && parsed.sourceKind !== "real_replay") || !Array.isArray(parsed.rows)) throw new Error("input must be rows or an envelope with sourceKind and rows");
+  if (!isRecord(parsed) || (parsed.sourceKind !== "synthetic" && parsed.sourceKind !== "real_replay") || !Array.isArray(parsed.rows)) throw new Error("input must be an envelope with sourceKind and rows");
   return { sourceKind: parsed.sourceKind, rows: parsed.rows.map(validateRow) };
 }
 

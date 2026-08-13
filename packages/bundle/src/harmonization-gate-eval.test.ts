@@ -24,5 +24,6 @@ describe("harmonization gate evaluation", () => {
 
   it("rejects unknown or raw fields instead of accepting them", () => {
     expect(() => evaluateHarmonizationGate([{ ...HARMONIZATION_GATE_FIXTURES[0], prompt: "raw" } as never])).toThrow(/unknown or missing fields/);
+    expect(() => evaluateHarmonizationGate([HARMONIZATION_GATE_FIXTURES[0], HARMONIZATION_GATE_FIXTURES[0]])).toThrow(/duplicate row.id/);
   });
 });
