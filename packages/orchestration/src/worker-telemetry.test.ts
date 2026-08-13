@@ -22,9 +22,9 @@ describe("worker telemetry", () => {
     expect(classifyWorkerOutcome({ hasError: true, abandoned: true })).toBe("failure");
     expect(classifyWorkerOutcome({ abandoned: true, isPartial: true })).toBe("abandoned");
     expect(classifyWorkerOutcome({})).toBeNull();
-    expect(classifyWorkerOutcome({ budgetKind: "tool" })).toBe("tool_budget_exhausted");
-    expect(classifyWorkerOutcome({ budgetKind: "turn" })).toBe("turn_budget_exhausted");
-    expect(classifyWorkerOutcome({ budgetKind: "token" })).toBe("token_budget_exhausted");
+    expect(classifyWorkerOutcome({ budgetKind: "tool", budgetExhausted: true })).toBe("tool_budget_exhausted");
+    expect(classifyWorkerOutcome({ budgetKind: "turn", budgetExhausted: true })).toBe("turn_budget_exhausted");
+    expect(classifyWorkerOutcome({ budgetKind: "token", budgetExhausted: true })).toBe("token_budget_exhausted");
     expect(classifyWorkerOutcome({ cancelled: true })).toBe("cancelled");
     expect(classifyWorkerOutcome({ endpointFailure: true })).toBe("endpoint_failure");
     expect(classifyWorkerOutcome({ modelMismatch: true })).toBe("model_mismatch");

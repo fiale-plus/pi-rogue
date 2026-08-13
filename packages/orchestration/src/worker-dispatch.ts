@@ -35,6 +35,12 @@ type DispatchOptions = {
   waitForCompletion?: boolean;
   telemetry?: { parentSessionId: string; ledgerPath?: string };
 };
+type WorkerBudgetMetadata = {
+  budgetKind?: "tool" | "turn" | "token";
+  budgetExhausted?: boolean;
+  budgetUsed?: number | null;
+  budgetLimit?: number | null;
+};
 
 function parseModelRef(value: string): { provider: string; model: string } | undefined {
   const slash = value.indexOf("/");
@@ -52,6 +58,18 @@ export function resolveConfiguredWorkerModel(ctx: any, modelRef: string): unknow
 
 function detailValue(details: any, key: string): unknown {
   return details && typeof details === "object" ? details[key] : undefined;
+}
+function budgetMetadata(details: unknown): WorkerBudgetMetadata | undefined {
+  const budgetKind = detailValue(details, "budgetKind");
+  const budgetExhausted = detailValue(details, "budgetExhausted");
+  const budgetUsed = detailValue(details, "budgetUsed");
+  const budgetLimit = detailValue(details, "budgetLimit");
+  const metadata: WorkerBudgetMetadata = {};
+  if (budgetKind === "tool" || budgetKind === "turn" || budgetKind === "token") metadata.budgetKind = budgetKind;
+  if (budgetExhausted === true) metadata.budgetExhausted = true;
+  if (typeof budgetUsed === "number" && Number.isFinite(budgetUsed) && budgetUsed >= 0) metadata.budgetUsed = budgetUsed;
+  if (typeof budgetLimit === "number" && Number.isFinite(budgetLimit) && budgetLimit >= 0) metadata.budgetLimit = budgetLimit;
+  return Object.keys(metadata).length > 0 ? metadata : undefined;
 }
 
 export async function dispatchWorker(
@@ -109,22 +127,20 @@ export async function dispatchWorker(
       events.emit(RPC_REQUEST, {
         version: RPC_VERSION,
         requestId: randomUUID(),
-        method: "stop",
         // The deterministic RPC execution id also resolves the run if spawn ack is lost.
         params: runId ? { runId } : { id: spawnExecutionId },
         source: { extension: "pi-rogue-orchestration" },
       });
     };
-    const finish = (fn: () => void, outcome?: ReturnType<typeof classifyWorkerOutcome>, outputSummary?: string): void => {
+    const finish = (fn: () => void, outcome?: ReturnType<typeof classifyWorkerOutcome>, outputSummary?: string, budget?: WorkerBudgetMetadata): void => {
       if (settled) return;
       settled = true;
-      if (timer) clearTimeout(timer);
       if (pollTimer) clearTimeout(pollTimer);
       unsubscribe?.();
       signal?.removeEventListener("abort", onAbort);
       if (telemetryRecorded && outcome) {
         try {
-          recordWorkerResult({ childSessionId: requestId, ledgerPath, outcome, outputSummary, elapsedMs: Date.now() - startedAt });
+          recordWorkerResult({ childSessionId: requestId, ledgerPath, outcome, outputSummary, elapsedMs: Date.now() - startedAt, ...budget });
         } catch {
           // Best-effort ledger writes must not alter worker control flow.
         }
@@ -133,7 +149,7 @@ export async function dispatchWorker(
     };
     const onAbort = (): void => {
       stop();
-      finish(() => reject(new Error("Worker dispatch cancelled.")), classifyWorkerOutcome({ abandoned: true }), "Worker dispatch cancelled.");
+      finish(() => reject(new Error("Worker dispatch cancelled.")), classifyWorkerOutcome({ cancelled: true }), "Worker dispatch cancelled.");
     };
     const pollStatus = (): void => {
       if (settled || !runId) return;
@@ -152,11 +168,14 @@ export async function dispatchWorker(
         const statusDetails = data.details ?? data;
         const status = String(detailValue(statusDetails, "state") ?? detailValue(statusDetails, "status") ?? "").toLowerCase();
         if (TERMINAL_STATES.has(status)) {
-          const failed = status === "failed" || status === "stopped" || status === "interrupted" || status === "cancelled";
+          const cancelled = status === "cancelled";
+          const abandoned = status === "stopped" || status === "interrupted";
+          const failed = status === "failed";
           finish(
             () => resolve({ requestId, runId, asyncDir, text: typeof data.text === "string" ? data.text : "", details: statusDetails }),
-            classifyWorkerOutcome({ hasError: failed, hasOutput: !failed }),
+            classifyWorkerOutcome({ hasError: failed, cancelled, abandoned, hasOutput: !failed && !cancelled && !abandoned }),
             typeof data.text === "string" ? data.text : status,
+            budgetMetadata(statusDetails),
           );
           return;
         }

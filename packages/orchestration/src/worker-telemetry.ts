@@ -39,15 +39,16 @@ export function classifyWorkerOutcome(options: {
   endpointFailure?: boolean;
   modelMismatch?: boolean;
   budgetKind?: SubagentBudgetKind;
+  budgetExhausted?: boolean;
   hasOutput?: boolean;
   isPartial?: boolean;
 }): WorkerOutcome | null {
   if (options.timedOut === true) return "timeout";
   if (options.modelMismatch === true) return "model_mismatch";
   if (options.endpointFailure === true) return "endpoint_failure";
-  if (options.budgetKind === "tool") return "tool_budget_exhausted";
-  if (options.budgetKind === "turn") return "turn_budget_exhausted";
-  if (options.budgetKind === "token") return "token_budget_exhausted";
+  if (options.budgetExhausted === true && options.budgetKind === "tool") return "tool_budget_exhausted";
+  if (options.budgetExhausted === true && options.budgetKind === "turn") return "turn_budget_exhausted";
+  if (options.budgetExhausted === true && options.budgetKind === "token") return "token_budget_exhausted";
   if (options.cancelled === true) return "cancelled";
   if (options.hasError === true || (options.exitCode !== null && options.exitCode !== undefined && options.exitCode !== 0)) return "failure";
   if (options.abandoned === true) return "abandoned";
@@ -124,6 +125,7 @@ export function recordWorkerResult(options: {
   elapsedMs?: number | null;
   outcome?: WorkerOutcome | null;
   budgetKind?: SubagentBudgetKind | null;
+  budgetExhausted?: boolean | null;
   budgetUsed?: number | null;
   budgetLimit?: number | null;
   acceptedIntoParent?: boolean | null;
@@ -151,6 +153,7 @@ export function recordWorkerResult(options: {
     phase: "result",
     outcome: options.outcome ?? null,
     elapsedMs: options.elapsedMs ?? null,
+    budgetExhausted: options.budgetExhausted ?? null,
     budgetKind: options.budgetKind ?? null,
     budgetUsed: options.budgetUsed ?? null,
     budgetLimit: options.budgetLimit ?? null,

@@ -76,6 +76,7 @@ export interface SubagentLedgerEvent {
   outcome?: SubagentOutcome | null;
   elapsedMs?: number | null;
   budgetKind?: SubagentBudgetKind | null;
+  budgetExhausted?: boolean | null;
   budgetUsed?: number | null;
   budgetLimit?: number | null;
 }
@@ -174,6 +175,7 @@ export function buildSubagentLedgerEvent(options: Omit<SubagentLedgerEvent, "sch
     ...(options.outcome !== undefined ? { outcome: options.outcome } : {}),
     ...(options.elapsedMs !== undefined ? { elapsedMs: options.elapsedMs } : {}),
     ...(options.budgetKind !== undefined ? { budgetKind: options.budgetKind } : {}),
+    ...(options.budgetExhausted !== undefined ? { budgetExhausted: options.budgetExhausted } : {}),
     ...(options.budgetUsed !== undefined ? { budgetUsed: options.budgetUsed } : {}),
     ...(options.budgetLimit !== undefined ? { budgetLimit: options.budgetLimit } : {}),
   };
