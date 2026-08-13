@@ -22,6 +22,12 @@ describe("worker telemetry", () => {
     expect(classifyWorkerOutcome({ hasError: true, abandoned: true })).toBe("failure");
     expect(classifyWorkerOutcome({ abandoned: true, isPartial: true })).toBe("abandoned");
     expect(classifyWorkerOutcome({})).toBeNull();
+    expect(classifyWorkerOutcome({ budgetKind: "tool" })).toBe("tool_budget_exhausted");
+    expect(classifyWorkerOutcome({ budgetKind: "turn" })).toBe("turn_budget_exhausted");
+    expect(classifyWorkerOutcome({ budgetKind: "token" })).toBe("token_budget_exhausted");
+    expect(classifyWorkerOutcome({ cancelled: true })).toBe("cancelled");
+    expect(classifyWorkerOutcome({ endpointFailure: true })).toBe("endpoint_failure");
+    expect(classifyWorkerOutcome({ modelMismatch: true })).toBe("model_mismatch");
   });
 
   it("records a request and matching result in the router ledger schema", () => {
@@ -40,6 +46,9 @@ describe("worker telemetry", () => {
       outputSummary: "implemented and tested",
       elapsedMs: 1200,
       outcome: "success",
+      budgetKind: "tool",
+      budgetUsed: 30,
+      budgetLimit: 45,
       acceptedIntoParent: true,
       useful: true,
       recordedAt: "2026-07-17T00:00:01.200Z",
@@ -50,6 +59,9 @@ describe("worker telemetry", () => {
     expect(result.phase).toBe("result");
     expect(result.outcome).toBe("success");
     expect(result.elapsedMs).toBe(1200);
+    expect(result.budgetKind).toBe("tool");
+    expect(result.budgetUsed).toBe(30);
+    expect(result.budgetLimit).toBe(45);
     expect(result.childSessionId).toBe(request.childSessionId);
     expect(result.inputSummaryHash).toBe(request.inputSummaryHash);
     rmSync(path, { recursive: true, force: true });

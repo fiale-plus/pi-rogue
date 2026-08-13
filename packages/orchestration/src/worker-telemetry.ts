@@ -3,6 +3,7 @@ import {
   appendSubagentLedgerEvent,
   buildSubagentLedgerEvent,
   hashText,
+  type SubagentBudgetKind,
   type SubagentLedgerEvent,
   type SubagentOutcome,
   type SubagentReturnContract,
@@ -34,10 +35,20 @@ export function classifyWorkerOutcome(options: {
   hasError?: boolean;
   exitCode?: number | null;
   abandoned?: boolean;
+  cancelled?: boolean;
+  endpointFailure?: boolean;
+  modelMismatch?: boolean;
+  budgetKind?: SubagentBudgetKind;
   hasOutput?: boolean;
   isPartial?: boolean;
 }): WorkerOutcome | null {
   if (options.timedOut === true) return "timeout";
+  if (options.modelMismatch === true) return "model_mismatch";
+  if (options.endpointFailure === true) return "endpoint_failure";
+  if (options.budgetKind === "tool") return "tool_budget_exhausted";
+  if (options.budgetKind === "turn") return "turn_budget_exhausted";
+  if (options.budgetKind === "token") return "token_budget_exhausted";
+  if (options.cancelled === true) return "cancelled";
   if (options.hasError === true || (options.exitCode !== null && options.exitCode !== undefined && options.exitCode !== 0)) return "failure";
   if (options.abandoned === true) return "abandoned";
   if (options.hasOutput === true && options.isPartial === true) return "partial";
@@ -112,6 +123,9 @@ export function recordWorkerResult(options: {
   outputSummary?: string;
   elapsedMs?: number | null;
   outcome?: WorkerOutcome | null;
+  budgetKind?: SubagentBudgetKind | null;
+  budgetUsed?: number | null;
+  budgetLimit?: number | null;
   acceptedIntoParent?: boolean | null;
   useful?: boolean | null;
   causedRework?: boolean | null;
@@ -137,6 +151,9 @@ export function recordWorkerResult(options: {
     phase: "result",
     outcome: options.outcome ?? null,
     elapsedMs: options.elapsedMs ?? null,
+    budgetKind: options.budgetKind ?? null,
+    budgetUsed: options.budgetUsed ?? null,
+    budgetLimit: options.budgetLimit ?? null,
     recordedAt: options.recordedAt,
   });
   appendSubagentLedgerEvent(options.ledgerPath, event);

@@ -12,7 +12,8 @@ import type {
 export const SUBAGENT_DECISION_SCHEMA = "pi-router.subagent-decision.v1" as const;
 export const SUBAGENT_LEDGER_EVENT_SCHEMA = "pi-router.subagent-ledger-event.v1" as const;
 export const EVIDENCE_SUMMARY_SCHEMA = "pi-router.evidence-summary.v1" as const;
-export type SubagentOutcome = "success" | "timeout" | "failure" | "abandoned" | "partial";
+export type SubagentBudgetKind = "tool" | "turn" | "token";
+export type SubagentOutcome = "success" | "timeout" | "failure" | "abandoned" | "partial" | "cancelled" | "endpoint_failure" | "model_mismatch" | "tool_budget_exhausted" | "turn_budget_exhausted" | "token_budget_exhausted";
 
 export interface EvidenceSummaryItem {
   kind: "file" | "command" | "session" | "manual";
@@ -74,6 +75,9 @@ export interface SubagentLedgerEvent {
   phase?: "request" | "result";
   outcome?: SubagentOutcome | null;
   elapsedMs?: number | null;
+  budgetKind?: SubagentBudgetKind | null;
+  budgetUsed?: number | null;
+  budgetLimit?: number | null;
 }
 
 function clampConfidence(value: number): number {
@@ -169,6 +173,9 @@ export function buildSubagentLedgerEvent(options: Omit<SubagentLedgerEvent, "sch
     ...(options.phase !== undefined ? { phase: options.phase } : {}),
     ...(options.outcome !== undefined ? { outcome: options.outcome } : {}),
     ...(options.elapsedMs !== undefined ? { elapsedMs: options.elapsedMs } : {}),
+    ...(options.budgetKind !== undefined ? { budgetKind: options.budgetKind } : {}),
+    ...(options.budgetUsed !== undefined ? { budgetUsed: options.budgetUsed } : {}),
+    ...(options.budgetLimit !== undefined ? { budgetLimit: options.budgetLimit } : {}),
   };
 }
 
