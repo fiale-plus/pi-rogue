@@ -64,21 +64,34 @@ function budgetMetadata(details: unknown): WorkerBudgetMetadata | undefined {
   const budgetExhausted = detailValue(details, "budgetExhausted");
   const budgetUsed = detailValue(details, "budgetUsed");
   const budgetLimit = detailValue(details, "budgetLimit");
+  const toolBudget = detailValue(details, "toolBudget") as any;
+  const turnBudget = detailValue(details, "turnBudget") as any;
+  const usageBudget = detailValue(details, "usageBudget") as any;
+  const toolBlocked = detailValue(details, "toolBudgetBlocked") === true || toolBudget?.outcome === "hard-blocked";
+  const turnExceeded = detailValue(details, "turnBudgetExceeded") === true || turnBudget?.outcome === "exceeded";
+  const tokenExceeded = usageBudget?.exhausted === true && usageBudget?.reason === "tokens";
+  const runtimeKind = toolBlocked ? "tool" : turnExceeded ? "turn" : tokenExceeded ? "token" : undefined;
+  const runtimeUsed = toolBlocked ? toolBudget?.toolCount : turnExceeded ? turnBudget?.turnCount : tokenExceeded ? usageBudget?.tokens?.used : undefined;
+  const runtimeLimit = toolBlocked ? toolBudget?.hard : turnExceeded ? turnBudget?.maxTurns : tokenExceeded ? usageBudget?.tokens?.hard : undefined;
   const metadata: WorkerBudgetMetadata = {};
-  if (budgetKind === "tool" || budgetKind === "turn" || budgetKind === "token") metadata.budgetKind = budgetKind;
-  if (budgetExhausted === true) metadata.budgetExhausted = true;
-  if (typeof budgetUsed === "number" && Number.isFinite(budgetUsed) && budgetUsed >= 0) metadata.budgetUsed = budgetUsed;
-  if (typeof budgetLimit === "number" && Number.isFinite(budgetLimit) && budgetLimit >= 0) metadata.budgetLimit = budgetLimit;
+  const normalizedKind = runtimeKind ?? (budgetKind === "tool" || budgetKind === "turn" || budgetKind === "token" ? budgetKind : undefined);
+  if (normalizedKind) metadata.budgetKind = normalizedKind;
+  if (budgetExhausted === true || runtimeKind) metadata.budgetExhausted = true;
+  if (typeof (runtimeUsed ?? budgetUsed) === "number" && Number.isFinite(runtimeUsed ?? budgetUsed) && (runtimeUsed ?? budgetUsed) >= 0) metadata.budgetUsed = runtimeUsed ?? budgetUsed;
+  if (typeof (runtimeLimit ?? budgetLimit) === "number" && Number.isFinite(runtimeLimit ?? budgetLimit) && (runtimeLimit ?? budgetLimit) >= 0) metadata.budgetLimit = runtimeLimit ?? budgetLimit;
   return Object.keys(metadata).length > 0 ? metadata : undefined;
 }
 function workerErrorMetadata(details: unknown): { outcome: ReturnType<typeof classifyWorkerOutcome>; budget?: WorkerBudgetMetadata } {
   const budget = budgetMetadata(details);
+  const code = String(detailValue(details, "code") ?? "").toUpperCase();
+  const endpointFailure = detailValue(details, "endpointFailure") === true || code === "ENDPOINT_UNAVAILABLE" || code === "ENDPOINT_FAILURE";
+  const modelMismatch = detailValue(details, "modelMismatch") === true || code === "MODEL_NOT_FOUND" || code === "MODEL_MISMATCH";
   return {
     budget,
-    outcome: classifyWorkerOutcome({ hasError: true, endpointFailure: detailValue(details, "endpointFailure") === true, modelMismatch: detailValue(details, "modelMismatch") === true, ...budget }),
+    outcome: classifyWorkerOutcome({ hasError: true, endpointFailure, modelMismatch, ...budget }),
   };
-
 }
+
 export async function dispatchWorker(
   pi: Pick<ExtensionAPI, "events">,
   ctx: any,
@@ -182,8 +195,9 @@ export async function dispatchWorker(
           const cancelled = status === "cancelled";
           const abandoned = status === "stopped" || status === "interrupted" || status === "paused";
           const failed = status === "failed";
-          const endpointFailure = detailValue(statusDetails, "endpointFailure") === true;
-          const modelMismatch = detailValue(statusDetails, "modelMismatch") === true;
+          const errorCode = String(detailValue(statusDetails, "errorCode") ?? "").toUpperCase();
+          const endpointFailure = detailValue(statusDetails, "endpointFailure") === true || errorCode === "ENDPOINT_UNAVAILABLE" || errorCode === "ENDPOINT_FAILURE";
+          const modelMismatch = detailValue(statusDetails, "modelMismatch") === true || errorCode === "MODEL_NOT_FOUND" || errorCode === "MODEL_MISMATCH";
           const budget = budgetMetadata(statusDetails);
           finish(
             () => resolve({ requestId, runId, asyncDir, text: typeof data.text === "string" ? data.text : "", details: statusDetails }),
