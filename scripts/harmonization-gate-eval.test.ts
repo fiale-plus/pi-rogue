@@ -9,9 +9,10 @@ describe("harmonization gate evaluation", () => {
   it("reports deterministic phase, task, and safety metrics without promotion claims", () => {
     const report = evaluateHarmonizationGate(HARMONIZATION_GATE_FIXTURES);
     expect(report.schema).toBe("pi-rogue.harmonization-gate-eval.v1");
-    expect(report.rows).toBe(6);
-    expect(report.phases.review.gateAdvisorCalls).toBe(1);
+    expect(report.rows).toBe(7);
+    expect(report.phases.review.gateAdvisorCalls).toBe(2);
     expect(report.taskClasses.safety_sensitive.missedEscalations).toBe(0);
+    expect(report.failure.failureRows).toBe(1);
     expect(report.recommendation).toBe("hold");
     expect(serializeHarmonizationGateReport(report)).toBe(serializeHarmonizationGateReport(evaluateHarmonizationGate([...HARMONIZATION_GATE_FIXTURES].reverse())));
   });

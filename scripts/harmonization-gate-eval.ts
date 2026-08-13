@@ -217,6 +217,7 @@ export function serializeHarmonizationGateReport(report: GateEvalReport): string
 function parseInput(path: string): { sourceKind: GateSourceKind; rows: GateEvalRow[] } {
   const parsed: unknown = JSON.parse(readFileSync(path, "utf8"));
   if (!isRecord(parsed) || (parsed.sourceKind !== "synthetic" && parsed.sourceKind !== "real_replay") || !Array.isArray(parsed.rows)) throw new Error("input must be an envelope with sourceKind and rows");
+  if (Object.keys(parsed).sort().join(",") !== "rows,sourceKind") throw new Error("input contains unknown or missing fields");
   return { sourceKind: parsed.sourceKind, rows: parsed.rows.map(validateRow) };
 }
 
