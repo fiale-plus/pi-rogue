@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { routerEventsPath } from "@fiale-plus/pi-rogue-router";
+import { sessionFile } from "./internal.js";
 import { readWorkerState } from "./worker.js";
 import { classifyWorkerOutcome, recordWorkerRequest, recordWorkerResult } from "./worker-telemetry.js";
 
@@ -35,6 +35,12 @@ type DispatchOptions = {
   waitForCompletion?: boolean;
   telemetry?: { parentSessionId: string; ledgerPath?: string };
 };
+type WorkerBudgetMetadata = {
+  budgetKind?: "tool" | "turn" | "token";
+  budgetExhausted?: boolean;
+  budgetUsed?: number | null;
+  budgetLimit?: number | null;
+};
 
 function parseModelRef(value: string): { provider: string; model: string } | undefined {
   const slash = value.indexOf("/");
@@ -52,6 +58,38 @@ export function resolveConfiguredWorkerModel(ctx: any, modelRef: string): unknow
 
 function detailValue(details: any, key: string): unknown {
   return details && typeof details === "object" ? details[key] : undefined;
+}
+function budgetMetadata(details: unknown): WorkerBudgetMetadata | undefined {
+  const budgetKind = detailValue(details, "budgetKind");
+  const budgetExhausted = detailValue(details, "budgetExhausted");
+  const budgetUsed = detailValue(details, "budgetUsed");
+  const budgetLimit = detailValue(details, "budgetLimit");
+  const toolBudget = detailValue(details, "toolBudget") as any;
+  const turnBudget = detailValue(details, "turnBudget") as any;
+  const usageBudget = detailValue(details, "usageBudget") as any;
+  const toolBlocked = detailValue(details, "toolBudgetBlocked") === true || toolBudget?.outcome === "hard-blocked";
+  const turnExceeded = detailValue(details, "turnBudgetExceeded") === true || turnBudget?.outcome === "exceeded";
+  const tokenExceeded = usageBudget?.exhausted === true && usageBudget?.reason === "tokens";
+  const runtimeKind = toolBlocked ? "tool" : turnExceeded ? "turn" : tokenExceeded ? "token" : undefined;
+  const runtimeUsed = toolBlocked ? toolBudget?.toolCount : turnExceeded ? turnBudget?.turnCount : tokenExceeded ? usageBudget?.tokens?.used : undefined;
+  const runtimeLimit = toolBlocked ? toolBudget?.hard : turnExceeded ? turnBudget?.maxTurns : tokenExceeded ? usageBudget?.tokens?.hard : undefined;
+  const metadata: WorkerBudgetMetadata = {};
+  const normalizedKind = runtimeKind ?? (budgetKind === "tool" || budgetKind === "turn" || budgetKind === "token" ? budgetKind : undefined);
+  if (normalizedKind) metadata.budgetKind = normalizedKind;
+  if (budgetExhausted === true || runtimeKind) metadata.budgetExhausted = true;
+  if (typeof (runtimeUsed ?? budgetUsed) === "number" && Number.isFinite(runtimeUsed ?? budgetUsed) && (runtimeUsed ?? budgetUsed) >= 0) metadata.budgetUsed = runtimeUsed ?? budgetUsed;
+  if (typeof (runtimeLimit ?? budgetLimit) === "number" && Number.isFinite(runtimeLimit ?? budgetLimit) && (runtimeLimit ?? budgetLimit) >= 0) metadata.budgetLimit = runtimeLimit ?? budgetLimit;
+  return Object.keys(metadata).length > 0 ? metadata : undefined;
+}
+function workerErrorMetadata(details: unknown): { outcome: ReturnType<typeof classifyWorkerOutcome>; budget?: WorkerBudgetMetadata } {
+  const budget = budgetMetadata(details);
+  const code = String(detailValue(details, "code") ?? "").toUpperCase();
+  const endpointFailure = detailValue(details, "endpointFailure") === true || code === "ENDPOINT_UNAVAILABLE" || code === "ENDPOINT_FAILURE";
+  const modelMismatch = detailValue(details, "modelMismatch") === true || code === "MODEL_NOT_FOUND" || code === "MODEL_MISMATCH";
+  return {
+    budget,
+    outcome: classifyWorkerOutcome({ hasError: true, endpointFailure, modelMismatch, ...budget }),
+  };
 }
 
 export async function dispatchWorker(
@@ -75,9 +113,10 @@ export async function dispatchWorker(
   if (!events || typeof events.emit !== "function" || typeof events.on !== "function") {
     throw new Error("The pi-subagents RPC bridge is unavailable in this session.");
   }
+  if (signal?.aborted) throw new Error("Worker dispatch cancelled");
 
   const telemetry = options?.telemetry;
-  const ledgerPath = telemetry?.ledgerPath ?? routerEventsPath(ctx);
+  const ledgerPath = telemetry?.ledgerPath ?? sessionFile("orchestration", ctx, "worker-events.jsonl");
   let telemetryRecorded = false;
   if (telemetry) {
     try {
@@ -115,7 +154,7 @@ export async function dispatchWorker(
         source: { extension: "pi-rogue-orchestration" },
       });
     };
-    const finish = (fn: () => void, outcome?: ReturnType<typeof classifyWorkerOutcome>, outputSummary?: string): void => {
+    const finish = (fn: () => void, outcome?: ReturnType<typeof classifyWorkerOutcome>, outputSummary?: string, budget?: WorkerBudgetMetadata): void => {
       if (settled) return;
       settled = true;
       if (timer) clearTimeout(timer);
@@ -124,7 +163,7 @@ export async function dispatchWorker(
       signal?.removeEventListener("abort", onAbort);
       if (telemetryRecorded && outcome) {
         try {
-          recordWorkerResult({ childSessionId: requestId, ledgerPath, outcome, outputSummary, elapsedMs: Date.now() - startedAt });
+          recordWorkerResult({ childSessionId: requestId, ledgerPath, outcome, outputSummary, elapsedMs: Date.now() - startedAt, ...budget });
         } catch {
           // Best-effort ledger writes must not alter worker control flow.
         }
@@ -133,7 +172,7 @@ export async function dispatchWorker(
     };
     const onAbort = (): void => {
       stop();
-      finish(() => reject(new Error("Worker dispatch cancelled.")), classifyWorkerOutcome({ abandoned: true }), "Worker dispatch cancelled.");
+      finish(() => reject(new Error("Worker dispatch cancelled.")), classifyWorkerOutcome({ cancelled: true }), "Worker dispatch cancelled.");
     };
     const pollStatus = (): void => {
       if (settled || !runId) return;
@@ -145,18 +184,26 @@ export async function dispatchWorker(
         if (statusTimer) clearTimeout(statusTimer);
         removeStatusListener?.();
         if (!raw.success) {
-          finish(() => reject(new Error(raw.error?.message || "Worker status failed.")), classifyWorkerOutcome({ hasError: true }), raw.error?.message);
+          const errorMetadata = workerErrorMetadata(raw.error);
+          finish(() => reject(new Error(raw.error?.message || "Worker status failed.")), errorMetadata.outcome, raw.error?.message, errorMetadata.budget);
           return;
         }
         const data = raw.data ?? {};
         const statusDetails = data.details ?? data;
         const status = String(detailValue(statusDetails, "state") ?? detailValue(statusDetails, "status") ?? "").toLowerCase();
         if (TERMINAL_STATES.has(status)) {
-          const failed = status === "failed" || status === "stopped" || status === "interrupted" || status === "cancelled";
+          const cancelled = status === "cancelled";
+          const abandoned = status === "stopped" || status === "interrupted" || status === "paused";
+          const failed = status === "failed";
+          const errorCode = String(detailValue(statusDetails, "errorCode") ?? "").toUpperCase();
+          const endpointFailure = detailValue(statusDetails, "endpointFailure") === true || errorCode === "ENDPOINT_UNAVAILABLE" || errorCode === "ENDPOINT_FAILURE";
+          const modelMismatch = detailValue(statusDetails, "modelMismatch") === true || errorCode === "MODEL_NOT_FOUND" || errorCode === "MODEL_MISMATCH";
+          const budget = budgetMetadata(statusDetails);
           finish(
             () => resolve({ requestId, runId, asyncDir, text: typeof data.text === "string" ? data.text : "", details: statusDetails }),
-            classifyWorkerOutcome({ hasError: failed, hasOutput: !failed }),
+            classifyWorkerOutcome({ hasError: failed, cancelled, abandoned, endpointFailure, modelMismatch, hasOutput: !failed && !cancelled && !abandoned, ...budget }),
             typeof data.text === "string" ? data.text : status,
+            budget,
           );
           return;
         }
@@ -177,7 +224,8 @@ export async function dispatchWorker(
     unsubscribe = events.on(replyEvent, (raw: any) => {
       if (!raw || raw.requestId !== requestId) return;
       if (!raw.success) {
-        finish(() => reject(new Error(raw.error?.message || "Worker dispatch failed.")), classifyWorkerOutcome({ hasError: true }), raw.error?.message);
+        const errorMetadata = workerErrorMetadata(raw.error);
+        finish(() => reject(new Error(raw.error?.message || "Worker dispatch failed.")), errorMetadata.outcome, raw.error?.message, errorMetadata.budget);
         return;
       }
       const data = raw.data ?? {};

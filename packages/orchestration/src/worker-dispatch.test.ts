@@ -397,7 +397,8 @@ describe("dispatchWorker", () => {
     const ctx = makeCtxWithTempSession(registry);
     enableWorker(ctx, "local/qwen3.6-35b-a3b");
 
-    const promise = dispatchWorker(pi, ctx, { task: "bounded task" }, undefined, { waitForCompletion: true });
+    const ledgerPath = join(tmpdir(), `worker-ledger-${randomUUID()}.jsonl`);
+    const promise = dispatchWorker(pi, ctx, { task: "bounded task" }, undefined, { waitForCompletion: true, telemetry: { parentSessionId: "parent-1", ledgerPath } });
     const spawn = eventBus.emitted[0].data as any;
     eventBus.emit(`${RPC_REPLY_PREFIX}${spawn.requestId}`, {
       requestId: spawn.requestId,
@@ -409,10 +410,56 @@ describe("dispatchWorker", () => {
     eventBus.emit(`${RPC_REPLY_PREFIX}${status.requestId}`, {
       requestId: status.requestId,
       success: true,
-      data: { text: "completed output", details: { state: "complete" } },
+      data: { text: "completed output", details: { state: "complete", budgetKind: "tool", budgetUsed: 4, budgetLimit: 8 } },
     });
 
     await expect(promise).resolves.toMatchObject({ runId: "run-1", text: "completed output" });
+    const events = readFileSync(ledgerPath, "utf8").trim().split("\n").map((line) => JSON.parse(line));
+    expect(events[1]).toMatchObject({ outcome: "success", budgetKind: "tool", budgetUsed: 4, budgetLimit: 8 });
+    rmSync(ledgerPath, { force: true });
+    cleanupCtx(ctx);
+  });
+
+  it("classifies runtime tool-budget terminal status", async () => {
+    const eventBus = createMockEventBus();
+    const registry = createMockModelRegistry(["local/qwen3.6-35b-a3b"]);
+    const pi = makeFakePI(eventBus);
+    const ctx = makeCtxWithTempSession(registry);
+    enableWorker(ctx, "local/qwen3.6-35b-a3b");
+    const ledgerPath = join(tmpdir(), `worker-ledger-${randomUUID()}.jsonl`);
+    const promise = dispatchWorker(pi, ctx, { task: "budgeted task" }, undefined, { waitForCompletion: true, telemetry: { parentSessionId: "parent-1", ledgerPath } });
+    const spawn = eventBus.emitted[0].data as any;
+    eventBus.emit(`${RPC_REPLY_PREFIX}${spawn.requestId}`, { requestId: spawn.requestId, success: true, data: { details: { runId: "run-budget", asyncDir: "/tmp/run-budget" } } });
+    const status = eventBus.emitted.find((entry) => (entry.data as any).method === "status")?.data as any;
+    eventBus.emit(`${RPC_REPLY_PREFIX}${status.requestId}`, {
+      requestId: status.requestId,
+      success: true,
+      data: { details: { state: "failed", toolBudget: { hard: 8, block: "*", outcome: "hard-blocked", toolCount: 8 }, toolBudgetBlocked: true } },
+    });
+    await expect(promise).resolves.toMatchObject({ runId: "run-budget" });
+    const events = readFileSync(ledgerPath, "utf8").trim().split("\n").map((line) => JSON.parse(line));
+    expect(events[1]).toMatchObject({ outcome: "tool_budget_exhausted", budgetKind: "tool", budgetExhausted: true, budgetUsed: 8, budgetLimit: 8 });
+    rmSync(ledgerPath, { force: true });
+    cleanupCtx(ctx);
+  });
+
+  it.each([
+    ["MODEL_NOT_FOUND", "worker model not found", "model_mismatch"],
+    ["ENDPOINT_UNAVAILABLE", "worker endpoint unavailable", "endpoint_failure"],
+  ])("classifies RPC error %s", async (code, message, expectedOutcome) => {
+    const eventBus = createMockEventBus();
+    const registry = createMockModelRegistry(["local/qwen3.6-35b-a3b"]);
+    const pi = makeFakePI(eventBus);
+    const ctx = makeCtxWithTempSession(registry);
+    enableWorker(ctx, "local/qwen3.6-35b-a3b");
+    const ledgerPath = join(tmpdir(), `worker-ledger-${randomUUID()}.jsonl`);
+    const promise = dispatchWorker(pi, ctx, { task: "error task" }, undefined, { telemetry: { parentSessionId: "parent-1", ledgerPath } });
+    const spawn = eventBus.emitted[0].data as any;
+    eventBus.emit(`${RPC_REPLY_PREFIX}${spawn.requestId}`, { requestId: spawn.requestId, success: false, error: { code, message } });
+    await expect(promise).rejects.toThrow(message);
+    const events = readFileSync(ledgerPath, "utf8").trim().split("\n").map((line) => JSON.parse(line));
+    expect(events[1].outcome).toBe(expectedOutcome);
+    rmSync(ledgerPath, { force: true });
     cleanupCtx(ctx);
   });
 
