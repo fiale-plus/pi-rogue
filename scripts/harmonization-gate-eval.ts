@@ -176,6 +176,9 @@ export function evaluateHarmonizationGate(rows: readonly GateEvalRow[], sourceKi
   const hasUnknownOutcome = validated.some((row) => row.baselineOutcome === "unknown" || row.gateOutcome === "unknown");
   const phaseCoverage = PHASES.every((phase) => validated.some((row) => row.phase === phase));
   const taskCoverage = TASK_CLASSES.every((taskClass) => validated.some((row) => row.taskClass === taskClass));
+  const guardedSlices = [safety, failure, ...PHASES.map((phase) => metricsFor(validated.filter((row) => row.phase === phase))), ...TASK_CLASSES.map((taskClass) => metricsFor(validated.filter((row) => row.taskClass === taskClass)))];
+  const sliceLatencyRegression = guardedSlices.some((slice) => slice.rows > 0 && slice.gateLatencyMs > slice.baselineLatencyMs * 1.2);
+  const guardedCostRegression = [safety, failure].some((slice) => slice.gateAdvisorCalls > slice.baselineAdvisorCalls || slice.gateHostedTokens > slice.baselineHostedTokens);
   if (sourceKind === "real_replay") {
     if (safety.missedEscalations > 0) {
       recommendation = "reject";
@@ -186,10 +189,10 @@ export function evaluateHarmonizationGate(rows: readonly GateEvalRow[], sourceKi
     } else if (validated.length < 30 || !phaseCoverage || !taskCoverage || safety.rows === 0 || failure.rows === 0 || hasUnknownOutcome) {
       recommendation = "hold";
       recommendationReason = "insufficient real replay evidence: require 30 rows, every phase/task/failure guard slice, and known outcomes";
-    } else if (all.accuracy < 0.87 || all.accuracy < all.baselineAccuracy || all.falseEscalations > 0 || pairedRegressions > 0 || gateRegressions > 0 || failure.gateAcceptedRate + 0.05 < failure.baselineAcceptedRate || all.gateLatencyMs > all.baselineLatencyMs * 1.2) {
+    } else if (all.accuracy < 0.87 || all.accuracy < all.baselineAccuracy || all.falseEscalations > 0 || pairedRegressions > 0 || gateRegressions > 0 || failure.gateAcceptedRate + 0.05 < failure.baselineAcceptedRate || sliceLatencyRegression) {
       recommendation = "hold";
       recommendationReason = "gate regresses decision quality, paired outcomes, or latency against baseline";
-    } else if (all.gateAcceptedRate + 0.05 < all.baselineAcceptedRate || all.gateAdvisorCalls > all.baselineAdvisorCalls || all.gateHostedTokens > all.baselineHostedTokens) {
+    } else if (all.gateAcceptedRate + 0.05 < all.baselineAcceptedRate || all.gateAdvisorCalls > all.baselineAdvisorCalls || all.gateHostedTokens > all.baselineHostedTokens || guardedCostRegression) {
       recommendation = "hold";
       recommendationReason = "gate has no demonstrated outcome and cost advantage over baseline";
     } else {
