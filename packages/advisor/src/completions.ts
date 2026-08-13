@@ -37,12 +37,13 @@ export const ADVISOR_CANONICAL_CONTROL_LEAVES = ["status", "model", "board"] as 
 
 const advisorTopLevel: Array<[string, string?]> = [
   ["status", "show explicit Advisor and Board status"],
-  ["model", "set the explicit advisor model"],
+  ["settings", "show explicit Advisor settings"],
+  ["model", "set or clear an explicit advisor, specialist, or head model"],
   ["board", "ask the read-only Board specialists or head"],
 ];
 
 const advisorNested: Record<string, Array<[string, string?]>> = {
-  model: [["<provider>/<model>"]],
+  model: [["advisor"], ["specialist"], ["head"], ["null"]],
   board: [["specialist"], ["head"]],
 };
 

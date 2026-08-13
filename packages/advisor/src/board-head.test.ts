@@ -138,7 +138,7 @@ describe("head-of-board adapter", () => {
   });
 
   it("normalizes config fail-closed", () => {
-    expect(normalizeHeadOfBoardConfig({ mode: "enabled", maxTokens: 99999, reasoning: "high" })).toMatchObject({ mode: "enabled", maxTokens: 4000, reasoning: "high" });
+    expect(normalizeHeadOfBoardConfig({ mode: "enabled", maxTokens: 99999, reasoning: "high" })).toMatchObject({ mode: "enabled", maxTokens: 1200, reasoning: "high" });
     expect(normalizeHeadOfBoardConfig({ mode: "live", maxEvidence: -5, reasoning: "max" })).toMatchObject({ mode: "off", maxEvidence: 1, reasoning: "medium" });
     expect(normalizeHeadOfBoardConfig(undefined).mode).toBe("off");
   });

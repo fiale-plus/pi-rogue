@@ -6,7 +6,7 @@ import { ADVISOR_CANONICAL_CONTROL_LEAVES, advisorArgumentCompletions, piRogueAr
 describe("advisor completions", () => {
   it("offers top-level advisor continuations", () => {
     const values = advisorArgumentCompletions("")?.map((i) => i.value);
-    expect(values).toEqual([...ADVISOR_CANONICAL_CONTROL_LEAVES]);
+    expect(values).toEqual(["status", "settings", "model", "board"]);
   });
 
   it("keeps canonical README, skill, UX, and AGENTS guidance aligned", () => {
@@ -25,7 +25,7 @@ describe("advisor completions", () => {
   });
 
   it("offers explicit model syntax", () => {
-    expect(advisorArgumentCompletions("model ")?.map((i) => i.value)).toEqual(["<provider>/<model>"]);
+    expect(advisorArgumentCompletions("model ")?.map((i) => i.value)).toEqual(["advisor", "specialist", "head", "null"]);
   });
 
   it("offers explicit Board roles without shadow or discovery controls", () => {

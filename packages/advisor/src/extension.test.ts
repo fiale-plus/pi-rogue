@@ -25,7 +25,7 @@ describe("Advisor PR1 configuration", () => {
     });
     expect(config).toEqual({
       models: { advisor: "anthropic/claude-sonnet-4-6" },
-      board: { specialists: "off", maxSpecialistCalls: 8, specialistMaxTokens: 100, headMaxTokens: 3000 },
+      board: { specialists: "off", maxSpecialistCalls: 8, specialistMaxTokens: 100, headMaxTokens: 1200 },
     });
     expect("mode" in config).toBe(false);
     expect("review" in config).toBe(false);
@@ -87,7 +87,7 @@ describe("Advisor PR1 bounded model resolution", () => {
 });
 
 describe("Advisor PR1 lifecycle", () => {
-  it("registers no automatic model-work lifecycle handlers", () => {
+  it("registers data-only lifecycle collectors without model work", () => {
     const events: string[] = [];
     const pi = {
       on: (event: string) => { events.push(event); },
@@ -96,10 +96,8 @@ describe("Advisor PR1 lifecycle", () => {
       registerCommand: vi.fn(),
     } as unknown as ExtensionAPI;
     registerAdvisor(pi);
-    expect(events).toEqual(["session_start", "session_shutdown"]);
+    expect(events).toEqual(["session_start", "turn_end", "agent_end", "session_shutdown"]);
     expect(events).not.toContain("before_agent_start");
-    expect(events).not.toContain("turn_end");
-    expect(events).not.toContain("agent_end");
     expect(vi.mocked(completeSimple)).not.toHaveBeenCalled();
   });
 });

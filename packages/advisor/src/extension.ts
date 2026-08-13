@@ -70,16 +70,6 @@ export interface AdvisorBoardConfig {
 export interface AdvisorConfig {
   models: AdvisorModels;
   board: AdvisorBoardConfig;
-  model?: string;
-  mode?: "auto" | "manual" | "off";
-  review?: "light" | "strict" | "off";
-  checkins?: "mid-hour" | "off";
-  checkinIntervalMinutes?: number;
-  checkinStartedAt?: number;
-  profile?: AdvisorProfileId;
-  profileRestore?: AdvisorProfileRestore;
-  headOfBoard?: HeadOfBoardConfig;
-  specialistDispatch?: SpecialistDispatchConfig;
 }
 
 export type AdvisorProfileId = "budget-board";
@@ -106,8 +96,8 @@ const DEFAULT_CONFIG: AdvisorConfig = {
   board: {
     specialists: "suggest",
     maxSpecialistCalls: 3,
-    specialistMaxTokens: 420,
-    headMaxTokens: 720,
+    specialistMaxTokens: 900,
+    headMaxTokens: 1200,
   },
 };
 
@@ -318,8 +308,8 @@ export function normalizeAdvisorConfig(raw: Partial<AdvisorConfig> | LegacyAdvis
     board: {
       specialists: specialistMode,
       maxSpecialistCalls: boundedBoardValue(sourceBoard.maxSpecialistCalls ?? legacySpecialist.maxCallsPerSession, DEFAULT_CONFIG.board.maxSpecialistCalls, 0, 8),
-      specialistMaxTokens: boundedBoardValue(sourceBoard.specialistMaxTokens ?? legacySpecialist.maxTokens, DEFAULT_CONFIG.board.specialistMaxTokens, 100, 2000),
-      headMaxTokens: boundedBoardValue(sourceBoard.headMaxTokens ?? legacyHead.maxTokens ?? sourceBoard.maxTokens, DEFAULT_CONFIG.board.headMaxTokens, 100, 3000),
+      specialistMaxTokens: boundedBoardValue(sourceBoard.specialistMaxTokens ?? legacySpecialist.maxTokens, DEFAULT_CONFIG.board.specialistMaxTokens, 100, 900),
+      headMaxTokens: boundedBoardValue(sourceBoard.headMaxTokens ?? legacyHead.maxTokens ?? sourceBoard.maxTokens, DEFAULT_CONFIG.board.headMaxTokens, 100, 1200),
     },
   };
 }
@@ -563,11 +553,10 @@ async function runHeadOfBoardCommand(ctx: any, cfg: AdvisorConfig, state: Sessio
     ...defaultHeadOfBoardConfig(),
     mode: "enabled" as const,
     maxTokens: cfg.board.headMaxTokens,
+    callsUsed: state.headOfBoard.calls,
   };
-  const modelConfig = cfg;
-
   const result = await callHeadOfBoardAdapter(headConfig, { ledger, decision, question, reason: "user_request" }, async (systemPrompt, messages, options) => {
-    return completeWithHigherAdvisorModel(ctx, modelConfig, systemPrompt, messages, { ...options, role: "head", maxAttempts: 2 });
+    return completeWithHigherAdvisorModel(ctx, cfg, systemPrompt, messages, { ...options, role: "head", maxAttempts: 2 });
   });
   if (result.skipped) {
     state.headOfBoard.lastSkipped = result.skipped;
@@ -625,11 +614,10 @@ async function runSpecialistCommand(ctx: any, cfg: AdvisorConfig, state: Session
   }
   const specialistConfig = {
     ...defaultSpecialistDispatchConfig(),
-    mode: "suggest" as const,
+    mode: cfg.board.specialists,
     maxCallsPerSession: cfg.board.maxSpecialistCalls,
     maxTokens: cfg.board.specialistMaxTokens,
   };
-  const modelConfig = cfg;
   const result = await callReadOnlySpecialist({
     role: found.role,
     ledger: currentBoardLedger(ctx, state),
@@ -638,7 +626,7 @@ async function runSpecialistCommand(ctx: any, cfg: AdvisorConfig, state: Session
     state: state.specialistDispatch!,
     currentTurn: state.turns,
     complete: async (systemPrompt, messages, options) => {
-      const resp = await completeWithHigherAdvisorModel(ctx, modelConfig, systemPrompt, messages, { maxTokens: options.maxTokens, reasoning: "medium", role: "specialist", maxAttempts: 2 });
+      const resp = await completeWithHigherAdvisorModel(ctx, cfg, systemPrompt, messages, { maxTokens: options.maxTokens, reasoning: "medium", role: "specialist", maxAttempts: 2 });
       if (!resp || resp.rateLimited) throw new Error(resp?.text || "specialist model unavailable");
       return resp.text;
     },
@@ -2235,7 +2223,7 @@ function responseText(resp: { content?: Array<{ type?: string; text?: string }> 
   return (resp?.content ?? []).filter((b: any) => b?.type === "text").map((b: any) => b.text).join("\n").trim();
 }
 
-function mergeRouteReview(configReview: AdvisorConfig["review"], route?: ReviewPolicy): ReviewPolicy {
+function mergeRouteReview(configReview: ReviewPolicy | undefined, route?: ReviewPolicy): ReviewPolicy {
   const review = configReview ?? "light";
   if (review === "off") return "off";
   if (!route) return review;
@@ -2312,128 +2300,20 @@ function isAdvisorAutoRunSuppressedForTurnContext(state: SessionState, nowTurns 
   return isAdvisorAutoRunSuppressed(state, nowTurns) || isAdvisorAutoRunSuppressed(state, nowTurns - 1);
 }
 
-function checkinDescription(config: AdvisorConfig): string {
-  if (config.checkins === "off") return "checkins off";
-  return `checkins ${config.checkinIntervalMinutes}m`;
+function checkinDescription(_config: AdvisorConfig): string {
+  return "checkins off";
 }
 
-function setPiRogueStatus(ctx: any, config = loadConfig(), state?: SessionState): void {
+function setPiRogueStatus(ctx: any, _config = loadConfig(), state?: SessionState): void {
   const currentState = state ?? loadState(ctx);
-  const normalized = normalizeAdvisorConfig(config);
-  const checkin = checkinDescription(normalized);
-  const pause = advisorPauseRemaining(currentState, currentState.turns);
-  const pauseText = pause > 0 ? ` · pause ${pause} turn${pause === 1 ? "" : "s"}` : "";
-  const last = currentState.checkin.lastAt ? ` · last ${new Date(currentState.checkin.lastAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}` : "";
-  ctx.ui.setStatus("pi-rogue", `☠︎ advisor ${normalized.mode}/${normalized.review} · ${checkin}${pauseText}${last}`);
+  ctx.ui.setStatus("pi-rogue", `advisor explicit-only · turns=${currentState.turns} · calls=${currentState.advisorCalls}`);
 }
 
-export function shouldRunCheckin(config: AdvisorConfig, state: SessionState, now = Date.now(), startedAt = now): string | null {
-  if (isAdvisorAutoRunSuppressed(state, state.turns)) return null;
-  const normalized = normalizeAdvisorConfig(config);
-  if (normalized.mode === "off" || normalized.mode === "manual") return null;
-  if (normalized.checkins === "off") return null;
-  if (state.checkin.queued) {
-    return state.checkin.queuedReason || "Queued mid-session check-in.";
-  }
-  if (!state.lastTask && state.notes.length === 0) return null;
-
-  const lastTurn = state.checkin.lastTurn ?? 0;
-  if (state.turns <= lastTurn) return null;
-  const lastAt = state.checkin.lastAt ? Date.parse(state.checkin.lastAt) : 0;
-  const intervalMs = (normalized.checkinIntervalMinutes ?? 30) * 60_000;
-  const streamStartedAt = Number.isFinite(normalized.checkinStartedAt ?? NaN)
-    ? (normalized.checkinStartedAt as number)
-    : startedAt;
-  const since = Math.max(lastAt, streamStartedAt);
-  if (since && now - since < intervalMs) return null;
-  return `mid-hour check-in after ${state.turns - lastTurn} new turn(s)`;
+export function shouldRunCheckin(_config: AdvisorConfig, _state: SessionState, _now = Date.now(), _startedAt = _now): string | null {
+  return null;
 }
 
 
-function isAdvisorIdle(ctx: any): boolean {
-  try {
-    return typeof ctx?.isIdle === "function" ? ctx.isIdle() : true;
-  } catch {
-    return true;
-  }
-}
-
-export async function requestAdvisorLoopCheckin(pi: ExtensionAPI, ctx: any, source = "loop_tick"): Promise<boolean> {
-  return maybeAdvisorCheckin(pi, ctx, source);
-}
-
-async function maybeAdvisorCheckin(pi: ExtensionAPI, ctx: any, source: string): Promise<boolean> {
-  const key = sessionKey(ctx);
-  if (closedAdvisorSessions.has(key) || checkinLocks.has(key)) return false;
-
-  const config = loadConfig();
-  const state = loadState(ctx);
-  if (activeRateLimitReason(state)) {
-    setPiRogueStatus(ctx, config, state);
-    return false;
-  }
-  const reason = shouldRunCheckin(config, state, Date.now(), Date.now());
-  if (!reason) {
-    if (state.checkin.queued) {
-      state.checkin.queued = false;
-      saveState(state);
-      setPiRogueStatus(ctx, config, state);
-    }
-    return false;
-  }
-
-  if (!isAdvisorIdle(ctx)) {
-    if (!state.checkin.queued) {
-      state.checkin.queued = true;
-      state.checkin.queuedReason = reason;
-      saveState(state);
-      setPiRogueStatus(ctx, config, state);
-    }
-    return false;
-  }
-
-  checkinLocks.add(key);
-  try {
-    const prompt = buildAdvisorCheckinPrompt(source, orchestrationSnapshotText(ctx), brief(state));
-    const completed = await completeWithHigherAdvisorModel(
-      ctx,
-      config,
-      prompt,
-      [
-        {
-          role: "user",
-          content: prompt,
-          timestamp: new Date().toISOString(),
-        },
-      ],
-      { maxTokens: 260, reasoning: "low" as ThinkingLevel, maxAttempts: 2 },
-    );
-    if (!completed) return false;
-    if (completed.rateLimited) {
-      const next = loadState(ctx);
-      recordRateLimit(next, ctx, { reason: completed.text || "advisor rate limit (429)", retryAfterSeconds: completed.retryAfterSeconds });
-      saveState(next);
-      setPiRogueStatus(ctx, config, next);
-      return false;
-    }
-
-    const next = loadState(ctx);
-    next.checkin = {
-      lastAt: new Date().toISOString(),
-      lastTurn: next.turns,
-      lastReason: reason,
-      queued: false,
-    };
-    const loopFamilyHash = advisorLoopFamilyHash(["checkin", source, state.lastTask || ""]);
-    const loopContextHash = advisorLoopContextHash(["checkin", source, prompt, orchestrationSnapshotText(ctx), brief(next)]);
-    sendAdvisorHint(pi, next, loopFamilyHash, loopContextHash, "review", "mid-hour check-in", completed.text, [completed.text]);
-    saveState(next);
-    setPiRogueStatus(ctx, config, next);
-    return true;
-  } finally {
-    checkinLocks.delete(key);
-  }
-}
 
 function contextBrokerEnabledByDefault(): boolean {
   return !new Set(["0", "false", "no", "off"]).has(String(process.env.PI_CONTEXT_BROKER_ENABLED ?? "").trim().toLowerCase());
@@ -2478,167 +2358,43 @@ function formatSubsystemStatusRows(rows: SubsystemStatusRow[]): string {
   ].join("\n");
 }
 
-function advisorBinaryGatePathStatus(config: AdvisorConfig): { preflight: string; review: string } {
-  const normalized = normalizeAdvisorConfig(config);
-  const preflight = normalized.mode === "auto"
-    ? "active in auto preflight"
-    : normalized.mode === "manual"
-      ? "dormant (mode=manual)"
-      : "off (mode=off)";
-  const review = normalized.mode === "off"
-    ? "off (mode=off)"
-    : normalized.mode === "manual"
-      ? "dormant (mode=manual)"
-      : normalized.review === "off"
-        ? "dormant (review=off)"
-        : `active in ${normalized.review} review`;
-  return { preflight, review };
+function advisorBinaryGatePathStatus(_config: AdvisorConfig): { preflight: string; review: string } {
+  return { preflight: "disabled (explicit-only)", review: "disabled (explicit-only)" };
 }
 
-export function formatAdvisorBinaryGateStatus(config: AdvisorConfig, state: any, status: BinaryGateArtifactStatus = inspectBinaryGateArtifact()): string {
-  const paths = advisorBinaryGatePathStatus(config);
-  const route = state?.router?.review ?? state?.router?.preflight;
-  const latest = route?.source === "model"
-    ? `${route.phase}: ${route.reason || "model route"}${typeof route.confidence === "number" ? ` (confidence=${route.confidence.toFixed(2)})` : ""}`
-    : route
-      ? `no recent binary-gate route (latest source=${route.source || "unknown"})`
-      : "no advisor route yet";
+export function formatAdvisorBinaryGateStatus(_config: AdvisorConfig, state: unknown, status: BinaryGateArtifactStatus = inspectBinaryGateArtifact()): string {
+  const route = state && typeof state === "object" && "router" in state ? (state as { router?: { review?: { source?: string } } }).router?.review : undefined;
   const model = status.usable
     ? `${status.kind}; features=${status.features ?? "unknown"}; source=${status.source}; stacked=${status.stacked ? "yes" : "no"}`
     : status.available
       ? `unusable (${status.source}: ${status.error || "invalid artifact"})`
       : `unavailable (${status.error || "missing artifact"})`;
-  const canAct = status.usable && (paths.preflight.startsWith("active") || paths.review.startsWith("active"))
-    ? "yes"
-    : status.usable
-      ? "wired but dormant under current advisor config"
-      : "no";
   return [
     "Binary gate:",
     `- model: ${model}`,
-    `- advisor preflight: ${paths.preflight}`,
-    `- advisor review: ${paths.review}`,
-    `- can act now: ${canAct}`,
-    `- latest route: ${latest}`,
+    "- advisor preflight: disabled (explicit-only)",
+    "- advisor review: disabled (explicit-only)",
+    "- can act now: no",
+    `- latest route: ${route?.source ?? "no advisor route yet"}`,
     `- artifact: ${status.path}`,
   ].join("\n");
 }
 
-function piRogueSubsystemRows(config: AdvisorConfig, state: SessionState, ctx: any): SubsystemStatusRow[] {
-  const normalized = normalizeAdvisorConfig(config);
-  const pause = advisorPauseRemaining(state, state.turns);
-  const pauseText = pause > 0 ? `pause=${pause} turn${pause === 1 ? "" : "s"}` : "pause=off";
-
-  const checkinsText = checkinDescription(normalized).replace(/^checkins\s+/, "");
-  const gateArtifact = inspectBinaryGateArtifact();
-  const gatePaths = advisorBinaryGatePathStatus(normalized);
-  const gateSummary = gateArtifact.usable
-    ? (gatePaths.preflight.startsWith("active") || gatePaths.review.startsWith("active") ? "gate=active" : "gate=dormant")
-    : "gate=unavailable";
-  const advisorRow: SubsystemStatusRow = {
+function piRogueSubsystemRows(_config: AdvisorConfig, state: SessionState, _ctx: any): SubsystemStatusRow[] {
+  return [{
     subsystem: "advisor",
-    status: normalized.mode === "off" ? "off" : "on",
-    details: [
-      `profile=${normalized.profile ?? "off"}`,
-      `review=${normalized.review}`,
-      `checkins=${checkinsText}`,
-      `turns=${state.turns}`,
-      `calls=${state.advisorCalls}`,
-      state.cacheHits > 0 ? `cache=${state.cacheHits}` : "",
-      gateSummary,
-      state.checkin.lastAt ? `last=${new Date(state.checkin.lastAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}` : "last=never",
-      pause > 0 ? pauseText : "",
-    ].filter(Boolean).join(" · "),
-  };
-
-  const root = piRogueRootDir();
-
-  const routerConfigPath = join(root, "router", "config.json");
-  const rawRouter: any = readJsonLoose(routerConfigPath) ?? {};
-  const routerProfiles = (rawRouter?.profiles ?? {}) as Record<string, { worker?: string; smart?: string; teacher?: string; reviewer?: string }>;
-  const activeProfile = typeof rawRouter?.activeProfile === "string" && routerProfiles[rawRouter.activeProfile]
-    ? rawRouter.activeProfile
-    : "all-smart";
-  const routerProfile = routerProfiles[activeProfile] ?? {};
-  const routerStatus: SubsystemStatusRow = {
-    subsystem: "router",
-    status: rawRouter?.enabled === true ? "on" : "off",
-    details: [
-      `mode=${rawRouter?.mode === "auto_model" ? "auto_model" : "observe"}`,
-      `profile=${activeProfile}`,
-      `smart=${routerProfile.smart || "n/a"}`,
-      `worker=${routerProfile.worker || "n/a"}`,
-    ].join(" · "),
-  };
-
-  const fusionPaths = fusionRecipeCandidatePaths(ctx, root);
-  const fusionPath = fusionPaths.find((path) => existsSync(path)) || fusionPaths[0];
-  const parsedFusion = fusionPath ? readJsonLoose(fusionPath) : undefined;
-  const fusionRecipes = Array.isArray(parsedFusion?.recipes) ? parsedFusion.recipes : [];
-  const fusionIds = fusionRecipes.map((recipe: any) => String(recipe?.id ?? "").trim()).filter(Boolean);
-  const fusionStatus: SubsystemStatusRow = {
-    subsystem: "fusion",
-    status: fusionIds.length > 0 ? "on" : "off",
-    details: [
-      `source=${fusionPaths[0] && fusionPaths[0] === String(process.env.PI_ROGUE_FUSION_RECIPES ?? "").trim() ? "env" : "user-root"}`,
-      `recipes=${fusionIds.length}`,
-      `ids=${fusionIds.length > 0 ? `${fusionIds.slice(0, 2).join(", ")}${fusionIds.length > 2 ? `, +${fusionIds.length - 2} more` : ""}` : "none"}`,
-      `file=${existsSync(fusionPath || "") ? "user-root" : "not-created"}`,
-    ].join(" · "),
-  };
-
-  const contextEnabled = contextBrokerEnabledByDefault();
-  const contextConfigPath = join(root, "context-broker", "config.json");
-  const contextDbPath = join(root, "context-broker", "artifacts.sqlite");
-  const rawContextConfig = readJsonLoose(contextConfigPath) as { rewriteThresholdBytes?: unknown; rewrite_threshold_bytes?: unknown } | undefined;
-  const configuredRewriteThreshold = parseNonNegativeInt(
-    rawContextConfig?.rewriteThresholdBytes ?? rawContextConfig?.rewrite_threshold_bytes,
-  );
-  const envRewriteThreshold = parseNonNegativeInt(process.env.PI_CONTEXT_BROKER_REWRITE_THRESHOLD_BYTES);
-  const contextRewriteThreshold = envRewriteThreshold ?? configuredRewriteThreshold ?? 8 * 1024;
-  const contextSource = envRewriteThreshold !== undefined ? "env" : configuredRewriteThreshold !== undefined ? "config" : "default";
-  const contextBytes = fileBytes(contextDbPath);
-  const contextRow: SubsystemStatusRow = {
-    subsystem: "context",
-    status: contextEnabled ? "on" : "off",
-    details: [
-      `rewrite-threshold=${formatBytes(contextRewriteThreshold)} (${contextSource})`,
-      `store=user-root`,
-      contextBytes !== undefined ? `size=${formatBytes(contextBytes)}` : "size=not-created",
-    ].join(" · "),
-  };
-
-  const orchestration = readOrchestrationSnapshot(ctx);
-  const orchestrationActive = Boolean(orchestration.goal || (orchestration.loop?.enabled && orchestration.loop?.instruction) || orchestration.research?.instruction);
-
-  return [
-    advisorRow,
-    routerStatus,
-    fusionStatus,
-    contextRow,
-    {
-      subsystem: "orchestration",
-      status: orchestrationActive ? "on" : "off",
-      details: orchestrationActive
-        ? [
-          orchestration.goal ? "goal" : "",
-          orchestration.loop?.enabled && orchestration.loop?.instruction ? "loop" : "",
-          orchestration.research?.instruction ? "autoresearch" : "",
-        ].filter(Boolean).join(" · ")
-        : "idle",
-    },
-  ];
+    status: "explicit-only",
+    details: `turns=${state.turns} · calls=${state.advisorCalls} · specialists=${state.specialistDispatch?.calls ?? 0} · head=${state.headOfBoard?.calls ?? 0}`,
+  }];
 }
 
 function piRogueCockpitText(config: AdvisorConfig, state: SessionState, _currentNote: string, ctx: any): string {
-  const rows = piRogueSubsystemRows(config, state, ctx);
   return [
     "Pi-Rogue status",
-    `posture: ${activePostureText()}`,
-    formatSubsystemStatusRows(rows),
+    formatSubsystemStatusRows(piRogueSubsystemRows(config, state, ctx)),
     "",
-    "Commands: /pi-rogue status · /pi-rogue-advisor|router|fusion|orchestration|context status",
-  ].filter(Boolean).join("\n");
+    "Commands: /pi-rogue status|help|doctor · /pi-rogue-advisor status|settings|model|board",
+  ].join("\n");
 }
 
 function piRogueRootDir(): string {
@@ -2909,7 +2665,7 @@ async function strongAdvisorForGuarded(ctx: any, current: AdvisorConfig): Promis
   // Reuse the owned, deadline-bounded resolver; guarded posture never considers regular fallback models.
   const candidates = await resolveModelCandidates(ctx, {
     ...current,
-    model: current.model && preferred.includes(current.model) ? current.model : undefined,
+    models: { ...current.models, advisor: current.models.advisor && preferred.includes(current.models.advisor) ? current.models.advisor : undefined },
   }, { allowRegularFallback: false });
   const strong = candidates.find((candidate) => preferred.includes(piRogueModelId(candidate.model) ?? ""));
   if (strong) return piRogueModelId(strong.model) ?? strong.label;
@@ -2951,19 +2707,10 @@ export function applyPiRoguePosturePlan(plan: PiRoguePosturePlan): PiRoguePostur
     ? existingSummary.configuredAt
     : new Date().toISOString();
   const existingAdvisor = readJson<Partial<AdvisorConfig>>(plan.files.advisor, {});
-  const normalizedExistingAdvisor = normalizeAdvisorConfig(existingAdvisor);
-  const baseRestore: AdvisorProfileRestore = normalizedExistingAdvisor.profileRestore
-    ? normalizedExistingAdvisor.profileRestore as AdvisorProfileRestore
-    : {
-      mode: normalizedExistingAdvisor.mode,
-      review: normalizedExistingAdvisor.review,
-      checkins: normalizedExistingAdvisor.checkins,
-      checkinIntervalMinutes: normalizedExistingAdvisor.checkinIntervalMinutes,
-      model: normalizedExistingAdvisor.model,
-      board: normalizedExistingAdvisor.board,
-      headOfBoard: normalizedExistingAdvisor.headOfBoard,
-      specialistDispatch: normalizedExistingAdvisor.specialistDispatch,
-    } satisfies AdvisorProfileRestore;
+  const baseRestore: AdvisorProfileRestore = {
+    models: existingAdvisor.models,
+    board: existingAdvisor.board,
+  };
   const profileRestore: AdvisorProfileRestore = {
     ...baseRestore,
     profileModel: plan.advisorModel,
@@ -3076,10 +2823,7 @@ export function applyPiRogueConfigurePlan(plan: PiRogueConfigurePlan): void {
   const existingAdvisor = readJson<Partial<AdvisorConfig>>(plan.files.advisor, {});
   writeJson(plan.files.advisor, normalizeAdvisorConfig({
     ...existingAdvisor,
-    mode: "auto",
-    review: existingAdvisor.review === "strict" ? "strict" : "light",
-    checkins: "mid-hour",
-    model: plan.advisorModel,
+    models: { ...existingAdvisor.models, advisor: plan.advisorModel },
   }));
   const quick = { worker: plan.workerModel, smart: plan.workerModel, teacher: plan.workerModel, reviewer: plan.workerModel };
   const balanced = { worker: plan.workerModel, smart: plan.advisorModel, teacher: plan.advisorModel, reviewer: plan.advisorModel };
@@ -3101,20 +2845,10 @@ export function applyPiRogueConfigurePlan(plan: PiRogueConfigurePlan): void {
 }
 
 function piRogueConfigText(): string {
-  const root = piRogueRootDir();
   return [
     "Pi-Rogue config map:",
-    `  root: ${root}`,
     `  advisor: ${CONFIG_PATH}`,
-    `  router: ${join(root, "router", "config.json")}`,
-    `  router cards: ${join(root, "router", "model-cards.jsonl")}`,
-    `  fusion recipes: ${join(root, "fusion", "recipes.json")}`,
-    `  context broker: ${join(root, "context-broker", "artifacts.sqlite")}`,
-    `  fusion traces: ${join(root, "fusion", "runs")}`,
-    `  orchestration: ${ORCHESTRATION_DIR}`,
-    "",
     "Layering: built-in defaults → user-root Pi-Rogue config → session state.",
-    "Use /pi-rogue-router status and /pi-rogue-fusion status to see the currently active subsystem paths.",
   ].join("\n");
 }
 
@@ -3125,22 +2859,10 @@ function piRogueConfigureText(plan: PiRogueConfigurePlan): string {
     "",
     "Derived defaults:",
     `  advisor model: ${plan.advisorModel}`,
-    `  router profile: ${plan.activeRouterProfile}`,
-    `  worker: ${plan.workerModel}`,
-    `  smart/teacher/reviewer: ${plan.smartModel}`,
-    plan.fusionRecipeId ? `  fusion recipe: fusion/${plan.fusionRecipeId}` : "  fusion recipe: not detected",
     "",
-    "Files:",
-    `  summary: ${plan.files.summary}`,
-    `  advisor: ${plan.files.advisor}`,
-    `  router: ${plan.files.router}`,
-    `  router cards: ${plan.files.routerCards}`,
-    `  fusion recipes: ${plan.files.fusionRecipes}`,
-    `  context broker: ${plan.files.contextBroker}`,
-    plan.warnings.length ? "" : "",
     ...plan.warnings.map((warning) => `Warning: ${warning}`),
     "",
-    "Safety: root status is read-only; use subsystem commands for explicit changes.",
+    "Safety: root status is read-only; use explicit Advisor commands for changes.",
   ].filter((line, index, lines) => line !== "" || lines[index - 1] !== "").join("\n");
 }
 
@@ -3161,26 +2883,14 @@ function configuredPackages(ctx: any): string[] {
 }
 
 function piRogueDoctorText(ctx: any): string {
-  const root = piRogueRootDir();
   const packages = configuredPackages(ctx).filter((entry) => entry.includes("pi-rogue"));
   const hasNpm = packages.some((entry) => entry.includes("npm:@fiale-plus/pi-rogue") || entry === "@fiale-plus/pi-rogue");
   const localSources = packages.filter((entry) => !entry.includes("npm:@fiale-plus/pi-rogue") && entry.includes("pi-rogue"));
-  const checks = [
-    `${hasNpm ? "ok" : "warn"}: canonical npm package ${hasNpm ? "is registered" : "was not detected in settings"}`,
-    `${localSources.length === 0 ? "ok" : "warn"}: local/deprecated Pi-Rogue package registrations${localSources.length ? `: ${localSources.join(", ")}` : " not detected"}`,
-    `${existsSync(join(root, "config.json")) ? "ok" : "info"}: global summary config ${join(root, "config.json")}`,
-    `${existsSync(join(root, "router", "config.json")) ? "ok" : "info"}: global router config ${join(root, "router", "config.json")}`,
-    `${existsSync(join(String(ctx?.cwd ?? process.cwd()), ".pi", "router", "config.json")) ? "info" : "ok"}: repo router override ${join(String(ctx?.cwd ?? process.cwd()), ".pi", "router", "config.json")}`,
-    `${existsSync(join(root, "fusion", "recipes.json")) || configuredFusionRecipeIds(ctx, root).length ? "ok" : "info"}: fusion recipes expose fusion/<recipe-id> models when present`,
-  ];
   return [
     "Pi-Rogue doctor:",
-    ...checks.map((check) => `  ${check}`),
-    "",
-    "Migration guidance:",
-    "  built-in defaults → user-root Pi-Rogue config → session state",
-    "  remove duplicate local package registrations unless intentionally developing locally",
-    "  run /pi-rogue status for a read-only aggregate view or subsystem commands to write user-root defaults",
+    `  ${hasNpm ? "ok" : "warn"}: canonical package ${hasNpm ? "is registered" : "was not detected in settings"}`,
+    `  ${localSources.length === 0 ? "ok" : "warn"}: local package registrations${localSources.length ? `: ${localSources.join(", ")}` : " not detected"}`,
+    "  advisor lifecycle: explicit-only, data-only state collection",
     "",
     "This command is informational only; it does not modify config.",
   ].join("\n");
@@ -3258,7 +2968,11 @@ async function resolveModelCandidatesWithinWork(ctx: any, config: AdvisorConfig,
     }
   }
   if (!explicit && candidates.length === 0) {
-    for (const found of available().sort((a, b) => preferred.indexOf(modelId(a)) - preferred.indexOf(modelId(b)))) {
+    const preferredRank = (id: string): number => {
+      const index = preferred.indexOf(id);
+      return index < 0 ? preferred.length : index;
+    };
+    for (const found of available().sort((a, b) => preferredRank(modelId(a)) - preferredRank(modelId(b)))) {
       if (candidates.length >= 1 || seen.has(modelId(found))) break;
       const id = modelId(found);
       if (!id) continue;
@@ -3387,290 +3101,22 @@ async function askAdvisor(pi: ExtensionAPI, ctx: any, question: string, scope: s
   return { text: loop.text, model: completed.model, fallback: completed.fallback, loopDetected: loop.loopDetected };
 }
 
-async function doReview(pi: ExtensionAPI, ctx: any, trigger: string, delta: string, meta: ReviewMaterialMeta) {
-  if (closedAdvisorSessions.has(sessionKey(ctx))) return;
-  const config = loadConfig();
-  if (config.review === "off") return;
+
+function collectLifecycleEvidence(event: unknown, ctx: any, agentEnd: boolean): void {
   const state = loadState(ctx);
-  const reviewLockKey = statePathFor(state);
-  if (reviewLocks.has(reviewLockKey)) return;
-  reviewLocks.add(reviewLockKey);
-  try {
-  const phase: AdvisorRouteInput["phase"] = meta.isAgentEnd ? "closeout" : "review";
-  const trajectory = buildTrajectoryContext(ctx, {
-    phase,
-    turns: state.turns,
-    fileChanged: meta.fileChanged,
-    failed: meta.failed,
-  });
-  const reviewInput: AdvisorRouteInput = {
-    phase,
-    text: delta || "(none)",
-    brief: brief(state),
-    fileChanged: meta.fileChanged,
-    failed: meta.failed,
-  };
-  const reviewHeuristic = { ...heuristicRoute(reviewInput), trajectory };
-  const signature = reviewMaterialSignature(state, delta, meta);
-  if (state.reviewControl.running) {
-    return;
+  const record = event && typeof event === "object" ? event as Record<string, unknown> : {};
+  const turnIndex = Number(record.turnIndex);
+  state.turns = Math.max(state.turns + 1, Number.isFinite(turnIndex) ? Math.floor(turnIndex) + 1 : 0);
+  const message = record.message && typeof record.message === "object" ? record.message as Record<string, unknown> : undefined;
+  const text = noteText(message?.content ?? record.messages ?? "");
+  if (text) state.notes = [...state.notes, text].slice(-MAX_NOTES);
+  const toolResults = Array.isArray(record.toolResults) ? record.toolResults : [];
+  for (const result of toolResults) {
+    const summary = noteText(result);
+    if (summary && /error|fail|exception/i.test(summary)) state.errors = [...state.errors, summary].slice(-MAX_ERRORS);
   }
-  const terminalReason = mergedTerminalWorkflowReason(state);
-  if (terminalReason) {
-    clearResolvedReviewWarning(state, ctx, terminalReason);
-    markReviewApplied(state, signature, trigger, "continue", terminalReason, true);
-    persistReviewState(state, true);
-    return;
-  }
-  const rateLimitReason = activeRateLimitReason(state);
-  if (rateLimitReason) {
-    clearRateLimitedReviewReplay(state, ctx, rateLimitReason);
-    markReviewApplied(state, signature, trigger, "defer", rateLimitReason, true);
-    persistReviewState(state, true);
-    return;
-  }
-  if (shouldSkipReview(state, signature) && !reviewHeuristic.safety && !meta.failed) {
-    markReviewSkipped(state, signature, trigger);
-    persistReviewState(state, false);
-    return;
-  }
-
-  markReviewRunning(state, signature, trigger);
-  persistReviewState(state, false);
-
-  let finalized = false;
-  let finalDecision: "continue" | "review" | "defer" = "defer";
-  let finalReason = "pending review";
-
-  try {
-    if (hasCleanCloseoutEvidence(delta, meta) || (meta.isAgentEnd && !meta.failed && hasActiveTerminalEvidence(state))) {
-      finalDecision = "continue";
-      finalReason = hasActiveTerminalEvidence(state) ? "terminal workflow state" : "terminal clean closeout evidence";
-      recordTerminalEvidence(state, delta, meta, finalReason);
-      if (hasCleanCloseoutEvidence(delta, meta)) {
-        recordTerminalGreenCloseout(state, ctx, trigger, finalReason);
-      }
-      clearResolvedReviewWarning(state, ctx, finalReason);
-      markReviewApplied(state, signature, trigger, finalDecision, finalReason, true);
-      persistReviewState(state, true);
-      finalized = true;
-      return;
-    }
-
-    const gatePrediction = binaryGatePredict(reviewInput.text, phase, trajectory);
-    const reviewRoute = applyReviewGatePrediction(reviewHeuristic, gatePrediction, Boolean(meta.failed));
-    appendRouteLog(reviewRoute);
-    state.router.review = reviewRoute;
-    persistReviewState(state, true);
-
-    if (gatePrediction && gatePrediction.trusted && gatePrediction.decision === "continue" && !reviewHeuristic.safety && !meta.failed) {
-      finalDecision = "continue";
-      finalReason = "local gate continue";
-      if (hasCleanCloseoutEvidence(delta, meta)) {
-        recordTerminalGreenCloseout(state, ctx, trigger, finalReason);
-        clearResolvedReviewWarning(state, ctx, finalReason);
-      }
-      markReviewApplied(state, signature, trigger, finalDecision, finalReason, true);
-      persistReviewState(state, true);
-      finalized = true;
-      return;
-    }
-
-    const effectiveReview = mergeRouteReview(config.review, state.router.preflight?.review);
-    const finalReview = mergeReviewPolicy(effectiveReview, reviewRoute.review);
-    if (finalReview === "off") {
-      finalDecision = "continue";
-      finalReason = "review disabled";
-      if (hasCleanCloseoutEvidence(delta, meta)) {
-        recordTerminalGreenCloseout(state, ctx, trigger, finalReason);
-        clearResolvedReviewWarning(state, ctx, finalReason);
-      }
-      markReviewApplied(state, signature, trigger, finalDecision, finalReason, true);
-      persistReviewState(state, true);
-      finalized = true;
-      return;
-    }
-
-    const shouldRun = shouldRunAdvisorReview(finalReview, meta, reviewRoute, state.turns);
-    if (!shouldRun) {
-      if (hasCleanCloseoutEvidence(delta, meta)) {
-        finalDecision = "continue";
-        finalReason = "clean closeout evidence";
-        recordTerminalGreenCloseout(state, ctx, trigger, finalReason);
-        clearResolvedReviewWarning(state, ctx, finalReason);
-      } else {
-        finalDecision = "defer";
-        finalReason = "no material signal";
-      }
-      markReviewApplied(state, signature, trigger, finalDecision, finalReason, true);
-      persistReviewState(state, true);
-      finalized = true;
-      return;
-    }
-
-    const b = brief(state);
-    const brokerBrief = contextBrokerBrief(pi, ctx);
-    if (!b && !brokerBrief) {
-      finalDecision = "defer";
-      finalReason = "missing brief context";
-      markReviewApplied(state, signature, trigger, finalDecision, finalReason, true);
-      persistReviewState(state, true);
-      finalized = true;
-      return;
-    }
-
-    const cwd = String(ctx?.cwd ?? process.cwd());
-    const missingArtifacts = [...new Set([
-      ...findMissingArtifactReferences(cwd, delta, b, brokerBrief),
-      ...findMissingReviewArtifacts(cwd, delta, b, brokerBrief),
-    ])];
-    if (missingArtifacts.length > 0) {
-      const missingSummary = missingArtifacts.slice(0, 4).join(", ");
-      finalDecision = "defer";
-      finalReason = `artifact preflight missing references: ${missingSummary}`;
-      markReviewApplied(state, signature, trigger, finalDecision, finalReason, true);
-      persistReviewState(state, true);
-      ctx.ui?.notify?.(`Advisor artifact preflight blocked model review: missing referenced files ${missingSummary}`, "warning");
-      finalized = true;
-      return;
-    }
-
-    const rk = hash("rev", trigger, b, brokerBrief, delta, String(meta.fileChanged), String(meta.failed), String(meta.isAgentEnd), String(reviewRoute.label), signature);
-    const bypassReviewCache = Boolean(meta.failed || reviewHeuristic.safety);
-    const cache = loadCache();
-    if (!bypassReviewCache && cache[rk]) {
-      const cachedParsed = parseReviewPayload(cache[rk], state.lastTask);
-      if (cachedParsed?.verdict === "on_track") {
-        finalDecision = "continue";
-        finalReason = (cachedParsed.reason || cachedParsed.summary || "cached on-track verdict").slice(0, 120);
-        if (hasCleanCloseoutEvidence(delta, meta)) {
-          recordTerminalGreenCloseout(state, ctx, trigger, finalReason);
-        }
-        clearResolvedReviewWarning(state, ctx, finalReason);
-      } else {
-        finalDecision = "defer";
-        finalReason = "cached verdict";
-      }
-      markReviewApplied(state, signature, trigger, finalDecision, finalReason, true);
-      persistReviewState(state, true);
-      finalized = true;
-      return;
-    }
-
-    const msgs = [
-      { role: "user", content: [
-        `Trigger: ${trigger}`,
-        `Task: ${state.lastTask || "(unknown)"}`,
-        `Delta: ${delta || "(none)"}`,
-        `Files: ${meta.fileChanged} Errors: ${meta.failed}`,
-        `Route: ${summarizeRoute(reviewRoute)}`,
-        b ? `Brief:\n${b}` : "",
-        brokerBrief ? `Context broker brief:\n${brokerBrief}` : "",
-      ].join("\n"), timestamp: new Date().toISOString() },
-    ] as any[];
-    const completed = await completeWithModelFallback(ctx, config, REVIEW_SYSTEM, msgs, { maxTokens: 400, reasoning: "low" as ThinkingLevel, maxAttempts: 2 });
-    if (completed?.rateLimited) {
-      recordRateLimit(state, ctx, { reason: completed.text || "advisor rate limit (429)", retryAfterSeconds: completed.retryAfterSeconds });
-      finalDecision = "defer";
-      finalReason = state.rateLimit?.reason || "advisor rate limit";
-      markReviewApplied(state, signature, trigger, finalDecision, finalReason, true);
-      persistReviewState(state, true);
-      finalized = true;
-      return;
-    }
-    const raw = completed?.text;
-    if (!raw) {
-      finalDecision = "defer";
-      finalReason = "empty verdict";
-      markReviewApplied(state, signature, trigger, finalDecision, finalReason, true);
-      persistReviewState(state, true);
-      finalized = true;
-      return;
-    }
-
-    if (!bypassReviewCache) {
-      cache[rk] = raw;
-      saveCache(cache);
-    }
-
-    const parsed = parseReviewPayload(raw, state.lastTask);
-    if (!parsed) {
-      finalDecision = "defer";
-      finalReason = "unparseable verdict";
-      markReviewApplied(state, signature, trigger, finalDecision, finalReason, true);
-      persistReviewState(state, true);
-      finalized = true;
-      return;
-    }
-
-    if (parsed.verdict === "skip") {
-      finalDecision = "defer";
-      finalReason = "explicit skip";
-      markReviewApplied(state, signature, trigger, finalDecision, finalReason, true);
-      persistReviewState(state, true);
-      finalized = true;
-      return;
-    }
-
-    if (parsed.verdict === "on_track") {
-      finalDecision = "continue";
-      finalReason = parsed.reason || parsed.summary || "review result";
-      finalReason = finalReason.slice(0, 120);
-      if (hasCleanCloseoutEvidence(delta, meta)) {
-        recordTerminalGreenCloseout(state, ctx, trigger, finalReason);
-      }
-      clearResolvedReviewWarning(state, ctx, finalReason);
-      markReviewApplied(state, signature, trigger, finalDecision, finalReason, true);
-      persistReviewState(state, true);
-      finalized = true;
-      return;
-    }
-
-    const decision = parsed.verdict === "course_correct" || parsed.verdict === "not_done" ? "review" : "defer";
-    finalDecision = decision;
-    finalReason = (parsed.reason || parsed.summary || "review result").slice(0, 120);
-
-    const display = formatAdvisorDisplay("advisor:llm", decision, finalReason);
-    writeText(advisorCurrentPath(ctx), `${display}\n`);
-
-    const reviewTask = parsed.activeTask || state.lastTask || "";
-    const reviewFamilyHash = advisorLoopFamilyHash(["review", reviewTask, String(meta.isAgentEnd)]);
-    const reviewContextHash = advisorLoopContextHash(["review", trigger, reviewRoute.promptHash ?? "", reviewTask, b, brokerBrief, delta, String(meta.fileChanged), String(meta.failed), String(meta.isAgentEnd)]);
-    const hasTaskActions = parsed.taskActions.length > 0;
-    if (hasTaskActions) {
-      const intendedFollowUp = [sanitizeAdvisorText(parsed.summary), ...parsed.taskActions].filter(Boolean).join(" — ");
-      const hint = sendAdvisorHint(pi, state, reviewFamilyHash, reviewContextHash, decision, finalReason, parsed.summary || "", parsed.taskActions);
-      state.followUp = hint.loopDetected ? hint.text : intendedFollowUp;
-      state.followUpTask = reviewTask;
-    } else {
-      state.followUp = "";
-      state.followUpTask = undefined;
-    }
-
-    const advisoryText = buildAdvisorySignalsBlock(reviewTask, parsed.advisorySignals, parsed.pivot);
-    if (advisoryText) {
-      const advisoryLoop = observeAdvisorLoop(state, "review-signals", reviewFamilyHash, reviewContextHash, advisoryText);
-      state.reviewSignals = [advisoryLoop.text];
-      state.reviewSignalsTask = reviewTask;
-      sendAdvisorAnswer(pi, advisoryLoop.text);
-    } else {
-      state.reviewSignals = [];
-      state.reviewSignalsTask = undefined;
-    }
-
-    markReviewApplied(state, signature, trigger, finalDecision, finalReason, !hasTaskActions);
-    persistReviewState(state, true);
-    finalized = true;
-  } finally {
-    if (!finalized) {
-      markReviewApplied(state, signature, trigger, finalDecision, finalReason, false);
-      persistReviewState(state, true);
-    }
-  }
-  } finally {
-    // Covers early review gates and failures before the review-finalization block.
-    reviewLocks.delete(reviewLockKey);
-  }
+  if (agentEnd && text) state.lastTask = text.slice(0, 500);
+  saveState(state);
 }
 
 // ── Extension entry point ──────────────────────────────────────────────────
@@ -3732,6 +3178,12 @@ export function registerAdvisor(pi: ExtensionAPI): void {
     checkinLocks.delete(key);
     saveState(loadState(ctx));
   });
+  pi.on("turn_end", (event, ctx) => {
+    collectLifecycleEvidence(event, ctx, false);
+  });
+  pi.on("agent_end", (event, ctx) => {
+    collectLifecycleEvidence(event, ctx, true);
+  });
   pi.on("session_shutdown", (_event, ctx) => {
     const key = sessionKey(ctx);
     closedAdvisorSessions.add(key);
@@ -3766,7 +3218,7 @@ export function registerAdvisor(pi: ExtensionAPI): void {
       const text = command === "doctor"
         ? piRogueDoctorText(ctx)
         : command === "help"
-          ? "Pi-Rogue commands:\n/pi-rogue status|help|doctor\n/pi-rogue-advisor status|model <provider>/<model>|board ..."
+          ? "Pi-Rogue commands:\n/pi-rogue status|help|doctor\n/pi-rogue-advisor status|settings|model [advisor|specialist|head] <provider>/<model>|null|board ..."
           : piRogueCockpitText(config, state, "", ctx);
       ctx.ui.notify(text, "info");
     },
@@ -3783,14 +3235,19 @@ export function registerAdvisor(pi: ExtensionAPI): void {
       const state = loadState(ctx);
 
       if (command === "model") {
-        const selected = cleanModelSlot(parts[1]);
-        if (!selected) {
-          ctx.ui.notify("Usage: /pi-rogue-advisor model <provider>/<model>", "error");
+        const first = String(parts[1] ?? "");
+        const slot = first === "advisor" || first === "specialist" || first === "head" ? first : "advisor";
+        const value = slot === "advisor" && first !== "advisor" ? first : String(parts[2] ?? "");
+        const selected = value.trim().toLowerCase() === "null" ? undefined : cleanModelSlot(value);
+        if (!selected && value.trim().toLowerCase() !== "null") {
+          ctx.ui.notify("Usage: /pi-rogue-advisor model [advisor|specialist|head] <provider>/<model>|null", "error");
           return;
         }
-        const next = normalizeAdvisorConfig({ ...cfg, models: { ...cfg.models, advisor: selected } });
-        saveConfig(next);
-        ctx.ui.notify(`Advisor model set to ${selected}. Future explicit calls may use one fallback.`, "info");
+        const models = { ...cfg.models };
+        if (selected) models[slot] = selected;
+        else delete models[slot];
+        saveConfig(normalizeAdvisorConfig({ ...cfg, models }));
+        ctx.ui.notify(`${slot} model ${selected ? `set to ${selected}` : "cleared (auto selection restored)"}.`, "info");
         return;
       }
 

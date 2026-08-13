@@ -22,6 +22,10 @@ export interface HeadOfBoardConfig {
   maxSubagents: number;
   maxTokens: number;
   reasoning: ThinkingLevel;
+  /** Maximum successful Head calls allowed for one session. */
+  maxCallsPerSession?: number;
+  /** Calls already consumed by the current session. */
+  callsUsed?: number;
 }
 
 export interface HeadOfBoardPromptInput {
@@ -67,7 +71,7 @@ export interface HeadOfBoardCompletion {
 }
 
 export interface HeadOfBoardResult {
-  skipped?: "disabled" | "not_material" | "empty_question" | "rate_limited";
+  skipped?: "disabled" | "not_material" | "empty_question" | "rate_limited" | "budget";
   request?: HeadOfBoardRequest;
   response?: HeadOfBoardCompletion;
   accounting: {
@@ -92,6 +96,8 @@ export function defaultHeadOfBoardConfig(): HeadOfBoardConfig {
     maxSubagents: 6,
     maxTokens: 1200,
     reasoning: "medium",
+    maxCallsPerSession: 1,
+    callsUsed: 0,
   };
 }
 
@@ -109,8 +115,10 @@ export function normalizeHeadOfBoardConfig(raw: unknown): HeadOfBoardConfig {
     maxRisks: bounded(record.maxRisks, defaults.maxRisks, 1, 16),
     maxFailures: bounded(record.maxFailures, defaults.maxFailures, 0, 12),
     maxSubagents: bounded(record.maxSubagents, defaults.maxSubagents, 0, 12),
-    maxTokens: bounded(record.maxTokens, defaults.maxTokens, 300, 4000),
+    maxTokens: bounded(record.maxTokens, defaults.maxTokens, 100, 1200),
     reasoning: record.reasoning === "low" || record.reasoning === "medium" || record.reasoning === "high" ? record.reasoning : defaults.reasoning,
+    maxCallsPerSession: bounded(record.maxCallsPerSession, defaults.maxCallsPerSession ?? 1, 1, 1),
+    callsUsed: bounded(record.callsUsed, defaults.callsUsed ?? 0, 0, 1),
   };
 }
 
@@ -291,6 +299,7 @@ export function buildHeadOfBoardRequest(input: HeadOfBoardPromptInput, config: H
 export async function callHeadOfBoardAdapter(config: HeadOfBoardConfig, input: HeadOfBoardPromptInput, complete: HeadOfBoardComplete): Promise<HeadOfBoardResult> {
   if (config.mode !== "enabled") return { skipped: "disabled", accounting: { headOfBoardCalls: 0, navigatorCalls: 0 } };
   if (!input.question.trim()) return { skipped: "empty_question", accounting: { headOfBoardCalls: 0, navigatorCalls: 0 } };
+  if ((config.callsUsed ?? 0) >= (config.maxCallsPerSession ?? 1)) return { skipped: "budget", accounting: { headOfBoardCalls: 0, navigatorCalls: 0 } };
   if (!shouldEscalateToHeadOfBoard(config, input)) return { skipped: "not_material", accounting: { headOfBoardCalls: 0, navigatorCalls: 0 } };
   const request = buildHeadOfBoardRequest(input, config);
   const response = await complete(request.systemPrompt, request.messages, { maxTokens: config.maxTokens, reasoning: config.reasoning }) ?? undefined;
