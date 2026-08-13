@@ -9,6 +9,7 @@ describe("contextBrokerFeatureStatus", () => {
     expect(contextBrokerFeatureStatus({ enabled: true, registered: true, durable: true, backend: "sqlite" })).toMatchObject({ health: "ready", mode: "sqlite" });
     expect(contextBrokerFeatureStatus({ enabled: true, registered: true, durable: false, backend: "memory(degraded)" })).toMatchObject({ health: "degraded", summary: "context broker is degraded" });
     expect(contextBrokerFeatureStatus({ enabled: true, registered: true, backend: "/private/user/secret" }).health).toBe("error");
+    expect(contextBrokerFeatureStatus({ enabled: true, registered: "yes" as never, backend: "memory" }).health).toBe("error");
   });
 
   it("serializes only bounded status metadata", () => {
