@@ -169,6 +169,7 @@ export function evaluateHarmonizationGate(rows: readonly GateEvalRow[], sourceKi
   const safety = metricsFor(safetyRows);
   const failure = metricsFor(validated.filter((row) => row.failureClass !== "none"));
   const pairedRegressions = validated.filter((row) => row.baselineOutcome === "accepted" && row.gateOutcome !== "accepted").length;
+  const gateRegressions = validated.filter((row) => row.gateOutcome === "regressed").length;
   const all = metricsFor(validated);
   let recommendation: GateEvalReport["recommendation"] = "hold";
   let recommendationReason = "synthetic or insufficient evidence; do not promote runtime policy";
@@ -185,7 +186,7 @@ export function evaluateHarmonizationGate(rows: readonly GateEvalRow[], sourceKi
     } else if (validated.length < 30 || !phaseCoverage || !taskCoverage || safety.rows === 0 || failure.rows === 0 || hasUnknownOutcome) {
       recommendation = "hold";
       recommendationReason = "insufficient real replay evidence: require 30 rows, every phase/task/failure guard slice, and known outcomes";
-    } else if (all.accuracy < 0.87 || all.accuracy < all.baselineAccuracy || all.falseEscalations > 0 || pairedRegressions > 0 || all.gateLatencyMs > all.baselineLatencyMs * 1.2) {
+    } else if (all.accuracy < 0.87 || all.accuracy < all.baselineAccuracy || all.falseEscalations > 0 || pairedRegressions > 0 || gateRegressions > 0 || failure.gateAcceptedRate + 0.05 < failure.baselineAcceptedRate || all.gateLatencyMs > all.baselineLatencyMs * 1.2) {
       recommendation = "hold";
       recommendationReason = "gate regresses decision quality, paired outcomes, or latency against baseline";
     } else if (all.gateAcceptedRate + 0.05 < all.baselineAcceptedRate || all.gateAdvisorCalls > all.baselineAdvisorCalls || all.gateHostedTokens > all.baselineHostedTokens) {
