@@ -45,7 +45,8 @@
     "budget-board:smoke": "tsx scripts/smoke-budget-board-profile.ts",
     "harmonization:measure": "tsx scripts/harmonization-measurement.ts",
     "harmonization:evidence": "tsx scripts/harmonization-evidence.ts",
-    "harmonization:status": "tsx scripts/harmonization-status.ts"
+    "harmonization:status": "tsx scripts/harmonization-status.ts",
+    "harmonization:gate-eval": "tsx scripts/harmonization-gate-eval.ts"
   },
   "engines": {
     "node": ">=22.19.0"
