@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { routerEventsPath } from "@fiale-plus/pi-rogue-router";
+import { sessionFile } from "./internal.js";
 import { readWorkerState } from "./worker.js";
 import { classifyWorkerOutcome, recordWorkerRequest, recordWorkerResult } from "./worker-telemetry.js";
 
@@ -102,7 +102,7 @@ export async function dispatchWorker(
   }
 
   const telemetry = options?.telemetry;
-  const ledgerPath = telemetry?.ledgerPath ?? routerEventsPath(ctx);
+  const ledgerPath = telemetry?.ledgerPath ?? sessionFile("orchestration", ctx, "worker-events.jsonl");
   let telemetryRecorded = false;
   if (telemetry) {
     try {
