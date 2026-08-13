@@ -100,6 +100,7 @@ export async function dispatchWorker(
   if (!events || typeof events.emit !== "function" || typeof events.on !== "function") {
     throw new Error("The pi-subagents RPC bridge is unavailable in this session.");
   }
+  if (signal?.aborted) throw new Error("Worker dispatch cancelled");
 
   const telemetry = options?.telemetry;
   const ledgerPath = telemetry?.ledgerPath ?? sessionFile("orchestration", ctx, "worker-events.jsonl");
@@ -179,12 +180,14 @@ export async function dispatchWorker(
         const status = String(detailValue(statusDetails, "state") ?? detailValue(statusDetails, "status") ?? "").toLowerCase();
         if (TERMINAL_STATES.has(status)) {
           const cancelled = status === "cancelled";
-          const abandoned = status === "stopped" || status === "interrupted";
+          const abandoned = status === "stopped" || status === "interrupted" || status === "paused";
           const failed = status === "failed";
+          const endpointFailure = detailValue(statusDetails, "endpointFailure") === true;
+          const modelMismatch = detailValue(statusDetails, "modelMismatch") === true;
           const budget = budgetMetadata(statusDetails);
           finish(
             () => resolve({ requestId, runId, asyncDir, text: typeof data.text === "string" ? data.text : "", details: statusDetails }),
-            classifyWorkerOutcome({ hasError: failed, cancelled, abandoned, hasOutput: !failed && !cancelled && !abandoned, ...budget }),
+            classifyWorkerOutcome({ hasError: failed, cancelled, abandoned, endpointFailure, modelMismatch, hasOutput: !failed && !cancelled && !abandoned, ...budget }),
             typeof data.text === "string" ? data.text : status,
             budget,
           );
