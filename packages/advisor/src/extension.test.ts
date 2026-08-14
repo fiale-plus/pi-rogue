@@ -1,7 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
+import { readFileSync } from "node:fs";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { completeSimple } from "@earendil-works/pi-ai/compat";
-import { normalizeAdvisorConfig, registerAdvisor, resolveModelCandidates, type AdvisorConfig } from "./extension.js";
+import { advisorSessionStatePath, normalizeAdvisorConfig, registerAdvisor, resolveModelCandidates, type AdvisorConfig } from "./extension.js";
 
 vi.mock("@earendil-works/pi-ai/compat", async () => {
   const actual = await vi.importActual<typeof import("@earendil-works/pi-ai/compat")>("@earendil-works/pi-ai/compat");
@@ -85,7 +86,6 @@ describe("Advisor PR1 bounded model resolution", () => {
     expect(attempted).toEqual(["openai-codex/gpt-5.5"]);
   });
 });
-
 describe("Advisor PR1 lifecycle", () => {
   it("registers data-only lifecycle collectors without model work", () => {
     const events: string[] = [];
@@ -99,6 +99,53 @@ describe("Advisor PR1 lifecycle", () => {
     expect(events).toEqual(["session_start", "turn_end", "agent_end", "session_shutdown"]);
     expect(events).not.toContain("before_agent_start");
     expect(vi.mocked(completeSimple)).not.toHaveBeenCalled();
+  });
+
+  it("collects fresh-session changed-file and failure evidence without prompt or model work", () => {
+    const handlers = new Map<string, (event: unknown, ctx: any) => void>();
+    const pi = {
+      on: (event: string, handler: (event: unknown, ctx: any) => void) => { handlers.set(event, handler); },
+      registerMessageRenderer: vi.fn(),
+      registerTool: vi.fn(),
+      registerCommand: vi.fn(),
+    } as unknown as ExtensionAPI;
+    registerAdvisor(pi);
+    const ctx = { session: { id: `advisor-evidence-${Date.now()}-${Math.random()}` }, cwd: process.cwd(), ui: { setStatus: vi.fn() } };
+    handlers.get("session_start")?.({}, ctx);
+    handlers.get("turn_end")?.({
+      turnIndex: 0,
+      toolResults: [
+        { toolName: "edit", input: { path: "packages/advisor/src/changed.ts" }, status: "success" },
+        { toolName: "bash", input: { command: "npm test" }, status: "error", error: "failure with SECRET=do-not-persist" },
+      ],
+    }, ctx);
+    const state = JSON.parse(readFileSync(advisorSessionStatePath(ctx), "utf8"));
+    expect(state.turns).toBe(1);
+    expect(state.boardEvents).toEqual(expect.arrayContaining([
+      expect.objectContaining({ type: "file_changed", path: "packages/advisor/src/changed.ts", turn: 1 }),
+      expect.objectContaining({ type: "tool_failure", tool: "bash", message: expect.not.stringContaining("SECRET=do-not-persist"), turn: 1 }),
+    ]));
+    expect(state.boardEvents.length).toBeLessThanOrEqual(64);
+    expect(vi.mocked(completeSimple)).not.toHaveBeenCalled();
+  });
+
+  it("increments turns on turn_end only, keeping cooldown turn accounting stable", () => {
+    const handlers = new Map<string, (event: unknown, ctx: any) => void>();
+    const pi = {
+      on: (event: string, handler: (event: unknown, ctx: any) => void) => { handlers.set(event, handler); },
+      registerMessageRenderer: vi.fn(),
+      registerTool: vi.fn(),
+      registerCommand: vi.fn(),
+    } as unknown as ExtensionAPI;
+    registerAdvisor(pi);
+    const ctx = { session: { id: `advisor-turns-${Date.now()}-${Math.random()}` }, cwd: process.cwd(), ui: { setStatus: vi.fn() } };
+    handlers.get("session_start")?.({}, ctx);
+    handlers.get("turn_end")?.({ turnIndex: 2, toolResults: [] }, ctx);
+    handlers.get("agent_end")?.({ turnIndex: 2, toolResults: [] }, ctx);
+    handlers.get("agent_end")?.({ turnIndex: 2, toolResults: [] }, ctx);
+    handlers.get("turn_end")?.({ turnIndex: 3, toolResults: [] }, ctx);
+    const state = JSON.parse(readFileSync(advisorSessionStatePath(ctx), "utf8"));
+    expect(state.turns).toBe(4);
   });
 });
 

@@ -27,9 +27,8 @@ import {
 } from "./router.js";
 import { type TrajectoryFeatures } from "./binary-gate-eval.js";
 import { classifyIntent, classifyMode } from "./preflight-signals.js";
-import { findMissingArtifactReferences } from "./artifact-preflight.js";
 import { findMissingReviewArtifacts } from "./review-preflight.js";
-import { buildBoardLedger, decideBoardAction } from "./board.js";
+import { buildBoardLedger, decideBoardAction, type BoardEvent } from "./board.js";
 import {
   callHeadOfBoardAdapter,
   defaultHeadOfBoardConfig,
@@ -114,6 +113,7 @@ const MAX_NOTES = 12;
 const MAX_FILES = 8;
 const MAX_ERRORS = 5;
 const MAX_EVIDENCE = 32;
+const MAX_BOARD_EVENTS = 64;
 const DEFAULT_RATE_LIMIT_BACKOFF_SECONDS = 15 * 60;
 const STATE_VERSION = 1;
 /** Maximum wall-clock time for one advisor model-resolution/completion work item. */
@@ -181,6 +181,7 @@ interface SessionState {
   };
   reviewControl: ReviewControlState;
   evidenceLedger: EvidenceLedgerEntry[];
+  boardEvents: BoardLifecycleEvent[];
   workflow?: WorkflowState;
   rateLimit?: AdvisorRateLimitState;
   advisorLoop?: AdvisorLoopState;
@@ -198,6 +199,7 @@ interface SessionState {
   };
   advisorPauseUntilTurn?: number;
 }
+type BoardLifecycleEvent = Extract<BoardEvent, { type: "file_changed" | "tool_failure" }>;
 
 type EvidenceKind = "validation" | "merge";
 type EvidenceResult = "pass" | "fail" | "merged" | "not_merged" | "error";
@@ -210,6 +212,7 @@ type EvidenceLedgerEntry = {
   result: EvidenceResult;
   timestamp: string;
   exitCode?: number;
+  turn?: number;
   pr?: number;
   details?: string;
 };
@@ -258,6 +261,7 @@ function defaultState(): SessionState {
     checkin: { queued: false },
     reviewControl: defaultReviewControl(),
     evidenceLedger: [],
+    boardEvents: [],
     workflow: {},
     advisorLoop: defaultAdvisorLoopState(),
     headOfBoard: { calls: 0 },
@@ -373,12 +377,46 @@ function normalizeEvidenceLedger(raw: unknown): EvidenceLedgerEntry[] {
       timestamp,
       source,
       sha: typeof obj.sha === "string" && obj.sha ? obj.sha : undefined,
-      command: typeof obj.command === "string" && obj.command ? obj.command : undefined,
+      turn: Number.isFinite(Number((obj as { turn?: unknown }).turn)) ? Math.max(0, Math.floor(Number((obj as { turn?: unknown }).turn))) : undefined,
       exitCode: Number.isFinite(exitCode) ? exitCode : undefined,
       pr: Number.isFinite(pr) ? pr : undefined,
       details: typeof obj.details === "string" && obj.details ? obj.details : undefined,
     }];
   }).slice(-MAX_EVIDENCE);
+}
+
+function boardEvidenceText(value: unknown, max = 300): string {
+  return squish(sanitizeDiagnosticValue(value), max);
+}
+
+function normalizeBoardEvents(raw: unknown): BoardLifecycleEvent[] {
+  if (!Array.isArray(raw)) return [];
+  return raw.flatMap((entry): BoardLifecycleEvent[] => {
+    if (!entry || typeof entry !== "object") return [];
+    const obj = entry as Record<string, unknown>;
+    const turn = Number(obj.turn);
+    const timestamp = typeof obj.timestamp === "string" && obj.timestamp ? boardEvidenceText(obj.timestamp, 80) : undefined;
+    if (obj.type === "file_changed") {
+      const path = boardEvidenceText(obj.path, 240);
+      if (!path) return [];
+      return [{ type: "file_changed", path, turn: Number.isFinite(turn) ? Math.max(0, Math.floor(turn)) : undefined, timestamp }];
+    }
+    if (obj.type === "tool_failure") {
+      const tool = boardEvidenceText(obj.tool, 80);
+      const key = boardEvidenceText(obj.key, 120);
+      if (!tool || !key) return [];
+      const message = boardEvidenceText(obj.message, 300);
+      return [{
+        type: "tool_failure",
+        tool,
+        key,
+        message: message || undefined,
+        turn: Number.isFinite(turn) ? Math.max(0, Math.floor(turn)) : undefined,
+        timestamp,
+      }];
+    }
+    return [];
+  }).slice(-MAX_BOARD_EVENTS);
 }
 
 function normalizeWorkflowState(raw: unknown): WorkflowState {
@@ -473,6 +511,7 @@ function loadStateFromPath(path: string): SessionState {
       terminalEvidence: normalizeTerminalEvidence((control as { terminalEvidence?: unknown } | undefined)?.terminalEvidence),
     },
     evidenceLedger: normalizeEvidenceLedger(raw.evidenceLedger),
+    boardEvents: normalizeBoardEvents(raw.boardEvents),
     workflow: normalizeWorkflowState(raw.workflow),
     rateLimit: normalizeRateLimitState(raw.rateLimit),
     advisorLoop: raw.advisorLoop && typeof raw.advisorLoop === "object" ? {
@@ -528,18 +567,21 @@ function headOfBoardStatusText(_cfg: AdvisorConfig, state: SessionState): string
   ].filter(Boolean).join("\n");
 }
 
-function currentBoardLedger(ctx: any, state: SessionState) {
-  const events = [
-    { type: "session" as const, id: sessionKey(ctx), worktree: String(ctx?.cwd || "") },
-    ...state.evidenceLedger.map((entry, index) => ({
-      type: "validation" as const,
-      command: entry.command ?? entry.source,
-      exitCode: entry.exitCode ?? (entry.result === "pass" || entry.result === "merged" ? 0 : 1),
-      status: (entry.result === "pass" || entry.result === "merged" ? "green" : "red") as "green" | "red",
-      turn: index + 1,
-      timestamp: entry.timestamp,
-      terminal: Boolean(state.workflow?.terminal),
-    })),
+export function currentBoardLedger(ctx: any, state: SessionState) {
+  const validationEvents: BoardEvent[] = state.evidenceLedger.map((entry, index) => ({
+    type: "validation",
+    command: entry.command ?? entry.source,
+    exitCode: entry.exitCode ?? (entry.result === "pass" || entry.result === "merged" ? 0 : 1),
+    status: (entry.result === "pass" || entry.result === "merged" ? "green" : "red") as "green" | "red",
+    turn: entry.turn ?? index + 1,
+    timestamp: entry.timestamp,
+    terminal: Boolean(state.workflow?.terminal),
+  }));
+  const events: BoardEvent[] = [
+    { type: "session", id: sessionKey(ctx), worktree: String(ctx?.cwd || "") },
+    ...(state.turns > 0 ? [{ type: "turn" as const, turn: state.turns }] : []),
+    ...state.boardEvents,
+    ...validationEvents,
   ];
   return buildBoardLedger(events);
 }
@@ -1173,7 +1215,7 @@ function observeWorkflowEvidence(state: SessionState, ctx: any, source: string, 
     if (looksLikeValidationCommand(command, output)) {
       const result = structuredValidationResult(tool);
       if (result) {
-        appendEvidence(state, { kind: "validation", sha, command, source, result, timestamp, exitCode, details: squish(output, 300) }, ctx, { clearResolved: clearValidationResolved });
+        appendEvidence(state, { kind: "validation", sha, command, source, result, timestamp, turn: state.turns, exitCode, details: squish(output, 300) }, ctx, { clearResolved: clearValidationResolved });
       }
     }
 
@@ -1189,13 +1231,14 @@ function observeWorkflowEvidence(state: SessionState, ctx: any, source: string, 
           source,
           result: prState.state === "MERGED" ? "merged" : "not_merged",
           timestamp,
+          turn: state.turns,
           exitCode,
           pr,
           details: prState.mergeCommit ? `mergeCommit=${prState.mergeCommit}` : prState.state,
         }, ctx);
       } else if (/\bgh\s+pr\s+merge\b/i.test(mergeText)) {
         const localResult: EvidenceResult = exitCode === 0 ? "not_merged" : "error";
-        appendEvidence(state, { kind: "merge", sha, command, source, result: localResult, timestamp, exitCode, pr, details: squish(output, 300) }, ctx);
+        appendEvidence(state, { kind: "merge", sha, command, source, result: localResult, timestamp, turn: state.turns, exitCode, pr, details: squish(output, 300) }, ctx);
         const shouldRecheck = localResult === "not_merged" || localMergeWorktreeError(output);
         if (shouldRecheck) {
           const remote = recheckRemotePrState(ctx, pr);
@@ -1207,6 +1250,7 @@ function observeWorkflowEvidence(state: SessionState, ctx: any, source: string, 
               source: "remote_pr_recheck",
               result: remote.state === "MERGED" ? "merged" : "not_merged",
               timestamp: new Date().toISOString(),
+              turn: state.turns,
               pr,
               details: remote.mergeCommit ? `mergeCommit=${remote.mergeCommit}` : remote.state,
             }, ctx);
@@ -1752,6 +1796,7 @@ function persistReviewState(state: SessionState, includeReviewRoute: boolean): v
   persisted.reviewSignalsTask = state.reviewSignalsTask;
   persisted.advisorPauseUntilTurn = state.advisorPauseUntilTurn;
   persisted.evidenceLedger = state.evidenceLedger;
+  persisted.boardEvents = state.boardEvents;
   persisted.workflow = state.workflow;
   persisted.rateLimit = state.rateLimit;
   if (includeReviewRoute && state.router.review) {
@@ -3102,17 +3147,68 @@ async function askAdvisor(pi: ExtensionAPI, ctx: any, question: string, scope: s
 }
 
 
+function nestedToolValue(tool: unknown, keys: string[]): unknown {
+  if (!tool || typeof tool !== "object") return undefined;
+  let value: unknown = tool;
+  for (const key of keys) {
+    if (!value || typeof value !== "object" || !(key in value)) return undefined;
+    const record = value as Record<string, unknown>;
+    value = record[key];
+  }
+  return value;
+}
+
+function lifecycleChangedFiles(tool: unknown): string[] {
+  const values: unknown[] = [
+    nestedToolValue(tool, ["path"]),
+    nestedToolValue(tool, ["file"]),
+    nestedToolValue(tool, ["input", "path"]),
+    nestedToolValue(tool, ["args", "path"]),
+    nestedToolValue(tool, ["details", "path"]),
+    nestedToolValue(tool, ["result", "path"]),
+    nestedToolValue(tool, ["changedFiles"]),
+    nestedToolValue(tool, ["files"]),
+    nestedToolValue(tool, ["result", "changedFiles"]),
+  ];
+  const command = toolCommand(tool);
+  const mutation = /\b(?:edit|write|patch|apply_patch|create|delete|remove|move|rename|mkdir|touch|cp|mv|rm)\b/i.test(command ?? "");
+  if (mutation) values.push(toolEvidenceText(tool).match(/(?:created|updated|modified|edited|wrote|written|removed|deleted)\s+(?:file\s+)?[`"']?([./A-Za-z0-9_@-]+(?:\/[./A-Za-z0-9_@-]+)*)/gi)?.map((item) => item.replace(/^[^`"']*[`"']/, "").trim()));
+  return [...new Set(values.flatMap((value) => Array.isArray(value) ? value : [value]).map((value) => boardEvidenceText(value, 240)).filter(Boolean))];
+}
+
+function lifecycleFailureEvent(tool: unknown, turn: number, timestamp: string): BoardLifecycleEvent | undefined {
+  if (!toolOverallFailed(tool)) return undefined;
+  const command = toolCommand(tool) ?? "tool";
+  const toolName = boardEvidenceText(nestedToolValue(tool, ["toolName"]) ?? nestedToolValue(tool, ["name"]) ?? command.split(/\s+/, 1)[0], 80) || "tool";
+  const key = boardEvidenceText(nestedToolValue(tool, ["errorCode"]) ?? nestedToolValue(tool, ["details", "errorCode"]) ?? command, 120) || "failure";
+  const message = boardEvidenceText(toolEvidenceText(tool), 300);
+  return { type: "tool_failure", tool: toolName, key, message: message || undefined, turn, timestamp };
+}
+
+function collectLifecycleBoardEvents(state: SessionState, toolResults: unknown[], turn: number, timestamp: string): void {
+  const events: BoardLifecycleEvent[] = [];
+  for (const tool of toolResults) {
+    for (const path of lifecycleChangedFiles(tool)) events.push({ type: "file_changed", path, turn, timestamp });
+    const failure = lifecycleFailureEvent(tool, turn, timestamp);
+    if (failure) events.push(failure);
+  }
+  state.boardEvents = [...state.boardEvents, ...events].slice(-MAX_BOARD_EVENTS);
+}
+
 function collectLifecycleEvidence(event: unknown, ctx: any, agentEnd: boolean): void {
   const state = loadState(ctx);
   const record = event && typeof event === "object" ? event as Record<string, unknown> : {};
   const turnIndex = Number(record.turnIndex);
-  state.turns = Math.max(state.turns + 1, Number.isFinite(turnIndex) ? Math.floor(turnIndex) + 1 : 0);
+  if (!agentEnd) state.turns = Math.max(state.turns + 1, Number.isFinite(turnIndex) ? Math.floor(turnIndex) + 1 : 0);
   const message = record.message && typeof record.message === "object" ? record.message as Record<string, unknown> : undefined;
   const text = noteText(message?.content ?? record.messages ?? "");
   if (text) state.notes = [...state.notes, text].slice(-MAX_NOTES);
   const toolResults = Array.isArray(record.toolResults) ? record.toolResults : [];
+  const timestamp = new Date().toISOString();
+  collectLifecycleBoardEvents(state, toolResults, state.turns, timestamp);
+  observeWorkflowEvidence(state, ctx, agentEnd ? "agent_end" : "turn_end", toolResults, text);
   for (const result of toolResults) {
-    const summary = noteText(result);
+    const summary = boardEvidenceText(toolEvidenceText(result), 500);
     if (summary && /error|fail|exception/i.test(summary)) state.errors = [...state.errors, summary].slice(-MAX_ERRORS);
   }
   if (agentEnd && text) state.lastTask = text.slice(0, 500);
