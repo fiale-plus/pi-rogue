@@ -1,15 +1,6 @@
 # @fiale-plus/pi-rogue
 
-`@fiale-plus/pi-rogue` is the single public Pi extension for Pi-Rogue.
-
-It keeps the controller-facing runtime in one installable artefact and provides four focused capabilities:
-
-- **Context** — bounded, durable context artifacts and lookup handles;
-- **Advisor** — explicit strategic advice plus bounded review/check-in controls;
-- **Router** — offline route telemetry and opt-in model-routing policy;
-- **Orchestration** — explicit goals, loops, and controlled research workflows.
-
-Internal implementation modules are bundled into this package. They are not separate user-facing products or independent release tracks.
+`@fiale-plus/pi-rogue` is the **single consolidated public artifact** for Pi-Rogue. It bundles the shared `@fiale-plus/pi-core` helpers and the internal `@fiale-plus/pi-rogue-advisor` extension. Direct leaf-package releases remain paused; users install this artifact.
 
 ## Install
 
@@ -17,7 +8,7 @@ Internal implementation modules are bundled into this package. They are not sepa
 pi install npm:@fiale-plus/pi-rogue
 ```
 
-Requires `@earendil-works/pi-coding-agent >=0.80.6 <0.81.0` and Node.js `>=22.19.0`. The Node floor supports the default durable context backend, which uses built-in `node:sqlite`.
+Requires `@earendil-works/pi-coding-agent >=0.80.6 <0.81.0` and Node.js `>=22.19.0`.
 
 For local monorepo development:
 
@@ -25,66 +16,63 @@ For local monorepo development:
 npm install
 ```
 
-The supported runtime surface is Pi's TypeScript package loader. The `.ts` entrypoints are intended for Pi extensions, not as a generic plain-Node JavaScript or declaration-library contract.
+The published artifact is loaded through Pi's TypeScript package loader. Its `.ts` entrypoint is not a generic plain-Node JavaScript/declaration contract; Pi loads the extension and bundled Advisor skill through the package metadata.
 
-## Default boundaries
+## Supported surface
 
-- The context broker is registered by default and can be disabled with `PI_CONTEXT_BROKER_ENABLED=false`.
-- Context artifacts use durable SQLite/FTS storage by default under `~/.pi/agent/pi-rogue/context-broker`.
-- Context storage can be changed explicitly with `PI_CONTEXT_BROKER_DURABLE`, `PI_CONTEXT_BROKER_STORE_DIR`, and `PI_CONTEXT_BROKER_BACKEND`.
-- Advisor and orchestration remain controller-owned; they do not replace the active Pi model.
-- Router defaults to observation and does not mutate model policy unless explicitly enabled.
-- Goals, loops, and research runs are explicit operations; there is no hidden background execution by default.
+The bundle registers only these command roots:
 
-## Command surface
+1. `/pi-rogue` — `status`, `help`, and `doctor`.
+2. `/pi-rogue-advisor` — explicit Advisor and Board status, model selection, specialist calls, Head-of-Board calls, and one-shot questions.
 
-The bundle registers these commands:
+The `advisor` tool is also explicit. Registering the bundle does not start model work.
 
-1. `/pi-rogue` — management cockpit (`status|help|doctor`);
-2. `/pi-rogue-advisor` — strategic advisor controls and one-shot questions;
-3. `/pi-rogue-router` — route telemetry and explicit routing controls;
-4. `/pi-rogue-orchestration` — goals, loops, and research controls;
-5. `/pi-rogue-context` — bounded context status, lookup, export, and maintenance.
-
-Use `/pi-rogue status` for the aggregate view. Use `/pi-rogue doctor` for setup diagnostics.
-
-## Context broker
-
-The context broker stores large tool results as bounded artifacts and exposes lookup handles such as `ctx://...` instead of reinserting full payloads into every prompt.
-
-Useful commands include:
+### Advisor and Board commands
 
 ```text
-/pi-rogue-context status
-/pi-rogue-context brief
-/pi-rogue-context lookup <handle-or-text>
-/pi-rogue-context config threshold <bytes>
-/pi-rogue-context prune
+/pi-rogue-advisor status
+/pi-rogue-advisor settings
+/pi-rogue-advisor model [advisor|specialist|head] <provider>/<model>|null
+/pi-rogue-advisor board specialist status
+/pi-rogue-advisor board specialist suggest
+/pi-rogue-advisor board specialist ask <role-id> <task>
+/pi-rogue-advisor board head status
+/pi-rogue-advisor board head ask <decision question>
+/pi-rogue-advisor <question>
 ```
 
-The legacy `/context` command alias is not registered.
+The built-in specialist roles are `reviewer`, `security`, `architecture`, `debugger`, and `reliability-perf`. They use read/search-only tools, compact sanitized ledger input, and suggest-only output. Head-of-Board receives the compact Board ledger, is read-only, and is bounded by token, time, and call limits. Neither role can edit files, execute commands, dispatch another role, or change Pi state.
 
-## Advisor and router
+## Model map and bounds
 
-The advisor is explicit about its role: the hosted/controller model remains responsible for planning, consequential decisions, and final review. Use `/pi-rogue-advisor status` and `/pi-rogue-advisor settings` to inspect the current policy.
+Advisor configuration keeps three independent model slots:
 
-The router is an offline telemetry and policy layer:
-
-```text
-/pi-rogue-router status
-/pi-rogue-router mode observe
-/pi-rogue-router models
-/pi-rogue-router profiles
+```json
+{
+  "models": {
+    "advisor": null,
+    "specialist": null,
+    "head": null
+  },
+  "board": {
+    "specialists": "suggest",
+    "maxSpecialistCalls": 3,
+    "specialistMaxTokens": 900,
+    "headMaxTokens": 1200
+  }
+}
 ```
 
-`observe` is the safe default. Any model-switching behavior must be enabled explicitly and remains bounded by the configured policy.
+`null` means bounded role-appropriate selection from compatible text models. Explicit values override discovery. Advisor and Head prefer the strongest compatible candidate; specialists prefer the cheapest compatible candidate. Resolution stops after the explicit model and at most one preferred fallback. It never scans an unbounded provider list and never changes Pi's global active model.
 
-## Orchestration
+## Zero-background-call guarantee
 
-Orchestration owns explicit goals, loops, and research lifecycle controls. It does not silently start work or replace the controller. Future execution-worker delegation remains opt-in and parent-reviewed.
+The bundle has no automatic review, preflight, check-in, router, model-switch, prompt-rewrite, context-storage, panel/fusion, orchestration, loop, or worker behavior. Normal Pi lifecycle events make zero Pi-Rogue model calls. A model call occurs only after the user explicitly invokes the Advisor tool or command, a specialist `ask`, or a Head `ask`. Explicit failures are visible and fail closed; no result silently retries, suppresses the user's task, or triggers another call.
 
-## Release policy
+## Release status
 
-Only `@fiale-plus/pi-rogue` is a public Pi-Rogue release artefact. Internal modules ship through this package; legacy package names remain deprecated migration tracks.
+- **Published:** yes, as the single public artifact.
+- **Direct Advisor package releases:** paused; the leaf package is internal and bundled here.
+- **Legacy package names:** retained only as deprecation/tombstone tracks where applicable.
 
-Release tags use `pi-rogue-<semver>`. The published tarball is smoke-tested through the supported Pi host before publication.
+Only `pi-rogue-<semver>` tags and releases are produced. See [`docs/release.md`](../../docs/release.md) for the canonical policy and packed smoke verification.

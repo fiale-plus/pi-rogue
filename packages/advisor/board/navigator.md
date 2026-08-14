@@ -5,7 +5,7 @@ version: 1
 enabledByDefault: true
 callableBy: [user, codriver]
 costTier: free
-allowedTools: [read, context_lookup]
+allowedTools: [read]
 outputSchema: boardNavigation.v1
 triggerHints: [stale, validation, progress, escalation]
 maxTokens: 800

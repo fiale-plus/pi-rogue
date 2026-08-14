@@ -144,8 +144,9 @@ The design specification is already committed on the base branch at `docs/superp
 npm install
 npm run check
 npm test
-node scripts/test-packed-minimum-node.mjs
+npm run test:packed-min-node
 ```
+
 
 Focused checks during PR 1:
 

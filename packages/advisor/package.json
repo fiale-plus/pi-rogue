@@ -1,7 +1,7 @@
 {
   "name": "@fiale-plus/pi-rogue-advisor",
   "version": "0.1.5",
-  "description": "Pi-Rogue advisor extension logic for Pi. Releases are paused; install the canonical @fiale-plus/pi-rogue package.",
+  "description": "Internal Pi-Rogue Advisor and read-only Board extension; direct releases are paused.",
   "private": true,
   "type": "module",
   "license": "MIT",

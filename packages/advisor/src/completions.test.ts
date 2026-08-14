@@ -9,17 +9,15 @@ describe("advisor completions", () => {
     expect(values).toEqual(["status", "settings", "model", "board"]);
   });
 
-  it("keeps canonical README, skill, UX, and AGENTS guidance aligned", () => {
+  it("keeps the canonical README and agent guidance aligned", () => {
     const root = process.cwd();
     const readme = readFileSync(join(root, "packages/advisor/README.md"), "utf8");
-    const skill = readFileSync(join(root, "packages/advisor/skills/advisor/SKILL.md"), "utf8");
-    const ux = readFileSync(join(root, "docs/pi-rogue-config-ux.md"), "utf8");
     const agents = readFileSync(join(root, "AGENTS.md"), "utf8");
     for (const leaf of ADVISOR_CANONICAL_CONTROL_LEAVES) {
       expect(readme, `README: ${leaf}`).toContain(`/pi-rogue-advisor ${leaf}`);
-      expect(skill, `skill: ${leaf}`).toContain(`/pi-rogue-advisor ${leaf}`);
-      expect(ux, `UX matrix: ${leaf}`).toContain(`\`${leaf}\``);
     }
+    expect(readme).toContain("/pi-rogue-advisor board specialist ask");
+    expect(readme).toContain("/pi-rogue-advisor board head ask");
     expect(agents).toContain("/pi-rogue-advisor");
     expect(agents).not.toMatch(/`\/advisor(?:\s|`)/);
   });
@@ -40,11 +38,9 @@ describe("pi-rogue cockpit completions", () => {
   it("offers only concise root management commands", () => {
     const values = piRogueArgumentCompletions("")?.map((i) => i.value);
     expect(values).toEqual(["status", "help", "doctor"]);
-    expect(values).not.toEqual(expect.arrayContaining(["config", "advisor", "router", "orchestration"]));
   });
 
   it("does not fan out subsystem or deprecated configure choices", () => {
     expect(piRogueArgumentCompletions("configure ")).toBeNull();
-    expect(piRogueArgumentCompletions("router ")).toBeNull();
   });
 });

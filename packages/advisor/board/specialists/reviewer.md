@@ -5,7 +5,7 @@ version: 1
 enabledByDefault: true
 callableBy: [codriver, navigator, head-of-board]
 costTier: cheap
-allowedTools: [read, search, context_lookup]
+allowedTools: [read, search]
 outputSchema: boardFinding.v1
 triggerHints: [test, validation, regression, coverage, review, lint]
 maxTokens: 900

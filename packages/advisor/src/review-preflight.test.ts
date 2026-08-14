@@ -21,7 +21,7 @@ describe("review preflight", () => {
   });
 
   it("does not treat URL paths or relative-path suffixes as local review artifacts", () => {
-    const refs = extractReviewArtifactHints("see https://example.com/docs/progress.md, inspect packages/context-broker/src/extension.ts, and then read progress.md");
+    const refs = extractReviewArtifactHints("see https://example.com/docs/progress.md, inspect packages/advisor/src/extension.ts, and then read progress.md");
     expect(refs).toEqual(["progress.md"]);
   });
 
