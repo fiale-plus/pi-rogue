@@ -1,0 +1,25 @@
+{
+  "compilerOptions": {
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "target": "ES2022",
+    "strict": true,
+    "noEmit": true,
+    "skipLibCheck": true,
+    "moduleDetection": "force",
+    "allowImportingTsExtensions": true,
+    "paths": {
+      "@fiale-plus/pi-core": ["./packages/core/src"],
+      "@fiale-plus/pi-advisor": ["./packages/advisor/src"],
+      "@fiale-plus/pi-rogue-guardrails": ["./packages/lab/guardrails/src"],
+      "@fiale-plus/pi-rogue-brain": ["./packages/lab/brain/src"],
+      "@fiale-plus/pi-rogue-repo-arch": ["./packages/lab/repo-arch/src"]
+    }
+  },
+  "include": [
+    "packages/*/src/**/*.ts",
+    "packages/*/*/src/**/*.ts",
+    "packages/*/pi/**/*.ts",
+    "packages/*/*/pi/**/*.ts"
+  ]
+}
