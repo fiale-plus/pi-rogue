@@ -6,7 +6,7 @@ import { ADVISOR_CANONICAL_CONTROL_LEAVES, advisorArgumentCompletions, piRogueAr
 describe("advisor completions", () => {
   it("offers top-level advisor continuations", () => {
     const values = advisorArgumentCompletions("")?.map((i) => i.value);
-    expect(values).toEqual([...ADVISOR_CANONICAL_CONTROL_LEAVES]);
+    expect(values).toEqual(["status", "settings", "model", "board"]);
   });
 
   it("keeps canonical README, skill, UX, and AGENTS guidance aligned", () => {
@@ -24,22 +24,14 @@ describe("advisor completions", () => {
     expect(agents).not.toMatch(/`\/advisor(?:\s|`)/);
   });
 
-  it("offers nested review choices", () => {
-    const values = advisorArgumentCompletions("review ")?.map((i) => i.value);
-    expect(values).toEqual(["light", "strict", "off"]);
+  it("offers explicit model syntax", () => {
+    expect(advisorArgumentCompletions("model ")?.map((i) => i.value)).toEqual(["advisor", "specialist", "head", "null"]);
   });
 
-  it("offers explicit advisor profile controls", () => {
-    expect(advisorArgumentCompletions("profile ")?.map((i) => i.value)).toEqual(["status", "budget-board", "off"]);
-  });
-
-  it("offers board shadow, head-of-board, and specialist controls", () => {
-    expect(advisorArgumentCompletions("")?.map((i) => i.value)).toContain("board");
-    expect(advisorArgumentCompletions("board ")?.map((i) => i.value)).toEqual(["status", "why", "report", "shadow", "off", "reset", "head", "specialist", "discover-specialists"]);
-  });
-
-  it("offers personal specialist discovery controls", () => {
-    expect(advisorArgumentCompletions("board ")?.map((i) => i.value)).toContain("discover-specialists");
+  it("offers explicit Board roles without shadow or discovery controls", () => {
+    expect(advisorArgumentCompletions("board ")?.map((i) => i.value)).toEqual(["specialist", "head"]);
+    expect(advisorArgumentCompletions("review ")).toBeNull();
+    expect(advisorArgumentCompletions("profile ")).toBeNull();
   });
 
 });

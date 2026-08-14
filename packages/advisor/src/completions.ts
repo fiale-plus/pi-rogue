@@ -33,34 +33,18 @@ function completionsForPrefix(prefix: string, topLevel: Array<[string, string?]>
   return complete(topLevel, q);
 }
 
-export const ADVISOR_CANONICAL_CONTROL_LEAVES = [
-  "status", "settings", "config", "on", "off", "mode", "review", "model", "gate", "profile", "checkins", "pause", "unpause", "board",
-] as const;
+export const ADVISOR_CANONICAL_CONTROL_LEAVES = ["status", "model", "board"] as const;
 
 const advisorTopLevel: Array<[string, string?]> = [
-  ["status", "show advisor status and routing"],
-  ["settings", "show full local advisor configuration"],
-  ["config", "alias for settings"],
-  ["on", "enable auto mode"],
-  ["off", "disable advisor"],
-  ["mode", "set auto/manual/off"],
-  ["review", "set light/strict/off"],
-  ["model", "set or inspect model override"],
-  ["gate", "inspect trained binary gate posture"],
-  ["profile", "inspect or enable explicit advisor profiles"],
-  ["checkins", "explain orchestration-managed check-ins"],
-  ["pause", "pause automatic advisor runs for N turns"],
-  ["unpause", "clear the automatic-run pause"],
-  ["board", "inspect or configure Advisor Board shadow/head-of-board modes"],
+  ["status", "show explicit Advisor and Board status"],
+  ["settings", "show explicit Advisor settings"],
+  ["model", "set or clear an explicit advisor, specialist, or head model"],
+  ["board", "ask the read-only Board specialists or head"],
 ];
 
 const advisorNested: Record<string, Array<[string, string?]>> = {
-  mode: [["auto"], ["manual"], ["off"]],
-  review: [["light"], ["strict"], ["off"]],
-  model: [["auto"], ["openai-codex/gpt-5.5"], ["anthropic/claude-opus-4-6"]],
-  gate: [["status"]],
-  profile: [["status"], ["budget-board"], ["off"]],
-  board: [["status"], ["why"], ["report"], ["shadow"], ["off"], ["reset"], ["head"], ["specialist"], ["discover-specialists"]],
+  model: [["advisor"], ["specialist"], ["head"], ["null"]],
+  board: [["specialist"], ["head"]],
 };
 
 const piRogueTopLevel: Array<[string, string?]> = [
