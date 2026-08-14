@@ -1,0 +1,32 @@
+name: check
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+
+jobs:
+  check:
+    if: github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.draft == false)
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        node-version: ['22.19.0']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: npm
+      - run: npm ci
+      - name: Type and validation coverage checks
+        run: npm run check
+      - name: Run tests
+        run: npm test
+      - name: Verify packed minimum-runtime bundle
+        run: npm run test:packed-min-node
+      - name: Summary
+        run: |
+          echo "## CI Summary" >> $GITHUB_STEP_SUMMARY
+          echo "- Tests: $(npx vitest run 2>&1 | grep -oE 'Tests [0-9]+ passed' | grep -oE '[0-9]+' || echo '?') passed" >> $GITHUB_STEP_SUMMARY

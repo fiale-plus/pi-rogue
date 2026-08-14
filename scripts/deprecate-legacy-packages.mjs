@@ -5,7 +5,9 @@ import { join } from "node:path";
 
 const LEGACY = [
   ["@fiale-plus/pi-rogue-bundle", "Deprecated: replaced by @fiale-plus/pi-rogue. Install via \"pi install npm:@fiale-plus/pi-rogue\"."],
-  ["@fiale-plus/pi-rogue-advisor", "Deprecated: advisor is bundled in @fiale-plus/pi-rogue. Install via \"pi install npm:@fiale-plus/pi-rogue\"."],
+  ["@fiale-plus/pi-rogue-advisor", "Deprecated: advisor/orchestration are bundled in @fiale-plus/pi-rogue. Install via \"pi install npm:@fiale-plus/pi-rogue\"."],
+  ["@fiale-plus/pi-rogue-orchestration", "Deprecated: advisor/orchestration are bundled in @fiale-plus/pi-rogue. Install via \"pi install npm:@fiale-plus/pi-rogue\"."],
+  ["@fiale-plus/pi-orchestration", "Deprecated: replaced by @fiale-plus/pi-rogue. Install via \"pi install npm:@fiale-plus/pi-rogue\"."],
 ];
 const npm = process.env.NPM_CLI || "npm";
 const verifyOnly = process.argv.includes("--verify-only");
