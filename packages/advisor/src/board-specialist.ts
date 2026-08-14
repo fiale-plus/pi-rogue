@@ -72,7 +72,7 @@ export interface SpecialistDispatchFailure {
 
 export type SpecialistComplete = (systemPrompt: string, messages: Array<{ role: "user"; content: string }>, options: { maxTokens: number }) => Promise<string>;
 
-const READ_ONLY_TOOLS = new Set<BoardRoleTool>(["read", "search", "context_lookup"]);
+const READ_ONLY_TOOLS = new Set<BoardRoleTool>(["read", "search"]);
 const COST_ORDER: BoardRoleCostTier[] = ["free", "cheap", "standard", "expensive"];
 const SECRET_RE = /\b(?:(?:sk|ghp|gho|github_pat|xox[abprs]|hf)[-_][A-Za-z0-9_\-]{8,}|(?:AKIA|ASIA)[A-Z0-9]{16})\b/g;
 const KEYED_SECRET_RE = /\b(?:api[_-]?key|token|secret|password|authorization)\b\s*[:=]\s*["']?[^\s"',;}]{4,}/gi;

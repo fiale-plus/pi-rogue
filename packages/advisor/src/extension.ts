@@ -25,7 +25,6 @@ import {
   type BinaryGatePrediction,
   type ReviewPolicy,
 } from "./router.js";
-import { type TrajectoryFeatures } from "./binary-gate-eval.js";
 import { classifyIntent, classifyMode } from "./preflight-signals.js";
 import { findMissingReviewArtifacts } from "./review-preflight.js";
 import { buildBoardLedger, decideBoardAction, type BoardEvent } from "./board.js";
@@ -106,7 +105,6 @@ const CACHE_PATH = featureFile("advisor", "cache.json");
 const HISTORY_PATH = featureFile("advisor", "history.jsonl");
 const DEFAULT_DIAGNOSTICS_PATH = featureFile("advisor", "diagnostics.jsonl");
 const SESSION_STATE_PROP = "__piRogueAdvisorStatePath";
-const ORCHESTRATION_DIR = join(homedir(), ".pi", "agent", "fiale-plus", "orchestration");
 
 const MAX_CACHE = 64;
 const MAX_NOTES = 12;
@@ -625,7 +623,7 @@ function specialistDispatchStatusText(cfg: AdvisorConfig, state: SessionState): 
     "Advisor Specialists: explicit-only",
     `Calls: ${state.specialistDispatch?.calls ?? 0}`,
     state.specialistDispatch?.lastRole ? `Last role: ${state.specialistDispatch.lastRole}` : "Last role: none",
-    "Constraints: read/search/context_lookup tools only, compact ledger input, bounded output.",
+    "Constraints: read/search tools only, compact ledger input, bounded output.",
   ].join("\n");
 }
 
@@ -774,93 +772,7 @@ function brief(s: SessionState): string {
   return lines.join("\n").slice(0, 1200);
 }
 
-function contextBrokerBrief(pi: ExtensionAPI, ctx: any): string {
-  try {
-    const text = (pi as any).__piRogueContextBroker?.renderBrief?.(ctx);
-    return typeof text === "string" && text.includes("ctx://") ? sanitizeAdvisorText(text).slice(0, 2400) : "";
-  } catch {
-    return "";
-  }
-}
 
-function safeNumber(value: unknown): number | undefined {
-  if (value == null) return undefined;
-  const num = Number(value);
-  return Number.isFinite(num) ? num : undefined;
-}
-
-function advisorRouterSessionKey(sessionPath: string): string {
-  const resolved = resolve(sessionPath);
-  const base = basename(resolved).replace(/\.jsonl$/i, "");
-  const safe = base.replace(/[^a-zA-Z0-9._-]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 96) || "session";
-  const hash = createHash("sha256").update(resolved).digest("hex").slice(0, 8);
-  return `${safe}-${hash}`;
-}
-
-function advisorRouterEventsPath(ctx: any): string | undefined {
-  const sessionPath = String(ctx?.sessionManager?.getSessionFile?.() || "");
-  if (!sessionPath) return undefined;
-  const key = advisorRouterSessionKey(sessionPath);
-  return join(homedir(), ".pi", "agent", "pi-rogue", "router", "sessions", key, "events.jsonl");
-}
-
-function readLatestRouterRouteTrajectory(ctx: any): TrajectoryFeatures | undefined {
-  const eventsPath = advisorRouterEventsPath(ctx);
-  if (!eventsPath) return undefined;
-
-  const raw = readText(eventsPath);
-  if (!raw.trim()) return undefined;
-
-  const lines = raw.split(/\r?\n/);
-  for (let i = lines.length - 1; i >= 0; i--) {
-    const line = lines[i]?.trim();
-    if (!line) continue;
-    let parsed: Record<string, unknown>;
-    try {
-      parsed = JSON.parse(line) as Record<string, unknown>;
-    } catch {
-      continue;
-    }
-    if (parsed.schema !== "pi-router.route-event.v1") continue;
-
-    const metrics = parsed.metrics as Record<string, unknown> | undefined;
-    const runtime = parsed.runtime as Record<string, unknown> | undefined;
-
-    const trajectory: TrajectoryFeatures = {
-      loopScore: safeNumber(metrics?.loopScore),
-      progressScore: safeNumber(metrics?.progressScore),
-      sameErrorRepeatedCount: safeNumber(metrics?.sameErrorRepeatedCount),
-      diffLines: safeNumber(metrics?.diffLines),
-      contextTokensApprox: safeNumber(runtime?.contextTokensApprox),
-    };
-
-    return trajectory.loopScore === undefined
-      && trajectory.progressScore === undefined
-      && trajectory.sameErrorRepeatedCount === undefined
-      && trajectory.diffLines === undefined
-      && trajectory.contextTokensApprox === undefined
-      ? undefined
-      : trajectory;
-  }
-
-  return undefined;
-}
-
-function buildTrajectoryContext(ctx: any, input: {
-  phase: AdvisorRouteInput["phase"];
-  turns?: number;
-  fileChanged?: boolean;
-  failed?: boolean;
-}): TrajectoryFeatures {
-  const latest = readLatestRouterRouteTrajectory(ctx) ?? {};
-  return {
-    ...latest,
-    phase: input.phase,
-    turns: typeof input.turns === "number" && Number.isFinite(input.turns) ? input.turns : undefined,
-    fileChanged: input.fileChanged,
-    failed: input.failed,
-  };
-}
 
 const CLIPBOARD_IMAGE_PATH_RE = /(?:\/(?:private\/)?var\/folders\/[^\s"'`<>]+\/T|\/(?:tmp|var\/tmp))\/clipboard-\d{4}-\d{2}-\d{2}-[A-Za-z0-9-]+\.(?:png|jpe?g|gif|webp)\b/g;
 
@@ -2279,53 +2191,7 @@ function sessionKey(ctx: any): string {
   return sharedSessionKey(ctx);
 }
 
-type OrchestrationSnapshot = {
-  goal: string;
-  loop: { enabled?: boolean; interval?: string; instruction?: string };
-  research: { instruction?: string; interval?: string; cycles?: number; lastResult?: string };
-};
 
-function readOrchestrationSnapshot(ctx: any): OrchestrationSnapshot {
-  const dir = sessionScopedDir(ORCHESTRATION_DIR, ctx);
-  return {
-    goal: readText(join(dir, "goal.md")).trim(),
-    loop: readJson(join(dir, "loop.json"), {}),
-    research: readJson(join(dir, "autoresearch.json"), {}),
-  };
-}
-
-function orchestrationSnapshotText(ctx: any): string {
-  const snapshot = readOrchestrationSnapshot(ctx);
-  const goalActive = Boolean(snapshot.goal);
-  const loopActive = Boolean(snapshot.loop.enabled && snapshot.loop.instruction);
-  const researchActive = Boolean(snapshot.research.instruction);
-  const status = goalActive && !loopActive && !researchActive
-    ? "setup gap — goal exists but no active autoresearch/loop progression"
-    : goalActive
-      ? "progression configured"
-      : "no active goal";
-  return [
-    "Orchestration:",
-    `- Goal: ${goalActive ? `active — ${truncate(snapshot.goal, 360)}` : "off"}`,
-    `- Autoresearch: ${researchActive ? `active — ${truncate(snapshot.research.instruction || "", 240)}; cycles=${snapshot.research.cycles ?? 0}${snapshot.research.lastResult ? `, last=${snapshot.research.lastResult}` : ""}` : "off"}`,
-    `- Loop: ${loopActive ? `active every ${snapshot.loop.interval || "?"} — ${truncate(snapshot.loop.instruction || "", 260)}` : "off"}`,
-    `- Status: ${status}`,
-  ].join("\n");
-}
-
-export function buildAdvisorCheckinPrompt(source: string, orchestration: string, sessionBrief: string): string {
-  return [
-    `Mid-session check-in (${source})`,
-    "Role: alignment reviewer for the active work. Do not create a new task, research direction, benchmark, script, artifact, or model switch unless the active goal explicitly asks for it.",
-    "Stay anchored to the active goal/autoresearch/loop. If autoresearch is active, preserve its research question and judge whether the latest work is gathering evidence toward that question.",
-    "Bad nudge examples: research the existence of weaknesses instead of solving the named weakness; create a script/report about weaknesses when the goal is to fix advisor behavior; swap to a shallower research mode.",
-    "Return exactly two short lines:",
-    "Status: on_track|stuck|off_track - <why, tied to the active goal>",
-    "Nudge: <one concrete next action that continues the active goal>",
-    orchestration,
-    sessionBrief ? `Session brief:\n${sessionBrief}` : "",
-  ].filter(Boolean).join("\n\n");
-}
 
 function advisorPauseRemaining(state: SessionState, nowTurns = state.turns): number {
   const until = state.advisorPauseUntilTurn;
@@ -2360,9 +2226,6 @@ export function shouldRunCheckin(_config: AdvisorConfig, _state: SessionState, _
 
 
 
-function contextBrokerEnabledByDefault(): boolean {
-  return !new Set(["0", "false", "no", "off"]).has(String(process.env.PI_CONTEXT_BROKER_ENABLED ?? "").trim().toLowerCase());
-}
 
 function parseNonNegativeInt(value: unknown): number | undefined {
   if (typeof value === "number") return Number.isInteger(value) && value >= 0 ? value : undefined;
@@ -2442,133 +2305,6 @@ function piRogueCockpitText(config: AdvisorConfig, state: SessionState, _current
   ].join("\n");
 }
 
-function piRogueRootDir(): string {
-  return join(homedir(), ".pi", "agent", "pi-rogue");
-}
-
-export type PiRoguePostureId = "guarded";
-
-type PiRogueConfigureMode = "status" | "on";
-
-export interface PiRogueConfigurePlan {
-  mode: PiRogueConfigureMode;
-  root: string;
-  advisorModel: string;
-  workerModel: string;
-  smartModel: string;
-  activeRouterProfile: "balanced" | "fusion-smart";
-  fusionRecipeId?: string;
-  files: {
-    summary: string;
-    advisor: string;
-    router: string;
-    routerCards: string;
-    fusionRecipes: string;
-    contextBroker: string;
-  };
-  warnings: string[];
-}
-
-function piRogueModelId(model: any): string | undefined {
-  const provider = String(model?.provider ?? "").trim();
-  const id = String(model?.id ?? model?.model ?? "").trim();
-  if (!id) return undefined;
-  if (!provider || id.startsWith(`${provider}/`)) return id;
-  return `${provider}/${id}`;
-}
-
-function availableTextModels(ctx: any): string[] {
-  const models = ctx?.modelRegistry?.getAvailable?.() ?? ctx?.modelRegistry?.getAll?.() ?? [];
-  const seen = new Set<string>();
-  const out: string[] = [];
-  for (const model of models) {
-    if (Array.isArray(model?.input) && !model.input.includes("text")) continue;
-    const id = piRogueModelId(model);
-    if (id && !seen.has(id)) {
-      seen.add(id);
-      out.push(id);
-    }
-  }
-  return out;
-}
-
-function firstAvailable(available: string[], preferred: string[]): string | undefined {
-  return preferred.find((id) => available.includes(id)) ?? available[0];
-}
-
-function firstPreferred(available: string[], preferred: string[]): string | undefined {
-  return preferred.find((id) => available.includes(id));
-}
-
-function modelRegistryHas(ctx: any, id: string): boolean {
-  const [provider, ...rest] = id.split("/");
-  if (!provider || rest.length === 0) return false;
-  return Boolean(ctx?.modelRegistry?.find?.(provider, rest.join("/")));
-}
-
-function firstPreferredDetected(ctx: any, available: string[], preferred: string[]): string | undefined {
-  return preferred.find((id) => available.includes(id) || modelRegistryHas(ctx, id));
-}
-
-function readJsonLoose(path: string): any | undefined {
-  try {
-    return JSON.parse(readText(path));
-  } catch {
-    return undefined;
-  }
-}
-
-function fusionRecipeCandidatePaths(_ctx: any, root = piRogueRootDir()): string[] {
-  const configured = String(process.env.PI_ROGUE_FUSION_RECIPES ?? "").trim();
-  return [
-    configured,
-    join(root, "fusion", "recipes.json"),
-  ].filter(Boolean);
-}
-
-function configuredFusionRecipeIds(ctx: any, root = piRogueRootDir()): string[] {
-  for (const path of fusionRecipeCandidatePaths(ctx, root)) {
-    const parsed = readJsonLoose(path);
-    const recipes = Array.isArray(parsed?.recipes) ? parsed.recipes : [];
-    const ids = recipes.map((recipe: any) => String(recipe?.id ?? "").trim()).filter(Boolean);
-    if (ids.length > 0) return ids;
-  }
-  return [];
-}
-
-export function buildPiRogueConfigurePlan(ctx: any, mode: PiRogueConfigureMode = "status"): PiRogueConfigurePlan {
-  const root = piRogueRootDir();
-  const available = availableTextModels(ctx);
-  const advisorModel = firstAvailable(available, SOTA_CHAIN.map((item) => `${item.provider}/${item.model}`)) ?? "<no text model detected>";
-  const workerModel = firstAvailable(available, [
-    "openai-codex/gpt-5.3-codex-spark",
-    "openai-codex/gpt-5.4-mini",
-    advisorModel,
-  ].filter((id) => id && !id.startsWith("<"))) ?? advisorModel;
-  const fusionRecipeId = configuredFusionRecipeIds(ctx, root)[0];
-  const smartModel = fusionRecipeId ? `fusion/${fusionRecipeId}` : advisorModel;
-  return {
-    mode,
-    root,
-    advisorModel,
-    workerModel,
-    smartModel,
-    activeRouterProfile: fusionRecipeId ? "fusion-smart" : "balanced",
-    fusionRecipeId,
-    files: {
-      summary: join(root, "config.json"),
-      advisor: CONFIG_PATH,
-      router: join(root, "router", "config.json"),
-      routerCards: join(root, "router", "model-cards.jsonl"),
-      fusionRecipes: join(root, "fusion", "recipes.json"),
-      contextBroker: join(root, "context-broker", "artifacts.sqlite"),
-    },
-    warnings: [
-      available.length === 0 ? "No text models were detected; configure a Pi model provider before applying." : "",
-      fusionRecipeId ? "" : "No fusion recipe was detected; router will use the strongest single model for smart/review roles.",
-    ].filter(Boolean),
-  };
-}
 
 export interface AdvisorBoardProfilePlan {
   id: AdvisorProfileId;
@@ -2642,273 +2378,17 @@ function advisorBoardProfileText(plan: AdvisorBoardProfilePlan): string {
 }
 
 
-function modelCardFor(modelId: string, roleHints: string[], generatedAt: string): any {
-  const [provider, ...rest] = modelId.split("/");
-  return {
-    schema: "pi-router.model-capability-card.v1",
-    modelId: rest.length ? rest.join("/") : modelId,
-    provider: rest.length ? provider : "unknown",
-    generatedAt,
-    seed: {
-      source: "pi-rogue-configure",
-      purpose: `Selected by subsystem setup for ${roleHints.join(", ")} roles.`,
-      roleHints,
-    },
-    observed: {
-      source: "manual",
-      events: 0,
-      sessions: 0,
-      actions: {},
-      averageLoopScore: 0,
-      averageProgressScore: 0,
-      averageContextTokensApprox: null,
-      outcomes: { linked: 0, success: 0, partial: 0, failed: 0, abandoned: 0, unknown: 0, averageReworkTurns: null },
-    },
-    promotion: { manualOnly: true, promoted: false },
-  };
-}
 
-function upsertModelCards(path: string, cards: any[]): void {
-  const existing = readText(path)
-    .split("\n")
-    .map((line) => line.trim())
-    .filter(Boolean)
-    .map((line) => {
-      try { return JSON.parse(line); } catch { return null; }
-    })
-    .filter(Boolean);
-  const map = new Map<string, any>();
-  for (const card of existing) map.set(`${card.provider}/${card.modelId}`, card);
-  for (const card of cards) map.set(`${card.provider}/${card.modelId}`, card);
-  writeText(path, [...map.values()].map((card) => JSON.stringify(card)).join("\n") + "\n");
-}
 
-export interface PiRoguePosturePlan {
-  posture: PiRoguePostureId;
-  root: string;
-  advisorModel: string;
-  files: {
-    summary: string;
-    advisor: string;
-    router: string;
-    contextBrokerConfig: string;
-  };
-}
 
-export interface PiRoguePostureApplyResult {
-  posture: PiRoguePostureId;
-  files: PiRoguePosturePlan["files"];
-  advisor: AdvisorConfig;
-}
 
-export function parsePiRoguePosture(value: unknown): PiRoguePostureId | null {
-  return String(value ?? "").trim().toLowerCase() === "guarded" ? "guarded" : null;
-}
-
-async function strongAdvisorForGuarded(ctx: any, current: AdvisorConfig): Promise<string> {
-  const preferred = SOTA_CHAIN.map((item) => `${item.provider}/${item.model}`);
-  // Reuse the owned, deadline-bounded resolver; guarded posture never considers regular fallback models.
-  const candidates = await resolveModelCandidates(ctx, {
-    ...current,
-    models: { ...current.models, advisor: current.models.advisor && preferred.includes(current.models.advisor) ? current.models.advisor : undefined },
-  }, { allowRegularFallback: false });
-  const strong = candidates.find((candidate) => preferred.includes(piRogueModelId(candidate.model) ?? ""));
-  if (strong) return piRogueModelId(strong.model) ?? strong.label;
-  throw new Error("Guarded posture requires an authenticated strong advisor model. Configure credentials for openai-codex/gpt-5.5 or another supported strong model, then retry; no files were changed.");
-}
-
-export async function buildPiRoguePosturePlan(ctx: any, postureValue: unknown, options: { advisorPath?: string } = {}): Promise<PiRoguePosturePlan> {
-  const posture = parsePiRoguePosture(postureValue);
-  if (!posture) throw new Error(`unknown posture: ${String(postureValue ?? "") || "(empty)"}. Supported: guarded`);
-  const root = piRogueRootDir();
-  const files = {
-    summary: join(root, "config.json"),
-    advisor: options.advisorPath ?? CONFIG_PATH,
-    router: join(root, "router", "config.json"),
-    contextBrokerConfig: join(root, "context-broker", "config.json"),
-  };
-  const current = normalizeAdvisorConfig(readJson<Partial<AdvisorConfig>>(files.advisor, {}));
-  const advisorModel = await strongAdvisorForGuarded(ctx, current);
-  return { posture, root, advisorModel, files };
-}
-
-function guardedRouterProfiles(advisorModel: string): Record<string, any> {
-  const spark = "openai-codex/gpt-5.3-codex-spark";
-  const local = "llamacpp-qwen-unsloth/qwen3.6-35b-a3b-ud-q4-k-m";
-  const fusion = "fusion/opencode-go-qwen-deepseek-gpt55";
-  return {
-    "all-smart": { worker: advisorModel, smart: advisorModel, teacher: advisorModel, reviewer: advisorModel, explore: advisorModel, debug_diagnose: advisorModel, review: advisorModel, verify: advisorModel },
-    "spark-smart": { worker: spark, smart: advisorModel, teacher: advisorModel, reviewer: advisorModel, explore: spark, debug_diagnose: advisorModel, review: advisorModel, verify: spark },
-    "local-smart": { worker: local, smart: advisorModel, teacher: advisorModel, reviewer: advisorModel, explore: local, debug_diagnose: advisorModel, review: advisorModel, verify: local },
-    quick: { worker: spark, smart: spark, teacher: spark, reviewer: spark },
-    balanced: { worker: spark, smart: advisorModel, teacher: advisorModel, reviewer: advisorModel },
-    "fusion-smart": { worker: fusion, smart: fusion, teacher: fusion, reviewer: fusion, explore: fusion, debug_diagnose: fusion, review: fusion, verify: fusion },
-  };
-}
-
-export function applyPiRoguePosturePlan(plan: PiRoguePosturePlan): PiRoguePostureApplyResult {
-  const existingSummary = readJsonLoose(plan.files.summary);
-  const now = existingSummary?.posture === plan.posture && typeof existingSummary?.configuredAt === "string"
-    ? existingSummary.configuredAt
-    : new Date().toISOString();
-  const existingAdvisor = readJson<Partial<AdvisorConfig>>(plan.files.advisor, {});
-  const baseRestore: AdvisorProfileRestore = {
-    models: existingAdvisor.models,
-    board: existingAdvisor.board,
-  };
-  const profileRestore: AdvisorProfileRestore = {
-    ...baseRestore,
-    profileModel: plan.advisorModel,
-    profileMode: "auto",
-    profileReview: "light",
-    profileCheckins: "off",
-  };
-  const advisor = normalizeAdvisorConfig({
-    ...existingAdvisor,
-    profile: BUDGET_BOARD_PROFILE_ID,
-    profileRestore,
-    mode: "auto",
-    review: "light",
-    checkins: "off",
-    model: plan.advisorModel,
-    board: { mode: "shadow" },
-    headOfBoard: profileHeadOfBoardConfig(),
-    specialistDispatch: profileSpecialistDispatchConfig(),
-  });
-  writeJson(plan.files.advisor, advisor);
-  writeJson(plan.files.summary, {
-    schema: "pi-rogue.config.v1",
-    posture: plan.posture,
-    configuredAt: now,
-    advisor: { model: plan.advisorModel },
-    context: { enabled: true, durable: true, store: join(plan.root, "context-broker", "artifacts.sqlite"), rewriteThresholdBytes: 2048 },
-    router: { enabled: false, mode: "auto_model", activeProfile: "spark-smart", config: plan.files.router },
-    fusion: { enabled: false, recipeId: "opencode-go-qwen-deepseek-gpt55", recipes: join(plan.root, "fusion", "recipes.json") },
-    storage: { root: plan.root },
-  });
-  writeJson(plan.files.router, {
-    enabled: false,
-    mode: "auto_model",
-    print: "off",
-    activeProfile: "spark-smart",
-    profileOrder: ["spark-smart", "local-smart", "balanced", "quick", "all-smart", "fusion-smart"],
-    profiles: guardedRouterProfiles(plan.advisorModel),
-  });
-  const existingContext = readJson<Record<string, unknown>>(plan.files.contextBrokerConfig, {});
-  const existingRewriteThreshold = typeof existingContext.rewriteThresholdBytes === "number"
-    ? existingContext.rewriteThresholdBytes
-    : typeof existingContext.rewrite_threshold_bytes === "number"
-      ? existingContext.rewrite_threshold_bytes
-      : 2048;
-  const existingLensesEnabled = typeof existingContext.contextLensesEnabled === "boolean"
-    ? existingContext.contextLensesEnabled
-    : typeof existingContext.context_lenses_enabled === "boolean"
-      ? existingContext.context_lenses_enabled
-      : true;
-  writeJson(plan.files.contextBrokerConfig, {
-    ...existingContext,
-    rewriteThresholdBytes: existingRewriteThreshold,
-    contextLensesEnabled: existingLensesEnabled,
-  });
-  return { posture: plan.posture, files: plan.files, advisor };
-}
-
-export async function applyPiRoguePostureConfig(ctx: any, input: { posture?: unknown }, options: { advisorPath?: string } = {}): Promise<PiRoguePostureApplyResult> {
-  return applyPiRoguePosturePlan(await buildPiRoguePosturePlan(ctx, input?.posture, options));
-}
-
-function piRoguePostureText(result: PiRoguePostureApplyResult): string {
-  return [
-    `  advisor models: ${result.advisor.models?.advisor ?? "preferred candidate"}`,
-    `  Board bounds: ${JSON.stringify(result.advisor.board)}`,
-    "  lifecycle model work: explicit-only",
-    "Verify: /pi-rogue-advisor status",
-  ].join("\n");
-}
-
-export function isGuardedPostureConfig(_summary: unknown, _advisor: AdvisorConfig, _router: unknown): boolean {
-  return false;
-}
-
-function activePostureText(): string {
-  const root = piRogueRootDir();
-  const summary = readJsonLoose(join(root, "config.json"));
-  const router = readJsonLoose(join(root, "router", "config.json")) ?? {};
-  return isGuardedPostureConfig(summary, loadConfig(), router) ? "guarded" : "custom";
-}
-
-export function parseCfgPostureArgs(args: unknown): PiRoguePostureId | null {
-  const raw = String(args ?? "").trim();
-  if (!raw) return null;
-  if (raw.startsWith("{")) {
-    try {
-      const parsed = JSON.parse(raw) as { posture?: unknown };
-      return parsePiRoguePosture(parsed.posture);
-    } catch {
-      return null;
-    }
+function readJsonLoose(path: string): Record<string, unknown> | undefined {
+  try {
+    const parsed: unknown = JSON.parse(readText(path));
+    return parsed && typeof parsed === "object" ? parsed as Record<string, unknown> : undefined;
+  } catch {
+    return undefined;
   }
-  const parts = raw.toLowerCase().split(/\s+/).filter(Boolean);
-  if (parts[0] === "posture") return parsePiRoguePosture(parts[1]);
-  return parsePiRoguePosture(parts[0]);
-}
-
-export function applyPiRogueConfigurePlan(plan: PiRogueConfigurePlan): void {
-  if (plan.advisorModel.startsWith("<")) throw new Error("cannot turn Pi-Rogue on without a detected text model");
-  const now = new Date().toISOString();
-  writeJson(plan.files.summary, {
-    schema: "pi-rogue.config.v1",
-    configuredAt: now,
-    advisor: { model: plan.advisorModel },
-    context: { enabled: true, durable: true, store: plan.files.contextBroker },
-    router: { enabled: true, mode: "observe", activeProfile: plan.activeRouterProfile, config: plan.files.router },
-    fusion: { enabled: true, recipeId: plan.fusionRecipeId, recipes: plan.files.fusionRecipes },
-    storage: { root: plan.root },
-  });
-  const existingAdvisor = readJson<Partial<AdvisorConfig>>(plan.files.advisor, {});
-  writeJson(plan.files.advisor, normalizeAdvisorConfig({
-    ...existingAdvisor,
-    models: { ...existingAdvisor.models, advisor: plan.advisorModel },
-  }));
-  const quick = { worker: plan.workerModel, smart: plan.workerModel, teacher: plan.workerModel, reviewer: plan.workerModel };
-  const balanced = { worker: plan.workerModel, smart: plan.advisorModel, teacher: plan.advisorModel, reviewer: plan.advisorModel };
-  const profiles: Record<string, any> = { quick, balanced };
-  if (plan.fusionRecipeId) profiles["fusion-smart"] = { worker: plan.workerModel, smart: plan.smartModel, teacher: plan.smartModel, reviewer: plan.smartModel };
-  writeJson(plan.files.router, {
-    enabled: true,
-    mode: "observe",
-    print: "mismatch_only",
-    activeProfile: plan.activeRouterProfile,
-    profileOrder: plan.fusionRecipeId ? ["fusion-smart", "balanced", "quick"] : ["balanced", "quick"],
-    profiles,
-  });
-  upsertModelCards(plan.files.routerCards, [
-    modelCardFor(plan.workerModel, ["worker", "quick"], now),
-    modelCardFor(plan.advisorModel, ["advisor", "smart", "reviewer", "teacher"], now),
-    ...(plan.fusionRecipeId ? [modelCardFor(plan.smartModel, ["smart", "reviewer", "teacher", "fusion"], now)] : []),
-  ]);
-}
-
-function piRogueConfigText(): string {
-  return [
-    "Pi-Rogue config map:",
-    `  advisor: ${CONFIG_PATH}`,
-    "Layering: built-in defaults → user-root Pi-Rogue config → session state.",
-  ].join("\n");
-}
-
-function piRogueConfigureText(plan: PiRogueConfigurePlan): string {
-  const intro = plan.mode === "on" ? "Pi-Rogue setup: user-root defaults." : "Pi-Rogue status plan: read-only; no files written.";
-  return [
-    intro,
-    "",
-    "Derived defaults:",
-    `  advisor model: ${plan.advisorModel}`,
-    "",
-    ...plan.warnings.map((warning) => `Warning: ${warning}`),
-    "",
-    "Safety: root status is read-only; use explicit Advisor commands for changes.",
-  ].filter((line, index, lines) => line !== "" || lines[index - 1] !== "").join("\n");
 }
 
 function settingsPaths(ctx: any): string[] {
@@ -3107,7 +2587,6 @@ async function askAdvisor(pi: ExtensionAPI, ctx: any, question: string, scope: s
 
   const normalizedScope = sanitizeAdvisorText(scope).replace(/\s+/g, " ").trim().toLowerCase();
   const sessionBrief = includeWork ? brief(state) : "";
-  const brokerBrief = includeWork ? contextBrokerBrief(pi, ctx) : "";
   const ck = hash(JSON.stringify({
     version: "advisor-answer-v2",
     model: config.models?.advisor ?? "auto",
@@ -3115,7 +2594,6 @@ async function askAdvisor(pi: ExtensionAPI, ctx: any, question: string, scope: s
     scope: normalizedScope,
     includeRecentWork: includeWork,
     sessionBrief,
-    brokerBrief,
   }));
   const cache = loadCache();
   if (cache[ck]) { state.cacheHits++; saveState(state); return { text: cache[ck], cached: true }; }
@@ -3125,7 +2603,6 @@ async function askAdvisor(pi: ExtensionAPI, ctx: any, question: string, scope: s
       `Question: ${normalizedQuestion}`,
       normalizedScope ? `Scope: ${normalizedScope}` : "",
       sessionBrief ? `Session:\n${sessionBrief}` : "",
-      brokerBrief ? `Context broker brief:\n${brokerBrief}` : "",
     ].filter(Boolean).join("\n"), timestamp: new Date().toISOString() },
   ] as any[];
 
@@ -3138,7 +2615,7 @@ async function askAdvisor(pi: ExtensionAPI, ctx: any, question: string, scope: s
   }
   const text = completed.text;
   const loopFamilyHash = advisorLoopFamilyHash(["question", question, scope, state.lastTask || ""]);
-  const loopContextHash = advisorLoopContextHash(["question", config.models?.advisor ?? "auto", question, scope, includeWork ? brief(state) : "", brokerBrief]);
+  const loopContextHash = advisorLoopContextHash(["question", config.models?.advisor ?? "auto", question, scope, includeWork ? brief(state) : ""]);
   const loop = observeAdvisorLoop(state, "question", loopFamilyHash, loopContextHash, text);
   if (!loop.loopDetected && text && text !== "(empty)") { cache[ck] = text; saveCache(cache); }
   state.advisorCalls++;
@@ -3158,22 +2635,26 @@ function nestedToolValue(tool: unknown, keys: string[]): unknown {
   return value;
 }
 
-function lifecycleChangedFiles(tool: any): string[] {
+function lifecycleChangedFiles(tool: unknown): string[] {
   const command = toolCommand(tool);
   const toolName = String(nestedToolValue(tool, ["toolName"]) ?? nestedToolValue(tool, ["name"]) ?? "");
   const mutation = /\b(?:edit|write|patch|apply_patch|create|delete|remove|move|rename|mkdir|touch|cp|mv|rm)\b/i.test(`${toolName} ${command ?? ""}`);
-  if (!mutation) return [];
   const values: unknown[] = [
-    nestedToolValue(tool, ["path"]),
-    nestedToolValue(tool, ["file"]),
-    nestedToolValue(tool, ["input", "path"]),
-    nestedToolValue(tool, ["args", "path"]),
-    nestedToolValue(tool, ["details", "path"]),
-    nestedToolValue(tool, ["result", "path"]),
     nestedToolValue(tool, ["changedFiles"]),
     nestedToolValue(tool, ["files"]),
     nestedToolValue(tool, ["result", "changedFiles"]),
   ];
+  if (mutation) {
+    values.push(
+      nestedToolValue(tool, ["path"]),
+      nestedToolValue(tool, ["file"]),
+      nestedToolValue(tool, ["input", "path"]),
+      nestedToolValue(tool, ["args", "path"]),
+      nestedToolValue(tool, ["details", "path"]),
+      nestedToolValue(tool, ["result", "path"]),
+      toolEvidenceText(tool).match(/(?:created|updated|modified|edited|wrote|written|removed|deleted)\s+(?:file\s+)?[`"']?([./A-Za-z0-9_@-]+(?:\/[./A-Za-z0-9_@-]+)*)/gi)?.map((item) => item.replace(/^[^`"']*[`"']/, "").trim()),
+    );
+  }
   return [...new Set(values.flatMap((value) => Array.isArray(value) ? value : [value]).map((value) => boardEvidenceText(value, 240)).filter(Boolean))];
 }
 

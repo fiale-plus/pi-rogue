@@ -12,6 +12,3 @@ export type {
   EvidenceEpoch,
   SubagentReturnSummary,
 } from "./board.js";
-export { reviewWorkerResult } from "./worker-review.js";
-export { advisorFeatureStatus, serializeAdvisorFeatureStatus } from "./status.js";
-export type { WorkerReviewInput, WorkerReviewResult } from "./worker-review.js";

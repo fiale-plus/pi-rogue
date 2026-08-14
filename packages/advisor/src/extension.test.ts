@@ -115,6 +115,7 @@ describe("Advisor PR1 lifecycle", () => {
     handlers.get("turn_end")?.({
       turnIndex: 0,
       toolResults: [
+        { toolName: "read", input: { path: "packages/advisor/src/inspected.ts" }, status: "success" },
         { toolName: "edit", input: { path: "packages/advisor/src/changed.ts" }, status: "success" },
         { toolName: "bash", input: { command: "npm test" }, status: "error", error: "failure with SECRET=do-not-persist" },
       ],
@@ -124,6 +125,9 @@ describe("Advisor PR1 lifecycle", () => {
     expect(state.boardEvents).toEqual(expect.arrayContaining([
       expect.objectContaining({ type: "file_changed", path: "packages/advisor/src/changed.ts", turn: 1 }),
       expect.objectContaining({ type: "tool_failure", tool: "bash", message: expect.not.stringContaining("SECRET=do-not-persist"), turn: 1 }),
+    ]));
+    expect(state.boardEvents).not.toEqual(expect.arrayContaining([
+      expect.objectContaining({ type: "file_changed", path: "packages/advisor/src/inspected.ts" }),
     ]));
     expect(state.boardEvents.length).toBeLessThanOrEqual(64);
     expect(vi.mocked(completeSimple)).not.toHaveBeenCalled();

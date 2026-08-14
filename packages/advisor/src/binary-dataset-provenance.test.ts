@@ -84,23 +84,6 @@ describe("binary dataset provenance", () => {
     expect(() => readBinaryDatasetManifest(f.output)).toThrow(/provenance counts do not match/);
   });
 
-  it("propagates provenance through trajectory enrichment into training", () => {
-    const f = fixture();
-    const gold = Array.from({ length: 20 }, (_, index) => ({
-      text: `${index % 2 ? "debug failing test" : "implement routine change"} ${index}`,
-      label: index % 2 ? "debugging" : "implementation",
-    }));
-    writeFileSync(f.gold, gold.map((row) => JSON.stringify(row)).join("\n") + "\n", "utf8");
-    buildDataset([...f.args, "--min-reviewed", "10"]);
-    const trajectory = join(dirname(f.output), "trajectory.jsonl");
-    const model = join(dirname(f.output), "model.json");
-    const report = join(dirname(f.output), "report.json");
-    execFileSync(process.execPath, ["--import", "tsx", join(process.cwd(), "scripts/build-binary-gate-trajectory-dataset.ts"), "--labels", f.output, "--input", join(dirname(f.output), "missing-sessions"), "--no-claude-proxy", "--output", trajectory, "--report", join(dirname(f.output), "trajectory-report.json")]);
-    expect(readBinaryDatasetManifest(trajectory).promotable).toBe(true);
-    execFileSync(process.execPath, ["--import", "tsx", join(process.cwd(), "scripts/train-binary-gate.ts"), "--input", trajectory, "--model", model, "--report", report, "--epochs", "1", "--min-df", "1", "--min-guard-support", "1", "--allow-weak-label-research"]);
-    expect(JSON.parse(readFileSync(model, "utf8")).config.weakLabelResearch).toBe(false);
-    expect(JSON.parse(readFileSync(report, "utf8")).provenance.promotable).toBe(true);
-  }, 20_000);
 
   it("allows explicit weak-label research but blocks promotion/evaluation by default", () => {
     const f = fixture();

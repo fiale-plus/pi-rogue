@@ -23,10 +23,10 @@ This AGENTS file intentionally stays agentic (not maintainer process).
 - **Single public artefact only:** All new releases are published as `@fiale-plus/pi-rogue`.
   - Git tag: `pi-rogue-<semver>` (e.g. `pi-rogue-0.2.0`)
   - Triggers only the canonical publish workflow.
-- **Advisor and orchestration releases remain paused:** Their packages are `private: true` and have no independent tags/releases; logic changes are still made in `packages/advisor/` and `packages/orchestration/`, but ship exclusively inside the `@fiale-plus/pi-rogue` bundle release.
+- **Advisor releases remain paused:** The Advisor package is `private: true` and has no independent tag/release; its logic ships exclusively inside the `@fiale-plus/pi-rogue` bundle release.
 - **Recommended user install:** `pi install npm:@fiale-plus/pi-rogue`
-- **Legacy artifact policy:** keep `@fiale-plus/pi-rogue-bundle`, `@fiale-plus/pi-rogue-advisor`, and `@fiale-plus/pi-rogue-orchestration` in npm as deprecated/thombstone tracks that explicitly point users to `@fiale-plus/pi-rogue`.
-- **Do not:** cut separate user-facing releases for advisor/orchestration/bundle aliases.
+- **Legacy artifact policy:** keep `@fiale-plus/pi-rogue-bundle`, `@fiale-plus/pi-rogue-advisor`, and `@fiale-plus/pi-rogue-orchestration` in npm as deprecated/tombstone tracks that explicitly point users to `@fiale-plus/pi-rogue`.
+- **Do not:** cut separate user-facing releases for advisor/bundle aliases.
 - **Do not:** publish separate releases for non-user-facing leaves except for local dev markers; leaf package.json version bumps remain development-only.
 - Full details, checklists, naming, and process: see `docs/release.md` and `.github/ISSUE_TEMPLATE/release.md`.
 - Workflows: only the canonical publish workflow under `.github/workflows/` is active for releases.
