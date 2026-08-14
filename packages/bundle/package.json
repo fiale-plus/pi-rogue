@@ -1,0 +1,51 @@
+{
+  "name": "@fiale-plus/pi-rogue",
+  "version": "0.3.31",
+  "description": "Public Pi-Rogue package containing the explicit Advisor and read-only Board extension.",
+  "type": "module",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/fiale-plus/pi-rogue"
+  },
+  "keywords": [
+    "pi-package"
+  ],
+  "files": [
+    "src",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "test": "cd ../.. && vitest run packages/bundle/src/*.test.ts"
+  },
+  "main": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "pi": {
+    "extensions": [
+      "./src/extension.ts"
+    ],
+    "skills": [
+      "./node_modules/@fiale-plus/pi-rogue-advisor/skills"
+    ]
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": ">=0.80.6 <0.81.0"
+  },
+  "dependencies": {
+    "@fiale-plus/pi-rogue-advisor": "^0.1.0",
+    "@fiale-plus/pi-core": "^0.1.0"
+  },
+  "bundledDependencies": [
+    "@fiale-plus/pi-rogue-advisor",
+    "@fiale-plus/pi-core"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "engines": {
+    "node": ">=22.19.0"
+  }
+}
