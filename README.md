@@ -4,13 +4,13 @@
 
 <div align="center">
 
-[![CI](https://github.com/fiale-plus/pi-rogue/actions/workflows/check.yml/badge.svg?branch=main&style=flat-square)](https://github.com/fiale-plus/pi-rogue/actions/workflows/check.yml) [![Tests](https://img.shields.io/github/actions/workflow/status/fiale-plus/pi-rogue/check.yml?branch=main&label=tests&style=flat-square)](https://github.com/fiale-plus/pi-rogue/actions/workflows/check.yml) [![version](https://img.shields.io/npm/v/%40fiale-plus%2Fpi-rogue?style=flat-square)](https://www.npmjs.com/package/@fiale-plus/pi-rogue) [![downloads](https://img.shields.io/npm/dm/%40fiale-plus%2Fpi-rogue?style=flat-square)](https://www.npmjs.com/package/@fiale-plus/pi-rogue) [![License](https://img.shields.io/github/license/fiale-plus/pi-rogue?style=flat-square)](LICENSE)
+[![CI](https://github.com/fiale-plus/pi-rogue/actions/workflows/check.yml/badge.svg?branch=main&style=flat-square)](https://github.com/fiale-plus/pi-rogue/actions/workflows/check.yml) [![Tests](https://img.shields.io/github/actions/workflow/status/fiale-plus/pi-rogue/check.yml?branch=main&label=tests&style=flat-square)](https://github.com/fiale-plus/pi-rogue/actions/workflows/check.yml) [![version](https://img.shields.io/npm/v/%40fiale-plus%2Fpi-rogue?style=flat-square)](https://www.npmjs.com/package/@fiale-plus/pi-rogue) [![downloads](https://img.shields.io/npm/dm/%40fiale-plus/pi-rogue?style=flat-square)](https://www.npmjs.com/package/@fiale-plus/pi-rogue) [![License](https://img.shields.io/github/license/fiale-plus/pi-rogue?style=flat-square)](LICENSE)
 
 </div>
 
 # Pi-Rogue
 
-**A command center for sharper Pi sessions.** Pi-Rogue adds the missing control layer around coding agents: route work explicitly, ask for strategic review at the right time, preserve exact context without flooding prompts, and keep long work anchored to explicit goals.
+**Explicit advisory help for sharper Pi sessions.** Pi-Rogue adds one bounded Advisor and a read-only Advisor Board to a Pi session. Normal work stays normal: Pi-Rogue does not make model calls, rewrite prompts, switch models, dispatch workers, or run background loops unless you explicitly ask for advice.
 
 ```bash
 pi install npm:@fiale-plus/pi-rogue
@@ -20,81 +20,77 @@ One public package. One install. Explicit commands only.
 
 Supported host: Pi `>=0.80.6 <0.81.0` on Node.js `>=22.19.0`.
 
-## Why it exists
+## What it provides
 
-Pi-Rogue is built for agent sessions that should compound instead of drift:
+- **Advisor** — one-shot senior engineering advice through an explicit command or tool call.
+- **Advisor Board** — bounded, read-only specialist and Head-of-Board calls over a compact session ledger.
+- **Core** — shared filesystem, storage, text, and safety helpers used by the bundled extension.
 
-- **Spend intelligence where it matters** — use router/advisor signals to escalate hard turns and stay lightweight for routine work.
-- **Keep evidence retrievable** — large tool outputs become compact handles, not prompt sludge.
-- **Make autonomy visible** — goals, loops, and autoresearch are explicit, inspectable, and stoppable.
+The Board has five static specialist lenses:
 
-## Subsystems at a glance
+| Role | Focus |
+|---|---|
+| `reviewer` | Scope, correctness, regressions, tests, and maintainability |
+| `security` | Secrets, trust boundaries, command/file safety, and authorization |
+| `architecture` | Ownership, coupling, lifecycle, and API/state design |
+| `debugger` | Reproduction, root cause, edge cases, and verification |
+| `reliability-perf` | Hangs, retries, resource growth, repeated work, and concurrency |
 
-Start with `/pi-rogue` for the cockpit, then jump into the subsystem you need.
-
-| Subsystem | Command | What it gives you |
-|---|---|---|
-| **Pi-Rogue** | `/pi-rogue` | The cockpit: status, health checks, and pointers to every subsystem. Start here. |
-| **Advisor** | `/pi-rogue-advisor` | Low-friction strategic review. A tiny local trained gate learns from examples when to escalate, then calls a strong advisor model only when the turn deserves it. |
-| **Router** | `/pi-rogue-router` | Capability-aware routing telemetry and opt-in model switching. It is the multi-model layer: use whatever model fits the current turn or sequence instead of pretending one model is always best. |
-| **Goal / loop / autoresearch** | `/pi-rogue-orchestration` (or `/goal`, `/loop`, `/autoresearch`) | Visible session orchestration: define success, run periodic work, or start solo/parallel research flows without hidden budgets or background mystery. |
-| **Context broker** | `/pi-rogue-context` | Bounded context memory for tool outputs, diffs, snapshots, subagent results, advisor briefs, and memory notes. Prompts stay small; exact evidence stays one lookup away. |
+Specialists are read/search-only and suggest-only by default. They can return findings and recommendations, never edits or commands. Head-of-Board is an explicit, bounded, read-only synthesis call; it cannot dispatch a specialist or mutate the workspace.
 
 ## Quick start
 
 ```text
-/pi-rogue status                         # cockpit: health and command pointers
-/pi-rogue-advisor <question>             # ask for strategic guidance
-/pi-rogue-router status                  # inspect route telemetry and mode
-/pi-rogue-orchestration goal set <goal>  # anchor long-running work
-/goal set <goal>                         # shortcut for goal set
-/pi-rogue-orchestration loop 5m <task>   # run an explicit periodic loop
-/loop 5m <task>                         # shortcut for loop
-/pi-rogue-context brief                  # see compact stored context handles
+/pi-rogue status
+/pi-rogue-advisor <question>
+/pi-rogue-advisor settings
+/pi-rogue-advisor board specialist ask reviewer inspect the proposed change for regressions
+/pi-rogue-advisor board head ask what decision is safest before merging
 ```
 
-Router defaults to observe-only recommendations. `auto_model` is explicit and limited to future model switches; it does not spawn agents or mutate tools.
+The `advisor` tool is also explicit: invoke it when you want advice, rather than relying on lifecycle hooks. `/pi-rogue status|help|doctor` and `/pi-rogue-advisor status|settings|model|board ...` are the only command roots registered by the package.
 
-## What ships in the package
+## Model map and bounds
 
-`@fiale-plus/pi-rogue` is the single consolidated public artefact. It bundles:
+Advisor model selection is separate from Pi's active model. The user-visible configuration has this shape:
 
-- `packages/advisor/` — advisor routing, binary gate, review/check-in behavior.
-- `packages/router/` — local trajectory telemetry, model cards, training/evaluation workflows.
-- `packages/context-broker/` — bounded broker runtime and `context_lookup` tool integration.
-- `packages/orchestration/` — goal, loop, autoresearch, and lab primitives.
-- `packages/core/` — shared contracts/helpers.
+```json
+{
+  "models": {
+    "advisor": null,
+    "specialist": null,
+    "head": null
+  },
+  "board": {
+    "specialists": "suggest",
+    "maxSpecialistCalls": 3,
+    "specialistMaxTokens": 900,
+    "headMaxTokens": 1200
+  }
+}
+```
 
-Former workspace-only lab helpers were archived; the supported production path is the consolidated bundle and shared core/context runtime.
+`null` selects one compatible model using the bounded preference for that role. An explicit `<provider>/<model>` value overrides discovery. Advisor and Head prefer a strong compatible model; specialists prefer a cheaper compatible model. Resolution attempts the configured model and at most one preferred fallback—never an unbounded provider loop. Model selection never changes Pi's global active model.
 
-## Command cheat sheet
+## Explicit-only safety boundary
 
-| Surface | Common commands |
-|---|---|
-| Pi-Rogue | `/pi-rogue status`, `/pi-rogue help`, `/pi-rogue doctor` |
-| Advisor | `/pi-rogue-advisor status`, `settings`/`config`, `on`/`off`, `mode`, `model`, `review light\|strict\|off`, `<question>` |
-| Router | `/pi-rogue-router status`, `mode observe`, `mode auto_model`, `profile <name>`, `models`, `configure` |
-| Orchestration | `/pi-rogue-orchestration goal set/show/clear/list`, `/goal set/show/clear/list`, `/loop status/off/<interval> <instruction>`, `/autoresearch status/clear/<instruction>`, `/pi-rogue-orchestration lab status/clear/<instruction>` |
-| Context | `/pi-rogue-context status`, `brief`, `lookup <handle\|text>`, `pin <handle>`, `export <handle>`, `prune` |
+Normal session lifecycle events do not call models. Pi-Rogue has no automatic review, check-in, routing, model switching, prompt rewriting, context database, Fusion/panel calls, orchestration loops, or background workers. An explicit Advisor, specialist, or Head call is bounded by its configured token/time/call limits and fails closed for unavailable models, oversized or unsanitized input, disallowed roles, and mutating tools. Results are suggestions only; they do not suppress work, retry themselves, or trigger another call.
 
-## Learn more
+## Package and development
 
-- [Canonical package README](packages/bundle/README.md) — install scope and bundled command surface.
-- [Advisor README](packages/advisor/README.md) and [binary gate runbook](docs/routing-binary-gate.md) — escalation policy, trained gate, and evaluation workflow.
-- [Router README](packages/router/README.md), [routing dataset workflow](docs/routing-dataset.md), and [routing labels](docs/routing-labels.md) — route telemetry and learning loop.
-- [Context broker README](packages/context-broker/README.md) and [context footprint proposal](docs/context-footprint-broker.md) — prompt-safe artifact storage and lookup.
-- [Advisor Board agent/skill taxonomy](docs/advisor-board-agent-skill-taxonomy.md) — boundary between advisory agents, executable skills, and role Markdown.
-- [Advisor Board replay PoC](docs/advisor-board-poc.md) — deterministic ledger/replay gate before live board behavior.
-- [Orchestration README](packages/orchestration/README.md) — goal, loop, autoresearch, and lab behavior.
-- [Release guide](docs/release.md) — canonical `pi-rogue-<semver>` release process.
-
-## Local development
+`@fiale-plus/pi-rogue` is the canonical single public artifact. It bundles `@fiale-plus/pi-core` and the internal `@fiale-plus/pi-rogue-advisor` package; direct Advisor releases remain paused and are not a separate user install path.
 
 ```bash
 npm install
 npm run check
 npm test
+npm run test:packed-min-node
 ```
 
-Legacy `.autoresearch` scratch data is archived at `~/.pi/archived-autoresearch/pi-rogue/`.
+## Learn more
 
+- [Canonical package README](packages/bundle/README.md) — install scope, model map, and command surface.
+- [Advisor README](packages/advisor/README.md) — explicit calls, Board roles, and safety limits.
+- [Advisor Board taxonomy](docs/advisor-board-agent-skill-taxonomy.md) — static roles and permission boundaries.
+- [Advisor Board replay PoC](docs/advisor-board-poc.md) — bounded ledger/replay evidence model.
+- [Release guide](docs/release.md) — canonical `pi-rogue-<semver>` release process and legacy tombstones.
