@@ -55,8 +55,8 @@ describe("bundle publish metadata", () => {
 const args = process.argv.slice(2);
 const messages = {
   "@fiale-plus/pi-rogue-bundle": "Deprecated: replaced by @fiale-plus/pi-rogue. Install via \\"pi install npm:@fiale-plus/pi-rogue\\".",
-  "@fiale-plus/pi-rogue-advisor": "Deprecated: advisor/orchestration are bundled in @fiale-plus/pi-rogue. Install via \\"pi install npm:@fiale-plus/pi-rogue\\".",
-  "@fiale-plus/pi-rogue-orchestration": "Deprecated: advisor/orchestration are bundled in @fiale-plus/pi-rogue. Install via \\"pi install npm:@fiale-plus/pi-rogue\\".",
+  "@fiale-plus/pi-rogue-advisor": "Deprecated: bundled internal leaf; install @fiale-plus/pi-rogue via \\"pi install npm:@fiale-plus/pi-rogue\\".",
+  "@fiale-plus/pi-rogue-orchestration": "Deprecated: retired package. Install via \\"pi install npm:@fiale-plus/pi-rogue\\".",
   "@fiale-plus/pi-orchestration": "Deprecated: replaced by @fiale-plus/pi-rogue. Install via \\"pi install npm:@fiale-plus/pi-rogue\\"."
 };
 const spec = args[1] || "";
@@ -86,8 +86,8 @@ const args = process.argv.slice(2);
 const state = JSON.parse(fs.readFileSync(process.env.FAKE_NPM_STATE, "utf8"));
 const messages = {
   "@fiale-plus/pi-rogue-bundle": "Deprecated: replaced by @fiale-plus/pi-rogue. Install via \\"pi install npm:@fiale-plus/pi-rogue\\".",
-  "@fiale-plus/pi-rogue-advisor": "Deprecated: advisor/orchestration are bundled in @fiale-plus/pi-rogue. Install via \\"pi install npm:@fiale-plus/pi-rogue\\".",
-  "@fiale-plus/pi-rogue-orchestration": "Deprecated: advisor/orchestration are bundled in @fiale-plus/pi-rogue. Install via \\"pi install npm:@fiale-plus/pi-rogue\\".",
+  "@fiale-plus/pi-rogue-advisor": "Deprecated: bundled internal leaf; install @fiale-plus/pi-rogue via \\"pi install npm:@fiale-plus/pi-rogue\\".",
+  "@fiale-plus/pi-rogue-orchestration": "Deprecated: retired package. Install via \\"pi install npm:@fiale-plus/pi-rogue\\".",
   "@fiale-plus/pi-orchestration": "Deprecated: replaced by @fiale-plus/pi-rogue. Install via \\"pi install npm:@fiale-plus/pi-rogue\\"."
 };
 const spec = args[1] || "";

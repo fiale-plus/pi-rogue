@@ -5,7 +5,7 @@ version: 1
 enabledByDefault: false
 callableBy: [user, navigator]
 costTier: expensive
-allowedTools: [read, context_lookup]
+allowedTools: [read]
 outputSchema: boardVerdict.v1
 triggerHints: [architecture, security, escalation, decision]
 maxTokens: 1200

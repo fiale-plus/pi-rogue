@@ -5,7 +5,7 @@ import { basename, dirname, isAbsolute, join, relative, resolve } from "node:pat
 export type BoardRoleKind = "navigator" | "head-of-board" | "specialist";
 export type BoardRoleCaller = "user" | "codriver" | "navigator" | "head-of-board";
 export type BoardRoleCostTier = "free" | "cheap" | "standard" | "expensive";
-export type BoardRoleTool = "read" | "search" | "context_lookup";
+export type BoardRoleTool = "read" | "search";
 
 export interface BoardRoleFrontmatter {
   id: string;
@@ -44,7 +44,7 @@ export interface BoardRoleCatalog {
 const ROLE_KINDS = new Set<BoardRoleKind>(["navigator", "head-of-board", "specialist"]);
 const CALLERS = new Set<BoardRoleCaller>(["user", "codriver", "navigator", "head-of-board"]);
 const COST_TIERS = new Set<BoardRoleCostTier>(["free", "cheap", "standard", "expensive"]);
-const READ_ONLY_TOOLS = new Set<BoardRoleTool>(["read", "search", "context_lookup"]);
+const READ_ONLY_TOOLS = new Set<BoardRoleTool>(["read", "search"]);
 const MUTATING_TOOLS = new Set(["bash", "edit", "write", "apply_patch", "shell"]);
 const REQUIRED_KEYS = ["id", "kind", "version", "enabledByDefault", "callableBy", "costTier", "allowedTools", "outputSchema", "triggerHints", "maxTokens"];
 

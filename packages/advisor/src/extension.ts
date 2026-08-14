@@ -623,7 +623,7 @@ function specialistDispatchStatusText(cfg: AdvisorConfig, state: SessionState): 
     "Advisor Specialists: explicit-only",
     `Calls: ${state.specialistDispatch?.calls ?? 0}`,
     state.specialistDispatch?.lastRole ? `Last role: ${state.specialistDispatch.lastRole}` : "Last role: none",
-    "Constraints: read/search/context_lookup tools only, compact ledger input, bounded output.",
+    "Constraints: read/search tools only, compact ledger input, bounded output.",
   ].join("\n");
 }
 
@@ -2635,22 +2635,26 @@ function nestedToolValue(tool: unknown, keys: string[]): unknown {
   return value;
 }
 
-function lifecycleChangedFiles(tool: any): string[] {
+function lifecycleChangedFiles(tool: unknown): string[] {
   const command = toolCommand(tool);
   const toolName = String(nestedToolValue(tool, ["toolName"]) ?? nestedToolValue(tool, ["name"]) ?? "");
   const mutation = /\b(?:edit|write|patch|apply_patch|create|delete|remove|move|rename|mkdir|touch|cp|mv|rm)\b/i.test(`${toolName} ${command ?? ""}`);
-  if (!mutation) return [];
   const values: unknown[] = [
-    nestedToolValue(tool, ["path"]),
-    nestedToolValue(tool, ["file"]),
-    nestedToolValue(tool, ["input", "path"]),
-    nestedToolValue(tool, ["args", "path"]),
-    nestedToolValue(tool, ["details", "path"]),
-    nestedToolValue(tool, ["result", "path"]),
     nestedToolValue(tool, ["changedFiles"]),
     nestedToolValue(tool, ["files"]),
     nestedToolValue(tool, ["result", "changedFiles"]),
   ];
+  if (mutation) {
+    values.push(
+      nestedToolValue(tool, ["path"]),
+      nestedToolValue(tool, ["file"]),
+      nestedToolValue(tool, ["input", "path"]),
+      nestedToolValue(tool, ["args", "path"]),
+      nestedToolValue(tool, ["details", "path"]),
+      nestedToolValue(tool, ["result", "path"]),
+      toolEvidenceText(tool).match(/(?:created|updated|modified|edited|wrote|written|removed|deleted)\s+(?:file\s+)?[`"']?([./A-Za-z0-9_@-]+(?:\/[./A-Za-z0-9_@-]+)*)/gi)?.map((item) => item.replace(/^[^`"']*[`"']/, "").trim()),
+    );
+  }
   return [...new Set(values.flatMap((value) => Array.isArray(value) ? value : [value]).map((value) => boardEvidenceText(value, 240)).filter(Boolean))];
 }
 

@@ -11,7 +11,7 @@ version: 1
 enabledByDefault: true
 callableBy: [user, codriver]
 costTier: cheap
-allowedTools: [read, search, context_lookup]
+allowedTools: [read, search]
 outputSchema: boardFinding.v1
 triggerHints: [auth, secrets, permissions]
 maxTokens: 1200
@@ -53,7 +53,7 @@ describe("board role catalog", () => {
     expect(parsed.role).toMatchObject({
       id: "security",
       kind: "specialist",
-      allowedTools: ["read", "search", "context_lookup"],
+      allowedTools: ["read", "search"],
       title: "Security",
     });
   });
@@ -69,7 +69,7 @@ describe("board role catalog", () => {
   });
 
   it("proves Markdown cannot grant mutating tools", () => {
-    const parsed = parseBoardRoleMarkdown(validRole.replace("allowedTools: [read, search, context_lookup]", "allowedTools: [read, bash, edit, write]"), "mutating.md");
+    const parsed = parseBoardRoleMarkdown(validRole.replace("allowedTools: [read, search]", "allowedTools: [read, bash, edit, write]"), "mutating.md");
 
     expect(parsed.role).toBeUndefined();
     expect(parsed.diagnostic?.message).toContain("mutating tools are not allowed");
