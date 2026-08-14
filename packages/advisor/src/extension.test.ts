@@ -129,6 +129,35 @@ describe("Advisor PR1 lifecycle", () => {
     expect(vi.mocked(completeSimple)).not.toHaveBeenCalled();
   });
 
+  it("records changed files only for mutating tools", () => {
+    const handlers = new Map<string, (event: unknown, ctx: unknown) => void>();
+    const pi = {
+      on: (event: string, handler: (event: unknown, ctx: unknown) => void) => { handlers.set(event, handler); },
+      registerMessageRenderer: vi.fn(),
+      registerTool: vi.fn(),
+      registerCommand: vi.fn(),
+    } as unknown as ExtensionAPI;
+    registerAdvisor(pi);
+    const ctx = { session: { id: `advisor-mutations-${Date.now()}-${Math.random()}` }, cwd: process.cwd(), ui: { setStatus: vi.fn() } };
+    handlers.get("session_start")?.({}, ctx);
+    handlers.get("turn_end")?.({
+      turnIndex: 0,
+      toolResults: [
+        { toolName: "read", input: { path: "packages/advisor/README.md" }, status: "success" },
+        { toolName: "search", input: { path: "packages/advisor/src" }, status: "success" },
+        { toolName: "edit", input: { path: "packages/advisor/src/changed.ts" }, status: "success" },
+      ],
+    }, ctx);
+    const state = JSON.parse(readFileSync(advisorSessionStatePath(ctx), "utf8"));
+    expect(state.boardEvents.filter((event: unknown): event is { type: string; path: string } => (
+      typeof event === "object" && event !== null &&
+      "type" in event && event.type === "file_changed" &&
+      "path" in event && typeof event.path === "string"
+    )).map((event: { type: string; path: string }) => event.path)).toEqual([
+      "packages/advisor/src/changed.ts",
+    ]);
+  });
+
   it("increments turns on turn_end only, keeping cooldown turn accounting stable", () => {
     const handlers = new Map<string, (event: unknown, ctx: any) => void>();
     const pi = {

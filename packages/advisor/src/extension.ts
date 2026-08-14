@@ -3158,7 +3158,11 @@ function nestedToolValue(tool: unknown, keys: string[]): unknown {
   return value;
 }
 
-function lifecycleChangedFiles(tool: unknown): string[] {
+function lifecycleChangedFiles(tool: any): string[] {
+  const command = toolCommand(tool);
+  const toolName = String(nestedToolValue(tool, ["toolName"]) ?? nestedToolValue(tool, ["name"]) ?? "");
+  const mutation = /\b(?:edit|write|patch|apply_patch|create|delete|remove|move|rename|mkdir|touch|cp|mv|rm)\b/i.test(`${toolName} ${command ?? ""}`);
+  if (!mutation) return [];
   const values: unknown[] = [
     nestedToolValue(tool, ["path"]),
     nestedToolValue(tool, ["file"]),
@@ -3170,9 +3174,6 @@ function lifecycleChangedFiles(tool: unknown): string[] {
     nestedToolValue(tool, ["files"]),
     nestedToolValue(tool, ["result", "changedFiles"]),
   ];
-  const command = toolCommand(tool);
-  const mutation = /\b(?:edit|write|patch|apply_patch|create|delete|remove|move|rename|mkdir|touch|cp|mv|rm)\b/i.test(command ?? "");
-  if (mutation) values.push(toolEvidenceText(tool).match(/(?:created|updated|modified|edited|wrote|written|removed|deleted)\s+(?:file\s+)?[`"']?([./A-Za-z0-9_@-]+(?:\/[./A-Za-z0-9_@-]+)*)/gi)?.map((item) => item.replace(/^[^`"']*[`"']/, "").trim()));
   return [...new Set(values.flatMap((value) => Array.isArray(value) ? value : [value]).map((value) => boardEvidenceText(value, 240)).filter(Boolean))];
 }
 
