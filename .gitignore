@@ -8,14 +8,5 @@ coverage
 .pi/
 .pi-subagents/
 
-# Autoresearch cycles (generated)
-.autoresearch/
-
-# Routing miner output (generated)
-data/routing/*.jsonl
-data/routing/*.json
-data/routing/*.md
-
-
 # git worktrees (isolated dev)
 .worktrees/

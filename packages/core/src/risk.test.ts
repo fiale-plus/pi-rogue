@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { scanShellCommand, type RiskScan } from "./risk.js";
+import { scanShellCommand } from "./risk.js";
 
 describe("scanShellCommand", () => {
   it("returns safe for empty command", () => {

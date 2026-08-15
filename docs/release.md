@@ -41,7 +41,6 @@ Prefer the changelog entry before the release is cut.
 
 - `@fiale-plus/pi-rogue-advisor` is an internal bundled leaf; its direct release track stays paused.
 - `@fiale-plus/pi-rogue-bundle`, `@fiale-plus/pi-rogue-orchestration`, and the older `@fiale-plus/pi-orchestration` compatibility name are retired deprecation tracks.
-- The lab helpers (`pi-rogue-guardrails`, `pi-rogue-brain`, and `pi-rogue-repo-arch`) remain workspace-only and are not published.
 - Existing tombstones should keep warning-forwarding messages that point users to `@fiale-plus/pi-rogue`; do not describe retired packages as bundled runtime features.
 
 ## Release process notes

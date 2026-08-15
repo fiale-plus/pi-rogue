@@ -10,10 +10,7 @@
     "allowImportingTsExtensions": true,
     "paths": {
       "@fiale-plus/pi-core": ["./packages/core/src"],
-      "@fiale-plus/pi-advisor": ["./packages/advisor/src"],
-      "@fiale-plus/pi-rogue-guardrails": ["./packages/lab/guardrails/src"],
-      "@fiale-plus/pi-rogue-brain": ["./packages/lab/brain/src"],
-      "@fiale-plus/pi-rogue-repo-arch": ["./packages/lab/repo-arch/src"]
+      "@fiale-plus/pi-advisor": ["./packages/advisor/src"]
     }
   },
   "include": [

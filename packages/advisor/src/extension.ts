@@ -1,8 +1,7 @@
 import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
-import { existsSync, statSync } from "node:fs";
 import { homedir } from "node:os";
-import { basename, join, resolve } from "node:path";
+import { join } from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Box, Text } from "@earendil-works/pi-tui";
 import { completeSimple, type ThinkingLevel } from "@earendil-works/pi-ai/compat";
@@ -10,39 +9,17 @@ import { Type } from "typebox";
 import { sessionKey as sharedSessionKey, sessionScopedDir } from "@fiale-plus/pi-core";
 import { appendText, featureDir, featureFile, readText, truncate, writeText, atomicWriteText } from "./internal.js";
 import { ADVISOR_CANONICAL_CONTROL_LEAVES, advisorArgumentCompletions, piRogueArgumentCompletions } from "./completions.js";
-import {
-  appendRouteLog,
-  binaryGatePredict,
-  inspectBinaryGateArtifact,
-  formatAdvisorDisplay,
-  heuristicRoute,
-  mergeReviewPolicy,
-  routeNote,
-  summarizeRoute,
-  type AdvisorRouteDecision,
-  type AdvisorRouteInput,
-  type BinaryGateArtifactStatus,
-  type BinaryGatePrediction,
-  type ReviewPolicy,
-} from "./router.js";
-import { classifyIntent, classifyMode } from "./preflight-signals.js";
-import { findMissingReviewArtifacts } from "./review-preflight.js";
 import { buildBoardLedger, decideBoardAction, type BoardEvent } from "./board.js";
 import {
   callHeadOfBoardAdapter,
   defaultHeadOfBoardConfig,
-  mergeHeadOfBoardRisks,
-  normalizeHeadOfBoardConfig,
-  type HeadOfBoardConfig,
 } from "./board-head.js";
 import {
   callReadOnlySpecialist,
   defaultSpecialistCallState,
   defaultSpecialistDispatchConfig,
-  normalizeSpecialistDispatchConfig,
   suggestSpecialistRoles,
   type SpecialistCallState,
-  type SpecialistDispatchConfig,
 } from "./board-specialist.js";
 import { loadBoardRoleBody, loadBoardRoleCatalog } from "./board-roles.js";
 
@@ -70,23 +47,16 @@ export interface AdvisorConfig {
   board: AdvisorBoardConfig;
 }
 
-export type AdvisorProfileId = "budget-board";
-
-export interface AdvisorProfileRestore {
-  [key: string]: unknown;
-}
 type LegacyAdvisorConfig = {
   models?: unknown;
   board?: unknown;
   model?: unknown;
   mode?: unknown;
   review?: unknown;
-  checkins?: unknown;
-  checkinIntervalMinutes?: unknown;
-  profile?: unknown;
-  profileRestore?: unknown;
   headOfBoard?: unknown;
   specialistDispatch?: unknown;
+  profile?: unknown;
+  profileRestore?: unknown;
 };
 
 const DEFAULT_CONFIG: AdvisorConfig = {
@@ -102,7 +72,6 @@ const DEFAULT_CONFIG: AdvisorConfig = {
 const CONFIG_PATH = featureFile("advisor", "config.json");
 const LEGACY_STATE_PATH = featureFile("advisor", "state.json");
 const CACHE_PATH = featureFile("advisor", "cache.json");
-const HISTORY_PATH = featureFile("advisor", "history.jsonl");
 const DEFAULT_DIAGNOSTICS_PATH = featureFile("advisor", "diagnostics.jsonl");
 const SESSION_STATE_PROP = "__piRogueAdvisorStatePath";
 
@@ -116,8 +85,6 @@ const DEFAULT_RATE_LIMIT_BACKOFF_SECONDS = 15 * 60;
 const STATE_VERSION = 1;
 /** Maximum wall-clock time for one advisor model-resolution/completion work item. */
 export const DEFAULT_ADVISOR_WORK_TIMEOUT_MS = 60_000;
-const checkinLocks = new Set<string>();
-const reviewLocks = new Set<string>();
 const closedAdvisorSessions = new Set<string>();
 const advisorWorks = new Map<string, AdvisorWork>();
 
@@ -133,9 +100,6 @@ class AdvisorWorkAbortError extends Error {
   }
 }
 
-const REVIEW_TASK_ACTIONS_LIMIT = 2;
-const ADVISORY_SIGNALS_LIMIT = 4;
-const BUDGET_BOARD_PROFILE_ID: AdvisorProfileId = "budget-board";
 
 // ── SOTA models (ordered by preference) ───────────────────────────────────
 const SOTA_CHAIN: Array<{ provider: string; model: string; label: string }> = [
@@ -162,22 +126,6 @@ interface SessionState {
   errors: string[];
   advisorCalls: number;
   cacheHits: number;
-  followUp: string;
-  followUpTask?: string;
-  reviewSignals: string[];
-  reviewSignalsTask?: string;
-  router: {
-    preflight?: AdvisorRouteDecision;
-    review?: AdvisorRouteDecision;
-  };
-  checkin: {
-    lastAt?: string;
-    lastTurn?: number;
-    lastReason?: string;
-    queued?: boolean;
-    queuedReason?: string;
-  };
-  reviewControl: ReviewControlState;
   evidenceLedger: EvidenceLedgerEntry[];
   boardEvents: BoardLifecycleEvent[];
   workflow?: WorkflowState;
@@ -195,7 +143,6 @@ interface SessionState {
     lastNote?: string;
     lastDenied?: string;
   };
-  advisorPauseUntilTurn?: number;
 }
 type BoardLifecycleEvent = Extract<BoardEvent, { type: "file_changed" | "tool_failure" }>;
 
@@ -233,39 +180,6 @@ type AdvisorRateLimitState = {
   reason: string;
   retryAfterSeconds?: number;
 };
-function defaultReviewControl(): ReviewControlState {
-  return {
-    status: "idle",
-    pending: false,
-    consumed: true,
-    running: false,
-  };
-}
-
-function defaultState(): SessionState {
-  return {
-    turns: 0,
-    lastTask: "",
-    notes: [],
-    files: [],
-    errors: [],
-    advisorCalls: 0,
-    cacheHits: 0,
-    followUp: "",
-    followUpTask: undefined,
-    reviewSignals: [],
-    reviewSignalsTask: undefined,
-    router: {},
-    checkin: { queued: false },
-    reviewControl: defaultReviewControl(),
-    evidenceLedger: [],
-    boardEvents: [],
-    workflow: {},
-    advisorLoop: defaultAdvisorLoopState(),
-    headOfBoard: { calls: 0 },
-    specialistDispatch: defaultSpecialistCallState(),
-  };
-}
 
 // ── File I/O ──────────────────────────────────────────────────────────────
 function readJson<T>(path: string, fallback: T): T {
@@ -332,10 +246,6 @@ function advisorSessionDir(ctxOrKey?: any): string {
 
 export function advisorSessionStatePath(ctxOrKey?: any): string {
   return join(advisorSessionDir(ctxOrKey), "state.json");
-}
-
-function advisorCurrentPath(ctxOrKey?: any): string {
-  return join(advisorSessionDir(ctxOrKey), "current.md");
 }
 
 function safeSessionKey(key: string): string {
@@ -462,16 +372,6 @@ function loadState(ctxOrKey?: any): SessionState {
 
 function loadStateFromPath(path: string): SessionState {
   const raw = readJson<Partial<SessionState>>(path, {});
-  // Handle state versioning: migrate old versions to current
-  const version = raw._v ?? 0;
-  if (version < STATE_VERSION) {
-    // Migrate: ensure reviewControl has all fields
-    if (raw.reviewControl && !raw.reviewControl.lastAppliedAt) {
-      (raw.reviewControl as any).lastAppliedAt = new Date().toISOString();
-    }
-  }
-  const control = raw.reviewControl;
-  const pauseUntil = Number(raw.advisorPauseUntilTurn);
   return attachStatePath({
     _v: STATE_VERSION,
     turns: raw.turns ?? 0,
@@ -481,33 +381,6 @@ function loadStateFromPath(path: string): SessionState {
     errors: (raw.errors ?? []).slice(-MAX_ERRORS),
     advisorCalls: raw.advisorCalls ?? 0,
     cacheHits: raw.cacheHits ?? 0,
-    followUp: raw.followUp ?? "",
-    followUpTask: raw.followUpTask,
-    reviewSignals: Array.isArray(raw.reviewSignals) ? raw.reviewSignals.map((line: unknown) => sanitizeAdvisorText(line).trim()).filter(Boolean).slice(-MAX_NOTES) : [],
-    reviewSignalsTask: raw.reviewSignalsTask,
-    router: {
-      preflight: raw.router?.preflight,
-      review: raw.router?.review,
-    },
-    checkin: {
-      lastAt: raw.checkin?.lastAt,
-      lastTurn: raw.checkin?.lastTurn,
-      lastReason: raw.checkin?.lastReason,
-      queued: Boolean(raw.checkin?.queued),
-      queuedReason: raw.checkin?.queuedReason,
-    },
-    reviewControl: {
-      status: (control?.status === "needed" || control?.status === "running" || control?.status === "consumed" || control?.status === "idle") ? control.status : "idle",
-      pending: Boolean(control?.pending),
-      consumed: control?.consumed !== false,
-      running: Boolean(control?.running),
-      lastDecision: control?.lastDecision,
-      lastMaterialSignature: control?.lastMaterialSignature,
-      lastReason: control?.lastReason,
-      lastTrigger: control?.lastTrigger,
-      lastAppliedAt: control?.lastAppliedAt,
-      terminalEvidence: normalizeTerminalEvidence((control as { terminalEvidence?: unknown } | undefined)?.terminalEvidence),
-    },
     evidenceLedger: normalizeEvidenceLedger(raw.evidenceLedger),
     boardEvents: normalizeBoardEvents(raw.boardEvents),
     workflow: normalizeWorkflowState(raw.workflow),
@@ -545,24 +418,11 @@ function loadStateFromPath(path: string): SessionState {
       lastNote: typeof (raw.specialistDispatch as { lastNote?: unknown }).lastNote === "string" ? (raw.specialistDispatch as { lastNote?: string }).lastNote : undefined,
       lastDenied: typeof (raw.specialistDispatch as { lastDenied?: unknown }).lastDenied === "string" ? (raw.specialistDispatch as { lastDenied?: string }).lastDenied : undefined,
     } : defaultSpecialistCallState(),
-    advisorPauseUntilTurn: Number.isFinite(pauseUntil) ? pauseUntil : undefined,
   }, path);
 }
 
 function saveState(s: SessionState) {
   atomicWriteText(statePathFor(s), JSON.stringify(s, null, 2) + "\n");
-}
-
-
-function headOfBoardStatusText(_cfg: AdvisorConfig, state: SessionState): string {
-  return [
-    "Advisor Head-of-Board: explicit-only",
-    `Calls: ${state.headOfBoard?.calls ?? 0}`,
-    state.headOfBoard?.lastAt ? `Last: ${state.headOfBoard.lastAt}` : "Last: never",
-    state.headOfBoard?.lastModel ? `Last model: ${state.headOfBoard.lastModel}` : undefined,
-    state.headOfBoard?.lastSkipped ? `Last skipped: ${state.headOfBoard.lastSkipped}` : undefined,
-    "Constraints: isolated, read-only, compact board ledger only, no mutating tools/raw transcript.",
-  ].filter(Boolean).join("\n");
 }
 
 export function currentBoardLedger(ctx: any, state: SessionState) {
@@ -618,7 +478,7 @@ async function runHeadOfBoardCommand(ctx: any, cfg: AdvisorConfig, state: Sessio
   ctx.ui.notify(`Head-of-Board (${result.response.model}):\n${result.response.text}`, "info");
 }
 
-function specialistDispatchStatusText(cfg: AdvisorConfig, state: SessionState): string {
+function specialistDispatchStatusText(_cfg: AdvisorConfig, state: SessionState): string {
   return [
     "Advisor Specialists: explicit-only",
     `Calls: ${state.specialistDispatch?.calls ?? 0}`,
@@ -635,15 +495,6 @@ function specialistById(roleId: string) {
   const loaded = loadBoardRoleBody(summary);
   if (loaded.diagnostic) return { diagnostic: loaded.diagnostic.message };
   return { role: loaded.role };
-}
-
-function inferBoardDiscoveryRoot(ctx: any): string {
-  const cwd = resolve(String(ctx?.cwd || process.cwd()));
-  try {
-    return execFileSync("git", ["rev-parse", "--show-toplevel"], { cwd, encoding: "utf8" }).trim() || cwd;
-  } catch {
-    return cwd;
-  }
 }
 
 async function runSpecialistCommand(ctx: any, cfg: AdvisorConfig, state: SessionState, roleId: string, task: string): Promise<void> {
@@ -718,32 +569,6 @@ const ADVISOR_SYSTEM = `You are a senior engineering advisor. Use the session br
 - If no issues found, say so briefly — do not invent problems.
 - Flag security concerns, architecture risks, and test gaps.
 - Reference specific files or lines when possible.`;
-
-const REVIEW_SYSTEM = `You are a senior reviewer. An AI agent just completed work. Return ONLY valid JSON.
-
-## Required shape
-{
-  "task": "exact active task",
-  "verdict": "on_track|course_correct|not_done|skip",
-  "task_actions": ["task-critical action"],
-  "advisory_signals": ["non-blocking signal"],
-  "pivot": {
-    "recommended": false,
-    "blocking": false,
-    "rationale": "why this is a pivot"
-  },
-  "summary": "short review summary",
-  "reason": "same as summary if different",
-  "notify": false
-}
-
-## Rules
-- Preserve and prioritize the active task before output decisions.
-- Only list truly required "task_actions" that move the original task forward.
-- Put useful but non-commanding findings in "advisory_signals".
-- Put pivots in "pivot"; only set blocking=true when there is an explicit security/data-loss risk, impossible prerequisite, or clear goal divergence.
-- Non-blocking pivot is not a command to switch tasks. If blocking pivots are recommended, include explicit rationale and require user confirmation before switching.
-`;
 
 // ── Helpers ───────────────────────────────────────────────────────────────
 
@@ -914,142 +739,12 @@ function toolOverallFailed(tool: any): boolean {
   return false;
 }
 
-function validationPassHasSeparateFailure(tool: any, command: string | undefined, output: string): boolean {
-  if (!toolOverallFailed(tool)) return false;
-  const combined = `${command ?? ""}\n${output}`;
-  return /\bgh\s+pr\s+merge\b/i.test(combined)
-    || /\b(?:fatal:|GraphQL:|Command exited with code\s+[1-9]\d*|error:)/i.test(output);
-}
-
-function clearGreenTerminalWorkflow(state: SessionState, reason: string): void {
-  if (state.workflow?.terminal?.state !== "green") return;
-  state.workflow = { ...(state.workflow ?? {}) };
-  delete state.workflow.terminal;
-  state.reviewControl.terminalEvidence = undefined;
-  appendAdvisorDiagnostic("green_terminal_cleared", { reason, task: state.lastTask });
-}
-
-
-function validationResultForTools(toolResults: any[]): "pass" | "fail" | undefined {
-  let sawPass = false;
-  for (const tool of toolResults) {
-    const command = toolCommand(tool);
-    const output = toolEvidenceText(tool);
-    if (!looksLikeValidationCommand(command, output)) continue;
-    const result = structuredValidationResult(tool);
-    if (result === "fail") return "fail";
-    if (result === "pass") sawPass = true;
-  }
-  return sawPass ? "pass" : undefined;
-}
-
-type ToolBatchEvaluation = {
-  latestValidation?: "pass" | "fail";
-  separateFailure: boolean;
-  failed: boolean;
-};
-
-function evaluateToolBatch(toolResults: any[]): ToolBatchEvaluation {
-  let latestValidation: "pass" | "fail" | undefined;
-  let separateFailure = false;
-  for (const tool of toolResults) {
-    const command = toolCommand(tool);
-    const output = toolEvidenceText(tool);
-    const isValidation = looksLikeValidationCommand(command, output);
-    if (isValidation) {
-      const result = structuredValidationResult(tool);
-      if (result) latestValidation = result;
-      if (result === "pass" && validationPassHasSeparateFailure(tool, command, output)) separateFailure = true;
-      continue;
-    }
-    if (isActualFailure(tool)) separateFailure = true;
-  }
-  return { latestValidation, separateFailure, failed: separateFailure || latestValidation === "fail" };
-}
-
-function effectiveFailureFromTools(state: SessionState, toolResults: any[]): boolean {
-  if (mergedTerminalWorkflowReason(state)) return false;
-  const evaluation = evaluateToolBatch(toolResults);
-  if (evaluation.failed) {
-    clearGreenTerminalWorkflow(state, "tool failed");
-    return true;
-  }
-  return false;
-}
-
-function hasUnresolvedMergeSignal(state: SessionState, toolResults: any[], text: string): boolean {
-  for (const tool of toolResults) {
-    const command = toolCommand(tool);
-    const output = toolEvidenceText(tool);
-    const mergeText = [command, output, text, state.lastTask].filter(Boolean).join("\n");
-    if (!/\bgh\s+pr\s+(?:view|merge)\b/i.test(mergeText) && !/\bstate\b["'\s:=]+(?:MERGED|OPEN|CLOSED)\b/i.test(mergeText)) continue;
-    const prState = parsePrState(output || text);
-    if (prState) return prState.state !== "MERGED";
-    if (/\bgh\s+pr\s+merge\b/i.test(mergeText)) return true;
-  }
-  return false;
-}
 
 function latestEvidence(state: SessionState, kind: EvidenceKind): EvidenceLedgerEntry | undefined {
   return [...(state.evidenceLedger ?? [])].reverse().find((entry) => entry.kind === kind);
 }
 
-function clearValidationResolvedReview(state: SessionState, entry: EvidenceLedgerEntry, ctx?: any): void {
-  const reason = "latest validation passed";
-  state.followUp = "";
-  state.followUpTask = undefined;
-  state.reviewSignals = [];
-  state.reviewSignalsTask = undefined;
-  state.advisorLoop = defaultAdvisorLoopState();
-  if (state.router.review?.trajectory) {
-    state.router.review = {
-      ...state.router.review,
-      reason,
-      trajectory: { ...state.router.review.trajectory, failed: false },
-    };
-  }
-  state.reviewControl = {
-    ...state.reviewControl,
-    status: "consumed",
-    pending: false,
-    consumed: true,
-    running: false,
-    lastDecision: "continue",
-    lastReason: reason,
-    lastAppliedAt: entry.timestamp,
-  };
-  if (ctx) writeText(advisorCurrentPath(ctx), `${formatAdvisorDisplay("advisor:llm", "continue", reason)}\n`);
-}
-
-function clearMergedResolvedReview(state: SessionState, entry: EvidenceLedgerEntry, ctx?: any): void {
-  const reason = "PR merged";
-  state.followUp = "";
-  state.followUpTask = undefined;
-  state.reviewSignals = [];
-  state.reviewSignalsTask = undefined;
-  state.advisorLoop = defaultAdvisorLoopState();
-  if (state.router.review?.trajectory) {
-    state.router.review = {
-      ...state.router.review,
-      reason,
-      trajectory: { ...state.router.review.trajectory, failed: false },
-    };
-  }
-  state.reviewControl = {
-    ...state.reviewControl,
-    status: "consumed",
-    pending: false,
-    consumed: true,
-    running: false,
-    lastDecision: "continue",
-    lastReason: reason,
-    lastAppliedAt: entry.timestamp,
-  };
-  if (ctx) writeText(advisorCurrentPath(ctx), `${formatAdvisorDisplay("advisor:llm", "continue", reason)}\n`);
-}
-
-
-function appendEvidence(state: SessionState, entry: EvidenceLedgerEntry, ctx?: any, options: { clearResolved?: boolean } = {}): void {
+function appendEvidence(state: SessionState, entry: EvidenceLedgerEntry): void {
   state.evidenceLedger = [...(state.evidenceLedger ?? []), entry].slice(-MAX_EVIDENCE);
   if (entry.kind === "merge" && entry.result === "merged") {
     state.workflow = {
@@ -1063,11 +758,7 @@ function appendEvidence(state: SessionState, entry: EvidenceLedgerEntry, ctx?: a
         pr: entry.pr,
       },
     };
-    clearMergedResolvedReview(state, entry, ctx);
     return;
-  }
-  if (entry.kind === "validation" && entry.result === "pass" && options.clearResolved !== false) {
-    clearValidationResolvedReview(state, entry, ctx);
   }
 }
 
@@ -1118,8 +809,6 @@ function recheckRemotePrState(ctx: any, pr?: number): { state: string; mergeComm
 function observeWorkflowEvidence(state: SessionState, ctx: any, source: string, toolResults: any[], text = ""): void {
   const sha = safeCurrentGitSha(ctx);
   const timestamp = new Date().toISOString();
-  const batchEvaluation = evaluateToolBatch(toolResults);
-  const clearValidationResolved = (Boolean(mergedTerminalWorkflowReason(state)) || !batchEvaluation.failed) && !hasUnresolvedMergeSignal(state, toolResults, text);
   for (const tool of toolResults) {
     const command = toolCommand(tool);
     const output = toolEvidenceText(tool);
@@ -1127,7 +816,7 @@ function observeWorkflowEvidence(state: SessionState, ctx: any, source: string, 
     if (looksLikeValidationCommand(command, output)) {
       const result = structuredValidationResult(tool);
       if (result) {
-        appendEvidence(state, { kind: "validation", sha, command, source, result, timestamp, turn: state.turns, exitCode, details: squish(output, 300) }, ctx, { clearResolved: clearValidationResolved });
+        appendEvidence(state, { kind: "validation", sha, command, source, result, timestamp, turn: state.turns, exitCode, details: squish(output, 300) });
       }
     }
 
@@ -1147,10 +836,10 @@ function observeWorkflowEvidence(state: SessionState, ctx: any, source: string, 
           exitCode,
           pr,
           details: prState.mergeCommit ? `mergeCommit=${prState.mergeCommit}` : prState.state,
-        }, ctx);
+        });
       } else if (/\bgh\s+pr\s+merge\b/i.test(mergeText)) {
         const localResult: EvidenceResult = exitCode === 0 ? "not_merged" : "error";
-        appendEvidence(state, { kind: "merge", sha, command, source, result: localResult, timestamp, turn: state.turns, exitCode, pr, details: squish(output, 300) }, ctx);
+        appendEvidence(state, { kind: "merge", sha, command, source, result: localResult, timestamp, turn: state.turns, exitCode, pr, details: squish(output, 300) });
         const shouldRecheck = localResult === "not_merged" || localMergeWorktreeError(output);
         if (shouldRecheck) {
           const remote = recheckRemotePrState(ctx, pr);
@@ -1165,26 +854,12 @@ function observeWorkflowEvidence(state: SessionState, ctx: any, source: string, 
               turn: state.turns,
               pr,
               details: remote.mergeCommit ? `mergeCommit=${remote.mergeCommit}` : remote.state,
-            }, ctx);
+            });
           }
         }
       }
     }
   }
-}
-
-function recordTerminalGreenCloseout(state: SessionState, ctx: any, source: string, reason: string): void {
-  if (state.workflow?.terminal?.state === "merged") return;
-  state.workflow = {
-    ...(state.workflow ?? {}),
-    terminal: {
-      state: "green",
-      sha: safeCurrentGitSha(ctx),
-      source,
-      timestamp: new Date().toISOString(),
-      reason,
-    },
-  };
 }
 
 function mergedTerminalWorkflowReason(state: SessionState): string | null {
@@ -1203,24 +878,7 @@ function terminalWorkflowReason(state: SessionState): string | null {
 
 type AdvisorRateLimitInfo = { reason: string; retryAfterSeconds?: number };
 
-function activeRateLimitReason(state: SessionState, now = Date.now()): string | null {
-  const limit = state.rateLimit;
-  if (!limit?.active) return null;
-  const until = Date.parse(limit.until);
-  if (!Number.isFinite(until) || until <= now) return null;
-  return `advisor rate limit active until ${limit.until}`;
-}
-
-function clearRateLimitedReviewReplay(state: SessionState, ctx: any, reason: string): void {
-  state.followUp = "";
-  state.followUpTask = undefined;
-  state.reviewSignals = [];
-  state.reviewSignalsTask = undefined;
-  state.advisorLoop = defaultAdvisorLoopState();
-  writeText(advisorCurrentPath(ctx), `${formatAdvisorDisplay("advisor:llm", "defer", reason)}\n`);
-}
-
-function recordRateLimit(state: SessionState, ctx: any, info: AdvisorRateLimitInfo): void {
+function recordRateLimit(state: SessionState, _ctx: any, info: AdvisorRateLimitInfo): void {
   const now = Date.now();
   const retryAfterSeconds = Math.max(1, info.retryAfterSeconds ?? DEFAULT_RATE_LIMIT_BACKOFF_SECONDS);
   const since = new Date(now).toISOString();
@@ -1232,7 +890,6 @@ function recordRateLimit(state: SessionState, ctx: any, info: AdvisorRateLimitIn
     reason: info.reason,
     retryAfterSeconds,
   };
-  clearRateLimitedReviewReplay(state, ctx, info.reason);
 }
 
 function numericHeader(headers: Record<string, unknown> | undefined, key: string): number | undefined {
@@ -1372,16 +1029,6 @@ async function withAdvisorWork<T>(ctx: any, externalSignal: AbortSignal | undefi
   }
 }
 
-/** Contain event-handler fire-and-forget check-ins without scheduling more work. */
-function containAdvisorCheckin(promise: Promise<unknown>, source: string): void {
-  void promise.catch((error) => {
-    appendAdvisorDiagnostic("advisor_checkin_detached_failure", {
-      source,
-      error: error instanceof Error ? error.message : String(error),
-    });
-  });
-}
-
 function noteText(note: unknown): string {
   const text = contentText(note);
   if (/^\[object Object\](,\[object Object\])*$/.test(text)) return "";
@@ -1390,438 +1037,10 @@ function noteText(note: unknown): string {
   return text;
 }
 
-function normalizeReviewSignals(materialSignals: string[] = []): string[] {
-  return [...new Set(materialSignals.filter(Boolean).map((signal) => squish(signal)))].sort();
-}
 
-function normalizeReviewList(values: unknown, limit = 4): string[] {
-  if (typeof values === "string") {
-    const trimmed = sanitizeAdvisorText(values).trim();
-    return trimmed ? [trimmed] : [];
-  }
-  if (!Array.isArray(values)) return [];
-  const out = values
-    .map((value) => sanitizeAdvisorText(value).trim())
-    .filter((value): value is string => value.length > 0)
-    .slice(0, limit);
-  return [...new Set(out.map((value) => squish(value, 220)))];
-}
-
-function normalizeReviewVerdict(raw: unknown): ReviewVerdict {
-  const value = String(raw ?? "").trim().toLowerCase();
-  if (value === "on_track" || value === "course_correct" || value === "not_done" || value === "skip") {
-    return value as ReviewVerdict;
-  }
-  return "course_correct";
-}
-
-function toBoolean(value: unknown): boolean {
-  return value === true || value === "true" || String(value).trim().toLowerCase() === "true";
-}
-
-function isBlockingPivotCandidate(raw: { recommended?: unknown; blocking?: unknown; rationale?: unknown }): boolean {
-  if (!toBoolean(raw.recommended) || !toBoolean(raw.blocking)) return false;
-  const reason = sanitizeAdvisorText(raw.rationale).toLowerCase();
-  if (!reason) return false;
-  return /(security|data[-_ ]?loss|irreversible|prerequisite|impossible|cannot\s+complete|does not align|goal divergence|clear divergence|risk of data|critical)/.test(reason);
-}
-
-function parsedPivot(raw: unknown): ParsedReviewPivot {
-  const pivot = (raw && typeof raw === "object") ? raw as Record<string, unknown> : {};
-  const rationale = sanitizeAdvisorText(pivot.rationale || pivot.reason || "").trim();
-  const blocking = toBoolean(pivot.blocking);
-  const candidate = {
-    recommended: toBoolean(pivot.recommended) || blocking,
-    blocking: false,
-    rationale,
-    confidence: Number(pivot.confidence),
-    requiresConfirmation: true,
-  };
-  const isAllowedBlock = isBlockingPivotCandidate({
-    recommended: pivot.recommended,
-    blocking: candidate.recommended && blocking,
-    rationale,
-  });
-  return {
-    ...candidate,
-    blocking: isAllowedBlock,
-  };
-}
-
-export function parseReviewPayload(raw: string, activeTask: string): ParsedReviewPayload | null {
-  try {
-    const text = String(raw || "").trim();
-    if (!text) return null;
-    const cleaned = text.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/i, "");
-    const parsed = JSON.parse(cleaned) as Record<string, unknown>;
-    if (!parsed || typeof parsed !== "object") return null;
-
-    const task = sanitizeAdvisorText(parsed.task || parsed.currentTask || activeTask || "").trim() || sanitizeAdvisorText(activeTask).trim();
-    const summary = sanitizeAdvisorText(parsed.summary).trim() || sanitizeAdvisorText(parsed.result).trim();
-    const reason = sanitizeAdvisorText(parsed.reason).trim() || sanitizeAdvisorText(parsed.notes).trim() || summary;
-    const verdict = normalizeReviewVerdict(parsed.verdict ?? "");
-    const taskActions = normalizeReviewList(parsed.task_actions ?? parsed.actions, REVIEW_TASK_ACTIONS_LIMIT);
-    const advisorySignals = normalizeReviewList(parsed.advisory_signals ?? [], ADVISORY_SIGNALS_LIMIT);
-    const pivot = parsedPivot(parsed.pivot as Record<string, unknown> | undefined);
-
-    return {
-      activeTask: task,
-      verdict,
-      taskActions,
-      advisorySignals,
-      pivot,
-      summary,
-      reason,
-    };
-  } catch {
-    return null;
-  }
-}
-
-export function isTaskContinuation(previousTask: string, nextTask: string): boolean {
-  const prev = normalizeTask(previousTask);
-  const next = normalizeTask(nextTask);
-  if (!prev || !next) return false;
-  if (prev === next) return true;
-
-  const prevRefs = githubIssueRefs(prev);
-  const nextRefs = githubIssueRefs(next);
-  const prevRepoRefs = githubIssueRepoRefs(prev);
-  const nextRepoRefs = githubIssueRepoRefs(next);
-
-  if (prevRepoRefs.length > 0 && nextRepoRefs.length > 0) {
-    if (!nextRepoRefs.some((ref) => prevRepoRefs.includes(ref))) {
-      return false;
-    }
-  }
-
-  if (prevRefs.length > 0 && nextRefs.length > 0) {
-    const numberLikeRefs = (refs: string[]) => refs.filter((ref) => /^issue:\d+$/.test(ref));
-    const prevNumbers = numberLikeRefs(prevRefs);
-    const nextNumbers = numberLikeRefs(nextRefs);
-    if (prevNumbers.length > 0 && nextNumbers.length > 0 && prevNumbers.some((ref) => nextNumbers.includes(ref))) {
-      return true;
-    }
-  }
-
-  if (hasConflictingTaskActions(prev, next)) return false;
-  return taskSimilarity(prev, next) >= 0.62;
-}
-
-const TASK_DIAGNOSTIC_ACTION_WORDS = new Set(["review", "reviews", "reviewed", "diagnose", "diagnoses", "diagnosed", "investigate", "investigates", "investigated", "inspect", "inspects", "inspected", "debug", "debugs", "debugged", "analyze", "analyzes", "analyzed"]);
-const TASK_ACTION_WORDS = new Set(["fix", "fixes", "fixed", "repair", "repairs", "repaired", "rotate", "rotates", "rotated", "replace", "replaces", "replaced", "add", "adds", "added", "implement", "implements", "implemented", "update", "updates", "updated", "remove", "removes", "removed", "delete", "deletes", "deleted", "refactor", "refactors", "refactored", ...TASK_DIAGNOSTIC_ACTION_WORDS]);
-const TASK_STOPWORDS = new Set(["the", "and", "for", "with", "from", "into", "this", "that", "then", "task", "work", "please", "need", "needs", "should", "would", "could", "have", "has", "had", "been", "about", "onto", "your", "here", "fix", "fixes", "fixed", "bug", "bugs", "issue", "issues", "update", "updates", "updated", "updating", "add", "adds", "added", "implement", "implements", "implemented", "implementing"]);
-
-function taskTokens(task: string): Set<string> {
-  return new Set(normalizeTask(task).split(" ").filter((token) => token.length > 2 && !TASK_STOPWORDS.has(token)));
-}
-
-function taskActionTokens(task: string): Set<string> {
-  return new Set(normalizeTask(task).split(" ").filter((token) => TASK_ACTION_WORDS.has(token)));
-}
-
-function hasConflictingTaskActions(previousTask: string, nextTask: string): boolean {
-  const prevActions = taskActionTokens(previousTask);
-  const nextActions = taskActionTokens(nextTask);
-  if (!prevActions.size || !nextActions.size) return false;
-  const hasDiagnosticAction = (actions: Set<string>) => [...actions].some((action) => TASK_DIAGNOSTIC_ACTION_WORDS.has(action));
-  if (hasDiagnosticAction(prevActions) || hasDiagnosticAction(nextActions)) return false;
-  for (const action of prevActions) {
-    if (nextActions.has(action)) return false;
-  }
-  return true;
-}
-
-function taskSimilarity(previousTask: string, nextTask: string): number {
-  const prevTokens = taskTokens(previousTask);
-  const nextTokens = taskTokens(nextTask);
-  if (prevTokens.size === 0 || nextTokens.size === 0) return 0;
-  let overlap = 0;
-  for (const token of prevTokens) {
-    if (nextTokens.has(token)) overlap += 1;
-  }
-  const smaller = Math.min(prevTokens.size, nextTokens.size);
-  if (smaller >= 2 && overlap === smaller) return 1;
-  if (smaller < 3) return 0;
-  return overlap / Math.max(prevTokens.size, nextTokens.size);
-}
-
-function normalizeTask(task: string): string {
-  return sanitizeAdvisorText(task).toLowerCase().replace(/[^a-z0-9#/:.-]+/g, " ").replace(/\s+/g, " ").trim();
-}
-
-function githubIssueRefs(task: string): string[] {
-  const text = normalizeTask(task);
-  const refs = new Set<string>();
-  for (const match of text.matchAll(/github\.com\/([^\s/]+\/[^\s/)]+)\/issues\/(\d+)/g)) {
-    const repo = match[1].toLowerCase();
-    refs.add(`issue:${repo}:${match[2]}`);
-    refs.add(`issue:${match[2]}`);
-  }
-  for (const match of text.matchAll(/(?:^|\s)#(\d+)(?=$|\s|[),.;:])/g)) refs.add(`issue:${match[1]}`);
-  for (const match of text.matchAll(/(?:^|\s)(?:issue|ticket)\s+(\d+)(?=$|\s|[),.;:])/g)) refs.add(`issue:${match[1]}`);
-  return [...refs];
-}
-
-function githubIssueRepoRefs(task: string): string[] {
-  const text = normalizeTask(task);
-  const repos = new Set<string>();
-  for (const match of text.matchAll(/github\.com\/([^\s/]+\/[^\s/)]+)\/issues\/(\d+)/g)) {
-    repos.add(`issue:${match[1].toLowerCase()}:${match[2]}`);
-  }
-  return [...repos];
-}
-
-function looksLikeExplicitTaskSwitch(previousTask: string, nextTask: string): boolean {
-  const prev = normalizeTask(previousTask);
-  const next = normalizeTask(nextTask);
-  if (!prev || !next) return false;
-  if (/\b(?:previous|prior|last|compare|carry over|same ticket|same issue)\b/.test(next)) return false;
-
-  const prevRefs = githubIssueRefs(prev);
-  const nextRefs = githubIssueRefs(next);
-  const prevRepoRefs = githubIssueRepoRefs(prev);
-  const nextRepoRefs = githubIssueRepoRefs(next);
-
-  if (nextRepoRefs.length > 0 && prevRepoRefs.length > 0) {
-    if (!nextRepoRefs.every((ref) => prevRepoRefs.includes(ref))) {
-      return true;
-    }
-  }
-
-  if (nextRefs.length > 0) {
-    if (prevRefs.length === 0) return true;
-    const numberLikeRefs = (refs: string[]) => refs.filter((ref) => /^issue:\d+$/.test(ref));
-    const prevNumbers = numberLikeRefs(prevRefs);
-    const nextNumbers = numberLikeRefs(nextRefs);
-    const sharedNumber = nextNumbers.some((ref) => prevNumbers.includes(ref));
-    if (sharedNumber) return false;
-    return nextRefs.some((ref) => !prevRefs.includes(ref));
-  }
-
-  if (isTaskContinuation(prev, next)) return false;
-
-  return /\b(?:next|new|another)\s+(?:ticket|issue|task)\b/.test(next);
-}
-
-function resetTaskScopedStateForSwitch(state: SessionState): void {
-  state.notes = [];
-  state.files = [];
-  state.errors = [];
-  state.followUp = "";
-  state.followUpTask = undefined;
-  state.reviewSignals = [];
-  state.reviewSignalsTask = undefined;
-  state.evidenceLedger = [];
-  state.workflow = {};
-  state.reviewControl = {
-    ...state.reviewControl,
-    status: "consumed",
-    pending: false,
-    consumed: true,
-    running: false,
-    lastDecision: "defer",
-    lastReason: "task switched",
-    lastAppliedAt: new Date().toISOString(),
-  };
-}
-
-function reviewMaterialSignature(state: SessionState, delta: string, meta: ReviewMaterialMeta): string {
-  const signals = normalizeReviewSignals(meta.materialSignals);
-  return hash(
-    "rev",
-    state.lastTask || "",
-    String(meta.isAgentEnd),
-    String(meta.fileChanged),
-    String(meta.failed),
-    delta || "(none)",
-    ...signals,
-  );
-}
-
-function shouldSkipReview(state: SessionState, signature: string): boolean {
-  return Boolean(signature && state.reviewControl.lastMaterialSignature === signature && !state.reviewControl.running);
-}
-
-function consumeReviewFollowUp(state: SessionState): void {
-  state.followUp = "";
-  state.reviewControl = {
-    ...state.reviewControl,
-    status: "consumed",
-    pending: false,
-    consumed: true,
-    running: false,
-    lastAppliedAt: new Date().toISOString(),
-  };
-}
-
-function markReviewSkipped(state: SessionState, signature: string, trigger: string): void {
-  appendAdvisorDiagnostic("review_repeated_snapshot_skipped", { signature, trigger, task: state.lastTask });
-  state.reviewControl = {
-    ...state.reviewControl,
-    status: "consumed",
-    running: false,
-    consumed: true,
-    pending: false,
-    lastMaterialSignature: signature,
-    lastDecision: "defer",
-    lastTrigger: trigger,
-    lastReason: "repeated material snapshot",
-    lastAppliedAt: new Date().toISOString(),
-  };
-}
-
-function markReviewRunning(state: SessionState, signature: string, trigger: string): void {
-  state.reviewControl = {
-    ...state.reviewControl,
-    status: "running",
-    running: true,
-    pending: true,
-    consumed: false,
-    lastMaterialSignature: signature,
-    lastTrigger: trigger,
-  };
-}
-
-function markReviewApplied(state: SessionState, signature: string, trigger: string, decision: "continue" | "review" | "defer", reason: string, consumed: boolean): void {
-  state.reviewControl = {
-    ...state.reviewControl,
-    status: consumed ? "consumed" : "needed",
-    running: false,
-    pending: !consumed,
-    consumed,
-    lastMaterialSignature: signature,
-    lastDecision: decision,
-    lastTrigger: trigger,
-    lastReason: reason,
-    lastAppliedAt: new Date().toISOString(),
-  };
-}
-
-function persistReviewState(state: SessionState, includeReviewRoute: boolean): void {
-  const persisted = loadStateFromPath(statePathFor(state));
-  persisted.reviewControl = state.reviewControl;
-  persisted.advisorLoop = state.advisorLoop;
-  persisted.followUp = state.followUp;
-  persisted.followUpTask = state.followUpTask;
-  persisted.reviewSignals = state.reviewSignals;
-  persisted.reviewSignalsTask = state.reviewSignalsTask;
-  persisted.advisorPauseUntilTurn = state.advisorPauseUntilTurn;
-  persisted.evidenceLedger = state.evidenceLedger;
-  persisted.boardEvents = state.boardEvents;
-  persisted.workflow = state.workflow;
-  persisted.rateLimit = state.rateLimit;
-  if (includeReviewRoute && state.router.review) {
-    persisted.router.review = state.router.review;
-  }
-  saveState(persisted);
-}
-
-const CLEAN_CLOSEOUT_RE = /\b(?:revalidated clean|validated clean|final (?:codex )?review (?:had no findings|clean|passed)|codex review (?:had no findings|clean)|no findings)\b/i;
-const UNRESOLVED_CLOSEOUT_RE = /\b(?:pending|still needs?|still needed|still required|incomplete|not done|todo|needs (?:changes|work|fix(?:es)?|review|attention)|(?:still|currently) failing|(?:still|currently) failed)\b/i;
 const STRUCTURED_GREEN_TEST_RE = /(?:\bTests\s+\d+\s+passed\s+\(\d+\)|\bTest Files\s+\d+\s+passed\s+\(\d+\)|\bnumFailedTests\s*[:=]\s*0\b|"numFailedTests"\s*:\s*0|\bsuccess\s*[:=]\s*true\b|"success"\s*:\s*true|\b(?:PIPE_)?EXIT\s*:\s*0\b)/i;
 const STRUCTURED_FAILING_TEST_RE = /(?:\bTests?\s+.*?\bfailed\s+\([1-9]\d*\)|\bTest Files\s+.*?\bfailed\s+\([1-9]\d*\)|\bnumFailedTests\s*[:=]\s*[1-9]\d*\b|"numFailedTests"\s*:\s*[1-9]\d*|\b(?:PIPE_)?EXIT\s*:\s*[1-9]\d*\b)/i;
 const HUMAN_TEST_SUMMARY_RE = /(?:\bTests?\s+\d+\s+(?:passed|failed)\s+\(\d+\)|\bTest Files\s+\d+\s+(?:passed|failed)\s+\(\d+\))/i;
-const TERMINAL_MERGED_RE = /(?:\bPR\s+#?\d+\s+state=MERGED\b|\bstate=MERGED\b|\bmerged\s*[:=]\s*true\b|"merged"\s*:\s*true|\bPull Request successfully merged\b)/i;
-
-type TerminalReviewEvidence = {
-  kind: "tests" | "merge" | "tests_and_merge";
-  task: string;
-  reason: string;
-  at: string;
-};
-
-function normalizeTerminalEvidence(value: unknown): TerminalReviewEvidence | undefined {
-  if (!value || typeof value !== "object") return undefined;
-  const candidate = value as Partial<TerminalReviewEvidence>;
-  if (candidate.kind !== "tests" && candidate.kind !== "merge" && candidate.kind !== "tests_and_merge") return undefined;
-  return {
-    kind: candidate.kind,
-    task: sanitizeAdvisorText(candidate.task ?? "").slice(0, 240),
-    reason: sanitizeAdvisorText(candidate.reason ?? "terminal clean closeout evidence").slice(0, 160),
-    at: sanitizeAdvisorText(candidate.at ?? new Date().toISOString()).slice(0, 64),
-  };
-}
-
-function closeoutEvidenceText(delta: string, meta: ReviewMaterialMeta): string {
-  return [delta, ...(meta.materialSignals ?? [])].filter(Boolean).join("\n");
-}
-
-function terminalEvidenceKind(delta: string, meta: ReviewMaterialMeta): TerminalReviewEvidence["kind"] | undefined {
-  const evidence = closeoutEvidenceText(delta, meta);
-  if (STRUCTURED_FAILING_TEST_RE.test(evidence)) return undefined;
-  const tests = STRUCTURED_GREEN_TEST_RE.test(evidence);
-  const merge = TERMINAL_MERGED_RE.test(evidence);
-  if (tests && merge) return "tests_and_merge";
-  if (merge) return "merge";
-  if (tests) return "tests";
-  return undefined;
-}
-
-function hasStructuredCleanCloseoutEvidence(delta: string, meta: ReviewMaterialMeta): boolean {
-  return Boolean(terminalEvidenceKind(delta, meta));
-}
-
-function recordTerminalEvidence(state: SessionState, delta: string, meta: ReviewMaterialMeta, reason: string): void {
-  const kind = terminalEvidenceKind(delta, meta);
-  if (!kind) return;
-  state.reviewControl.terminalEvidence = {
-    kind,
-    task: sanitizeAdvisorText(state.lastTask).slice(0, 240),
-    reason,
-    at: new Date().toISOString(),
-  };
-}
-
-function hasActiveTerminalEvidence(state: SessionState): boolean {
-  const evidence = normalizeTerminalEvidence(state.reviewControl.terminalEvidence);
-  if (!evidence) return false;
-  if (!evidence.task || !state.lastTask) return true;
-  return isTaskContinuation(evidence.task, state.lastTask);
-}
-
-function hasCleanCloseoutEvidence(delta: string, meta: ReviewMaterialMeta): boolean {
-  if (!meta.isAgentEnd || meta.failed) return false;
-  if (hasStructuredCleanCloseoutEvidence(delta, meta)) return true;
-  return Boolean(CLEAN_CLOSEOUT_RE.test(delta) && !UNRESOLVED_CLOSEOUT_RE.test(delta));
-}
-
-function clearResolvedReviewWarning(state: SessionState, ctx: any, reason: string): void {
-  appendAdvisorDiagnostic("review_closeout_cleared", { reason, task: state.lastTask });
-  state.followUp = "";
-  state.followUpTask = undefined;
-  state.reviewSignals = [];
-  state.reviewSignalsTask = undefined;
-  state.advisorLoop = defaultAdvisorLoopState();
-  if (state.router.review) {
-    state.router.review = {
-      ...state.router.review,
-      label: "on_track",
-      reason,
-      review: "off",
-      escalate: false,
-      trajectory: state.router.review.trajectory
-        ? { ...state.router.review.trajectory, failed: false }
-        : state.router.review.trajectory,
-    };
-  }
-  writeText(advisorCurrentPath(ctx), `${formatAdvisorDisplay("advisor:llm", "continue", reason)}\n`);
-}
-
-function recoverReviewControl(state: SessionState): void {
-  if (!state.reviewControl.running) return;
-
-  const pending = Boolean(state.reviewControl.pending);
-  appendAdvisorDiagnostic("review_running_recovered", { pending, task: state.lastTask, lastTrigger: state.reviewControl.lastTrigger });
-  state.reviewControl = {
-    ...state.reviewControl,
-    running: false,
-    status: pending ? "needed" : state.reviewControl.status === "needed" ? "needed" : "idle",
-    consumed: !pending,
-    lastMaterialSignature: undefined,
-    lastAppliedAt: new Date().toISOString(),
-  };
-}
 
 type AdvisorHintDetails = {
   kind?: "handoff" | "answer";
@@ -1829,19 +1048,6 @@ type AdvisorHintDetails = {
   reason?: string;
   summary?: string;
   actions?: unknown;
-};
-
-type ReviewControlState = {
-  status: "idle" | "needed" | "running" | "consumed";
-  pending: boolean;
-  consumed: boolean;
-  running: boolean;
-  lastDecision?: "continue" | "review" | "defer";
-  lastMaterialSignature?: string;
-  lastReason?: string;
-  lastTrigger?: string;
-  lastAppliedAt?: string;
-  terminalEvidence?: TerminalReviewEvidence;
 };
 
 type AdvisorLoopEntry = {
@@ -1868,83 +1074,11 @@ function defaultAdvisorLoopState(): AdvisorLoopState {
   return { repeatCount: 0, recent: [] };
 }
 
-type ReviewMaterialMeta = {
-  fileChanged: boolean;
-  failed: boolean;
-  isAgentEnd: boolean;
-  materialSignals?: string[];
-};
 
-export type ReviewVerdict = "on_track" | "course_correct" | "not_done" | "skip";
-
-export type ParsedReviewPivot = {
-  recommended: boolean;
-  blocking: boolean;
-  rationale: string;
-  confidence?: number;
-  requiresConfirmation: boolean;
-};
-
-export type ParsedReviewPayload = {
-  activeTask: string;
-  verdict: ReviewVerdict;
-  taskActions: string[];
-  advisorySignals: string[];
-  pivot: ParsedReviewPivot;
-  summary: string;
-  reason: string;
-};
 
 function normalizeAdvisorActions(actions: unknown): string[] {
   const raw = Array.isArray(actions) ? actions : typeof actions === "string" ? [actions] : [];
   return raw.map((action) => squish(action, 200)).filter(Boolean).slice(0, 2);
-}
-
-function buildAdvisorySignalsBlock(task: string, advisorySignals: string[], pivot: ParsedReviewPivot): string {
-  if (!advisorySignals.length && !pivot.recommended) return "";
-  const parts = [
-    task ? `Active task: ${sanitizeAdvisorText(task).slice(0, 220)}` : "",
-    advisorySignals.length ? `Advisory signals (non-commanding): ${advisorySignals.join("; ")}` : "",
-    pivot.recommended
-      ? `Pivot (${pivot.blocking ? "blocking" : "non-blocking"}): ${pivot.rationale || "review before task switch"}${pivot.blocking ? " (requires user confirmation)" : ""}`
-      : "",
-  ].filter(Boolean);
-  return parts.join("\n");
-}
-
-export function consumeTaskScopedReviewSignals(state: SessionState, task: string): string {
-  if (!state.reviewSignals.length) return "";
-  const signalTask = state.reviewSignalsTask ?? "";
-  if (!signalTask || !task || !isTaskContinuation(signalTask, task)) {
-    appendAdvisorDiagnostic("stale_review_signals_dropped", { signalTask, task, count: state.reviewSignals.length });
-    state.reviewSignals = [];
-    state.reviewSignalsTask = undefined;
-    return "";
-  }
-  const text = state.reviewSignals.join("\n");
-  state.reviewSignals = [];
-  state.reviewSignalsTask = undefined;
-  return text;
-}
-
-export function consumeTaskScopedFollowUp(state: SessionState, task: string): string {
-  if (!state.followUp) return "";
-  if (!state.followUpTask || !task) {
-    appendAdvisorDiagnostic("stale_followup_dropped", { followUpTask: state.followUpTask ?? "", task, reason: "missing_task_scope" });
-    state.followUp = "";
-    state.followUpTask = undefined;
-    return "";
-  }
-  if (!isTaskContinuation(state.followUpTask, task)) {
-    appendAdvisorDiagnostic("stale_followup_dropped", { followUpTask: state.followUpTask, task, reason: "task_changed" });
-    state.followUp = "";
-    state.followUpTask = undefined;
-    return "";
-  }
-  const text = state.followUp;
-  state.followUp = "";
-  state.followUpTask = undefined;
-  return text;
 }
 
 function comparableAdvisorText(text: string): string {
@@ -2064,24 +1198,6 @@ function advisorHandoffText(decision: "continue" | "review" | "defer", reason: s
   ].filter(Boolean).join("\n");
 }
 
-function sendAdvisorHint(pi: ExtensionAPI, state: SessionState, familyHash: string, contextHash: string, decision: "continue" | "review" | "defer", reason: string, summary: string, actions: unknown = []): { text: string; loopDetected: boolean; repeatCount: number } {
-  const cleanReason = sanitizeAdvisorText(reason);
-  const cleanSummary = distinctAdvisorSummary(cleanReason, summary);
-  const limitedActions = normalizeAdvisorActions(actions);
-  const advisorText = advisorHandoffText(decision, cleanReason, cleanSummary, limitedActions);
-  const loop = observeAdvisorLoop(state, "handoff", familyHash, contextHash, advisorText);
-  pi.sendMessage(
-    {
-      customType: "advisor:llm",
-      content: loop.text,
-      display: true,
-      details: { kind: "handoff", decision, reason: cleanReason, summary: cleanSummary, actions: limitedActions, loopDetected: loop.loopDetected, loopRepeatCount: loop.repeatCount },
-    },
-    { deliverAs: "followUp" },
-  );
-  return loop;
-}
-
 function sendAdvisorAnswer(pi: ExtensionAPI, text: string) {
   const cleanText = sanitizeAdvisorText(text);
   pi.sendMessage({
@@ -2171,69 +1287,12 @@ export function contentText(content: unknown): string {
   return sanitizeAdvisorText(parts.join("\n")).replace(/\s+/g, " ").trim();
 }
 
-/** Check if a tool result or message indicates an actual execution failure */
-function isActualFailure(tool: any): boolean {
-  return toolOverallFailed(tool);
-}
-
 function responseText(resp: { content?: Array<{ type?: string; text?: string }> } | null | undefined): string {
   return (resp?.content ?? []).filter((b: any) => b?.type === "text").map((b: any) => b.text).join("\n").trim();
 }
 
-function mergeRouteReview(configReview: ReviewPolicy | undefined, route?: ReviewPolicy): ReviewPolicy {
-  const review = configReview ?? "light";
-  if (review === "off") return "off";
-  if (!route) return review;
-  return mergeReviewPolicy(review, route);
-}
-
 function sessionKey(ctx: any): string {
   return sharedSessionKey(ctx);
-}
-
-
-
-function advisorPauseRemaining(state: SessionState, nowTurns = state.turns): number {
-  const until = state.advisorPauseUntilTurn;
-  if (until === undefined || Number.isNaN(until)) return 0;
-  return Math.max(0, until - nowTurns);
-}
-
-function isAdvisorPaused(state: SessionState, nowTurns = state.turns): boolean {
-  return advisorPauseRemaining(state, nowTurns) > 0;
-}
-
-function isAdvisorAutoRunSuppressed(state: SessionState, nowTurns = state.turns): boolean {
-  return isAdvisorPaused(state, nowTurns) || Boolean(activeRateLimitReason(state));
-}
-
-function isAdvisorAutoRunSuppressedForTurnContext(state: SessionState, nowTurns = state.turns): boolean {
-  return isAdvisorAutoRunSuppressed(state, nowTurns) || isAdvisorAutoRunSuppressed(state, nowTurns - 1);
-}
-
-function checkinDescription(_config: AdvisorConfig): string {
-  return "checkins off";
-}
-
-function setPiRogueStatus(ctx: any, _config = loadConfig(), state?: SessionState): void {
-  const currentState = state ?? loadState(ctx);
-  ctx.ui.setStatus("pi-rogue", `advisor explicit-only · turns=${currentState.turns} · calls=${currentState.advisorCalls}`);
-}
-
-export function shouldRunCheckin(_config: AdvisorConfig, _state: SessionState, _now = Date.now(), _startedAt = _now): string | null {
-  return null;
-}
-
-
-
-
-function parseNonNegativeInt(value: unknown): number | undefined {
-  if (typeof value === "number") return Number.isInteger(value) && value >= 0 ? value : undefined;
-  if (typeof value !== "string") return undefined;
-  const text = value.trim();
-  if (!/^\d+$/.test(text)) return undefined;
-  const parsed = Number.parseInt(text, 10);
-  return Number.isFinite(parsed) && parsed >= 0 ? parsed : undefined;
 }
 
 type SubsystemStatusRow = {
@@ -2242,20 +1301,6 @@ type SubsystemStatusRow = {
   details: string;
 };
 
-function fileBytes(path: string): number | undefined {
-  try {
-    return statSync(path).size;
-  } catch {
-    return undefined;
-  }
-}
-
-function formatBytes(bytes: number): string {
-  if (bytes < 1024) return `${bytes} bytes`;
-  const kib = bytes / 1024;
-  return `${Number.isInteger(kib) ? kib.toFixed(0) : kib.toFixed(1)} KiB`;
-}
-
 function formatSubsystemStatusRows(rows: SubsystemStatusRow[]): string {
   const subsystemWidth = Math.max(11, ...rows.map((row) => row.subsystem.length));
   const statusWidth = Math.max(6, ...rows.map((row) => row.status.length));
@@ -2263,28 +1308,6 @@ function formatSubsystemStatusRows(rows: SubsystemStatusRow[]): string {
     `${"Subsystem".padEnd(subsystemWidth)} | ${"Status".padEnd(statusWidth)} | Details`,
     `${"-".repeat(subsystemWidth)}-+-${"-".repeat(statusWidth)}-+--------------------------------`,
     ...rows.map((row) => `${row.subsystem.padEnd(subsystemWidth)} | ${row.status.padEnd(statusWidth)} | ${row.details}`),
-  ].join("\n");
-}
-
-function advisorBinaryGatePathStatus(_config: AdvisorConfig): { preflight: string; review: string } {
-  return { preflight: "disabled (explicit-only)", review: "disabled (explicit-only)" };
-}
-
-export function formatAdvisorBinaryGateStatus(_config: AdvisorConfig, state: unknown, status: BinaryGateArtifactStatus = inspectBinaryGateArtifact()): string {
-  const route = state && typeof state === "object" && "router" in state ? (state as { router?: { review?: { source?: string } } }).router?.review : undefined;
-  const model = status.usable
-    ? `${status.kind}; features=${status.features ?? "unknown"}; source=${status.source}; stacked=${status.stacked ? "yes" : "no"}`
-    : status.available
-      ? `unusable (${status.source}: ${status.error || "invalid artifact"})`
-      : `unavailable (${status.error || "missing artifact"})`;
-  return [
-    "Binary gate:",
-    `- model: ${model}`,
-    "- advisor preflight: disabled (explicit-only)",
-    "- advisor review: disabled (explicit-only)",
-    "- can act now: no",
-    `- latest route: ${route?.source ?? "no advisor route yet"}`,
-    `- artifact: ${status.path}`,
   ].join("\n");
 }
 
@@ -2304,81 +1327,6 @@ function piRogueCockpitText(config: AdvisorConfig, state: SessionState, _current
     "Commands: /pi-rogue status|help|doctor · /pi-rogue-advisor status|settings|model|board",
   ].join("\n");
 }
-
-
-export interface AdvisorBoardProfilePlan {
-  id: AdvisorProfileId;
-  active: boolean;
-  driverModel: string;
-  advisorModel: string;
-  headOfBoardModel: string;
-  specialistModel: string;
-  mutatesGlobalDriver: false;
-  advisorConfig: AdvisorConfig;
-  files: { advisor: string };
-  warnings: string[];
-}
-
-export function buildAdvisorBoardProfilePlan(ctx: any, current: AdvisorConfig = normalizeAdvisorConfig({})): AdvisorBoardProfilePlan {
-  const normalized = normalizeAdvisorConfig(current);
-  const advisorModel = normalized.models?.advisor ?? `${SOTA_CHAIN[0].provider}/${SOTA_CHAIN[0].model}`;
-  const specialistModel = normalized.models?.specialist ?? advisorModel;
-  const headModel = normalized.models?.head ?? advisorModel;
-  return {
-    id: BUDGET_BOARD_PROFILE_ID,
-    active: false,
-    driverModel: advisorModel,
-    advisorModel,
-    headOfBoardModel: headModel,
-    specialistModel,
-    mutatesGlobalDriver: false,
-    advisorConfig: normalized,
-    files: { advisor: CONFIG_PATH },
-    warnings: [],
-  };
-}
-
-export function applyAdvisorBoardProfilePlan(plan: AdvisorBoardProfilePlan): AdvisorConfig {
-  writeJson(plan.files.advisor, plan.advisorConfig);
-  return plan.advisorConfig;
-}
-
-function profileHeadOfBoardConfig(): HeadOfBoardConfig {
-  return { ...defaultHeadOfBoardConfig(), mode: "enabled" };
-}
-
-function profileSpecialistDispatchConfig(): SpecialistDispatchConfig {
-  return { ...defaultSpecialistDispatchConfig(), mode: "suggest", maxCostTier: "cheap", maxCallsPerSession: 3 };
-}
-
-export function budgetBoardEscalationPolicyText(config: AdvisorConfig): string {
-  const cfg = normalizeAdvisorConfig(config);
-  return [
-    "Advisor Board policy: explicit-only model calls.",
-    `  advisor: ${cfg.models?.advisor ?? "preferred candidate"}`,
-    `  specialist: ${cfg.models?.specialist ?? "preferred candidate"}`,
-    `  head: ${cfg.models?.head ?? "preferred candidate"}`,
-    `  bounds: ${JSON.stringify(cfg.board)}`,
-  ].join("\n");
-}
-
-export function disableAdvisorBoardProfile(current: AdvisorConfig): AdvisorConfig {
-  return normalizeAdvisorConfig(current);
-}
-
-function advisorBoardProfileText(plan: AdvisorBoardProfilePlan): string {
-  return [
-    "Pi-Rogue advisor profile: explicit-only Board",
-    `Status: ${plan.active ? "active" : "available"}`,
-    `advisor: ${plan.advisorModel}`,
-    `specialist: ${plan.specialistModel}`,
-    `head: ${plan.headOfBoardModel}`,
-    budgetBoardEscalationPolicyText(plan.advisorConfig),
-  ].join("\n");
-}
-
-
-
 
 
 
@@ -2562,9 +1510,7 @@ async function completeAdvisorWork(
       }
     }
     if (lastRateLimit) return { text: lastRateLimit.reason, model: "none", rateLimited: true, retryAfterSeconds: lastRateLimit.retryAfterSeconds };
-    // Manual Advisor calls surface the aggregate failure, while automatic
-    // higher-model check-ins retain their historical null-on-failure contract
-    // so callers do not record an error string as a successful check-in.
+    // Manual Advisor calls surface the aggregate failure so callers can report it clearly.
     return lastError && includeFallbackFlag
       ? { text: `No advisor/check-in model completed successfully (${lastError}).`, model: "none" }
       : null;
@@ -2579,7 +1525,7 @@ export async function completeWithHigherAdvisorModel(ctx: any, config: AdvisorCo
   return completeAdvisorWork(ctx, config, systemPrompt, messages, options, false);
 }
 
-async function askAdvisor(pi: ExtensionAPI, ctx: any, question: string, scope: string, includeWork: boolean, signal?: AbortSignal) {
+async function askAdvisor(_pi: ExtensionAPI, ctx: any, question: string, scope: string, includeWork: boolean, signal?: AbortSignal) {
   const config = loadConfig();
   const state = loadState(ctx);
   const normalizedQuestion = sanitizeAdvisorText(question).trim();
@@ -2699,45 +1645,6 @@ function collectLifecycleEvidence(event: unknown, ctx: any, agentEnd: boolean): 
 
 // ── Extension entry point ──────────────────────────────────────────────────
 
-export function shouldRunAdvisorReview(
-  review: ReviewPolicy,
-  meta: { isAgentEnd: boolean; fileChanged: boolean; failed: boolean },
-  route: AdvisorRouteDecision,
-  turns: number,
-): boolean {
-  return review === "strict"
-    ? meta.isAgentEnd || meta.fileChanged || meta.failed || route.label !== "abstain" || turns % 3 === 0
-    : review !== "off" && (meta.fileChanged || meta.failed);
-}
-
-export function applyReviewGatePrediction(heuristic: AdvisorRouteDecision, prediction: BinaryGatePrediction | null, failed = false): AdvisorRouteDecision {
-  if (!prediction?.trusted || heuristic.safety || failed) return heuristic;
-  const gateContinues = prediction.decision === "continue";
-  return {
-    ...heuristic,
-    label: gateContinues ? "abstain" : "course_correct",
-    confidence: prediction.confidence,
-    source: "model",
-    reason: gateContinues ? "local gate predicts continue" : "local gate predicts review",
-    review: gateContinues ? "off" : "strict",
-    escalate: !gateContinues,
-  };
-}
-
-export function applyPreflightGatePrediction(heuristic: AdvisorRouteDecision, prediction: BinaryGatePrediction | null): AdvisorRouteDecision {
-  if (!prediction?.trusted || heuristic.safety) return heuristic;
-  const label = prediction.decision === "continue" ? "continue" : "escalate_to_advisor";
-  return {
-    ...heuristic,
-    label,
-    confidence: prediction.confidence,
-    reason: prediction.decision === "continue" ? "local gate predicts continue" : "local gate predicts review",
-    source: "model",
-    preflight: label === "continue" ? "off" : "full",
-    escalate: label === "escalate_to_advisor",
-  };
-}
-
 export function registerAdvisor(pi: ExtensionAPI): void {
   const p = pi as any;
   if (p.__piRogueAdvisorRegistered) return;
@@ -2748,13 +1655,12 @@ export function registerAdvisor(pi: ExtensionAPI): void {
   }
 
   // Lifecycle is deliberately limited to state ownership. It never resolves a
-  // model, completes a prompt, mutates a system prompt, or calls a router.
+  // model, completes a prompt, or mutates a system prompt.
   pi.on("session_start", (_event, ctx) => {
     const key = sessionKey(ctx);
     closedAdvisorSessions.delete(key);
     abortAdvisorWork(ctx, "superseded");
-    checkinLocks.delete(key);
-    saveState(loadState(ctx));
+      saveState(loadState(ctx));
   });
   pi.on("turn_end", (event, ctx) => {
     collectLifecycleEvidence(event, ctx, false);
@@ -2766,8 +1672,7 @@ export function registerAdvisor(pi: ExtensionAPI): void {
     const key = sessionKey(ctx);
     closedAdvisorSessions.add(key);
     abortAdvisorWork(ctx, "session_shutdown");
-    checkinLocks.delete(key);
-    ctx.ui.setStatus("pi-rogue", undefined);
+      ctx.ui.setStatus("pi-rogue", undefined);
   });
 
   pi.registerTool({
