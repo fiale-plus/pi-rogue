@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.3.36
+
+### Summary
+
+This release makes the canonical Pi-Rogue runtime explicit and minimal.
+
+### Changes
+
+- Remove retired Router, Fusion, Context Broker, and Orchestration runtime surfaces from the public bundle.
+- Keep Advisor and Board work opt-in, bounded, and read-only; ordinary Pi work performs no Pi-Rogue model calls.
+- Retain the canonical `@fiale-plus/pi-rogue` package as the sole public release artifact.
+
+### Validation
+
+- `npm run check`
+- `npm test`
+- Canonical package pack and clean Pi-host smoke test.
+- Minimum-Node packed-package smoke test.
+
 ## 0.3.35
 
 ### Summary
