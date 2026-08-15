@@ -42,6 +42,7 @@ The leaf package is private and is not an independent user install target.
 | `/pi-rogue-advisor` | Show explicit Advisor/Board status |
 | `/pi-rogue-advisor status` | Show selected model slots, Board bounds, and explicit-call counters |
 | `/pi-rogue-advisor settings` | Show the same local configuration without starting an advisory call |
+| `/pi-rogue-advisor model list [advisor\|specialist\|head]` | Inspect available models and role recommendations without an LLM call |
 | `/pi-rogue-advisor model [advisor\|specialist\|head] <provider>/<model>\|null` | Set or clear one model-map slot |
 | `/pi-rogue-advisor board specialist status` | Show specialist mode, limits, and call counts |
 | `/pi-rogue-advisor board specialist suggest` | Return a local suggestion about which static role may help; does not call a model |
@@ -72,7 +73,7 @@ The user-visible configuration is intentionally small:
 }
 ```
 
-`null` uses bounded role-appropriate selection from compatible text models. Explicit values use `<provider>/<model>` and take precedence. Advisor and Head prefer the strongest compatible candidate; specialists prefer the cheapest compatible candidate. Resolution attempts the configured candidate and at most one preferred fallback. It never loops through every provider and never mutates Pi's global active model.
+`null` uses bounded role-appropriate selection from compatible text models. Use `model list` to see authenticated text models, the selected/recommended candidate for each role, and facts such as reasoning support, context window, token limit, and declared input/output cost. The role policy is intentionally explainable rather than a universal quality claim: Advisor balances quality, specialists prefer efficiency, and Head prefers reasoning/context. Explicit values use `<provider>/<model>` and take precedence; unavailable or unauthenticated overrides are retained but shown with a warning. Resolution attempts the configured candidate and at most one preferred fallback. Inspection never calls a model, changes Pi's global active model, or persists config.
 
 Specialists default to `suggest` mode and are limited to three calls per session. Board inputs are compact, bounded, sanitized ledger data rather than raw transcripts. Disallowed roles/tools, missing evidence, oversized input, unavailable models, rate limits, and malformed responses fail closed with visible metadata. Suggestions cannot suppress the user's task, edit files, execute commands, or trigger a specialist or Head call.
 

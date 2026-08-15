@@ -23,7 +23,8 @@ describe("advisor completions", () => {
   });
 
   it("offers explicit model syntax", () => {
-    expect(advisorArgumentCompletions("model ")?.map((i) => i.value)).toEqual(["advisor", "specialist", "head", "null"]);
+    expect(advisorArgumentCompletions("model ")?.map((i) => i.value)).toEqual(["list", "advisor", "specialist", "head", "null"]);
+    expect(advisorArgumentCompletions("model list ")?.map((i) => i.value)).toEqual(["advisor", "specialist", "head"]);
   });
 
   it("offers explicit Board roles without shadow or discovery controls", () => {

@@ -1403,6 +1403,171 @@ function isTextModel(model: unknown): boolean {
   return !Array.isArray(input) || input.length === 0 || input.includes("text");
 }
 
+type AdvisorModelSummary = {
+  id: string;
+  name: string;
+  provider: string;
+  reasoning: boolean;
+  contextWindow?: number;
+  maxTokens?: number;
+  inputCost?: number;
+  outputCost?: number;
+};
+
+export type AdvisorModelInspection = {
+  role: AdvisorRole;
+  configured?: string;
+  configuredAvailable: boolean;
+  recommended?: string;
+  selected?: string;
+  candidates: AdvisorModelSummary[];
+};
+
+function finiteModelNumber(model: unknown, key: "contextWindow" | "maxTokens"): number | undefined {
+  if (!model || typeof model !== "object") return undefined;
+  const value = Number((model as Record<string, unknown>)[key]);
+  return Number.isFinite(value) && value > 0 ? value : undefined;
+}
+
+function modelCost(model: unknown, key: "input" | "output"): number | undefined {
+  if (!model || typeof model !== "object") return undefined;
+  const cost = (model as { cost?: unknown }).cost;
+  if (!cost || typeof cost !== "object") return undefined;
+  const value = Number((cost as Record<string, unknown>)[key]);
+  return Number.isFinite(value) && value >= 0 ? value : undefined;
+}
+
+export function summarizeAdvisorModel(model: unknown): AdvisorModelSummary | undefined {
+  const id = modelId(model);
+  if (!id || !isTextModel(model)) return undefined;
+  const value = model as { name?: unknown; provider?: unknown; reasoning?: unknown };
+  return {
+    id,
+    name: typeof value.name === "string" && value.name.trim() ? value.name.trim() : id,
+    provider: String(value.provider ?? id.split("/", 1)[0]),
+    reasoning: value.reasoning === true,
+    contextWindow: finiteModelNumber(model, "contextWindow"),
+    maxTokens: finiteModelNumber(model, "maxTokens"),
+    inputCost: modelCost(model, "input"),
+    outputCost: modelCost(model, "output"),
+  };
+}
+
+function modelPreferenceRank(role: AdvisorRole, id: string): number {
+  const rank = ROLE_PREFERENCES[role].indexOf(id);
+  return rank < 0 ? Number.MAX_SAFE_INTEGER : rank;
+}
+
+function modelMetric(value: number | undefined): number {
+  return value ?? Number.MAX_SAFE_INTEGER;
+}
+
+/**
+ * Rank only the models Pi reports as authenticated and text-capable. Known
+ * role preferences win first; metadata is only a deterministic tie-breaker
+ * for models outside the preference list, not a claim of universal quality.
+ */
+export function rankAvailableAdvisorModels(role: AdvisorRole, models: unknown[]): AdvisorModelSummary[] {
+  const summaries = models
+    .map(summarizeAdvisorModel)
+    .filter((model): model is AdvisorModelSummary => Boolean(model));
+  const unique = [...new Map(summaries.map((model) => [model.id, model])).values()];
+  return unique.sort((a, b) => {
+    const preferred = modelPreferenceRank(role, a.id) - modelPreferenceRank(role, b.id);
+    if (preferred !== 0) return preferred;
+    if (role === "specialist") {
+      const cost = modelMetric(a.outputCost ?? a.inputCost) - modelMetric(b.outputCost ?? b.inputCost);
+      if (cost !== 0) return cost;
+      const context = modelMetric(a.contextWindow) - modelMetric(b.contextWindow);
+      if (context !== 0) return context;
+    } else {
+      if (a.reasoning !== b.reasoning) return a.reasoning ? -1 : 1;
+      const context = (b.contextWindow ?? 0) - (a.contextWindow ?? 0);
+      if (context !== 0) return context;
+      const maxTokens = (b.maxTokens ?? 0) - (a.maxTokens ?? 0);
+      if (maxTokens !== 0) return maxTokens;
+    }
+    return a.id.localeCompare(b.id);
+  });
+}
+
+export function inspectAdvisorModels(config: AdvisorConfig, models: unknown[]): AdvisorModelInspection[] {
+  const roles: AdvisorRole[] = ["advisor", "specialist", "head"];
+  return roles.map((role) => {
+    const candidates = rankAvailableAdvisorModels(role, models);
+    const configured = config.models[role];
+    const configuredAvailable = Boolean(configured && candidates.some((candidate) => candidate.id === configured));
+    const recommended = candidates[0]?.id;
+    return {
+      role,
+      configured,
+      configuredAvailable,
+      recommended,
+      selected: configuredAvailable ? configured : recommended,
+      candidates,
+    };
+  });
+}
+
+function availableAdvisorModels(ctx: any): unknown[] {
+  try {
+    const models = ctx.modelRegistry?.getAvailable?.();
+    return Array.isArray(models) ? models.filter(isTextModel) : [];
+  } catch {
+    return [];
+  }
+}
+
+function formatModelFact(value: number | undefined, suffix = ""): string {
+  if (value === undefined) return "?";
+  if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(value % 1_000_000 === 0 ? 0 : 1)}m${suffix}`;
+  if (value >= 1_000) return `${(value / 1_000).toFixed(value % 1_000 === 0 ? 0 : 1)}k${suffix}`;
+  return `${value}${suffix}`;
+}
+
+function formatAdvisorModelCandidate(model: AdvisorModelSummary, selected: boolean, recommended: boolean): string {
+  const tags = [selected ? "selected" : "", recommended ? "recommended" : ""].filter(Boolean).join(", ");
+  const cost = model.inputCost === undefined && model.outputCost === undefined
+    ? "cost=?"
+    : `cost=${model.inputCost ?? "?"}/${model.outputCost ?? "?"}`;
+  return `  ${tags ? `[${tags}] ` : ""}${model.id} — ${model.name} · reasoning=${model.reasoning ? "yes" : "no"} · context=${formatModelFact(model.contextWindow)} · max=${formatModelFact(model.maxTokens)} · ${cost}`;
+}
+
+export function advisorModelInspectionText(config: AdvisorConfig, models: unknown[], roleFilter?: AdvisorRole): string {
+  const inspections = inspectAdvisorModels(config, models).filter((inspection) => !roleFilter || inspection.role === roleFilter);
+  if (inspections.length === 0) return "Usage: /pi-rogue-advisor model list [advisor|specialist|head]";
+  const lines = [
+    "Advisor model choices (authenticated text models only; no model call made):",
+    "Role policy: Advisor balances quality, specialists prefer efficiency, Head prefers reasoning and context.",
+  ];
+  for (const inspection of inspections) {
+    const configured = inspection.configured ?? "auto";
+    const selected = inspection.selected ?? "none available";
+    lines.push(`\n${inspection.role}: configured=${configured} · selected=${selected} · recommended=${inspection.recommended ?? "none"}`);
+    if (inspection.configured && !inspection.configuredAvailable) {
+      lines.push(`  WARNING: configured model ${inspection.configured} is not currently available or authenticated.`);
+    }
+    if (inspection.candidates.length === 0) {
+      lines.push("  No compatible authenticated text models found. Configure a provider/model in Pi first.");
+    } else {
+      for (const candidate of inspection.candidates.slice(0, 12)) {
+        lines.push(formatAdvisorModelCandidate(candidate, candidate.id === inspection.selected, candidate.id === inspection.recommended));
+      }
+      if (inspection.candidates.length > 12) lines.push(`  … ${inspection.candidates.length - 12} more; use Pi's model configuration to narrow the catalog.`);
+    }
+  }
+  return lines.join("\n");
+}
+
+function advisorModelStatusText(config: AdvisorConfig, models: unknown[]): string {
+  return inspectAdvisorModels(config, models).map((inspection) => {
+    const configured = inspection.configured ?? "auto";
+    const selected = inspection.selected ?? "none available";
+    const warning = inspection.configured && !inspection.configuredAvailable ? " · WARNING unavailable/auth missing" : "";
+    return `${inspection.role}: configured=${configured} · selected=${selected}${warning}`;
+  }).join("\n");
+}
+
 async function resolveModelCandidatesWithinWork(ctx: any, config: AdvisorConfig, options: ModelResolutionOptions, signal: AbortSignal): Promise<ResolvedAdvisorModel[]> {
   const role = options.role ?? "advisor";
   const explicit = config.models[role];
@@ -1415,48 +1580,75 @@ async function resolveModelCandidatesWithinWork(ctx: any, config: AdvisorConfig,
       return [];
     }
   };
-  const specs = explicit ? [explicit, preferred.find((id) => id !== explicit)] : [preferred[0]];
+  let availableModels: unknown[] | undefined;
+  const getAvailableModels = (): unknown[] => availableModels ??= available();
   const candidates: ResolvedAdvisorModel[] = [];
   const seen = new Set<string>();
-  for (const [index, id] of specs.entries()) {
-    if (!id || seen.has(id) || candidates.length >= 2) continue;
-    seen.add(id);
-    const [provider, ...parts] = id.split("/");
-    let found = ctx.modelRegistry?.find?.(provider, parts.join("/"));
-    if (!found && !explicit && index === 0) {
-      found = available().find((item) => modelId(item) === id);
-    }
-    if (!found && explicit && index === 1) {
-      found = available().find((item) => preferred.includes(modelId(item)));
-    }
-    if (!found || !isTextModel(found)) continue;
+
+  const tryCandidate = async (found: unknown, id: string, fallback: boolean): Promise<boolean> => {
+    if (!found || !isTextModel(found)) return false;
+    const candidateId = modelId(found) || id;
+    if (!candidateId || seen.has(candidateId)) return false;
+    seen.add(candidateId);
     try {
       const auth = await awaitAdvisorWork(ctx.modelRegistry?.getApiKeyAndHeaders(found), signal);
       if (auth?.ok && typeof auth.apiKey === "string" && auth.apiKey) {
-        candidates.push({ model: found, auth: { apiKey: auth.apiKey, headers: auth.headers }, label: modelId(found) || id, fallback: index > 0 });
+        candidates.push({ model: found, auth: { apiKey: auth.apiKey, headers: auth.headers }, label: candidateId, fallback });
+        return true;
       }
     } catch (error) {
       if (signal.aborted) throw error;
-      appendAdvisorDiagnostic("model_auth_resolution_failed", { model: id, category: "auth_lookup_error" });
+      appendAdvisorDiagnostic("model_auth_resolution_failed", { model: candidateId, category: "auth_lookup_error" });
     }
+    return false;
+  };
+
+  if (explicit) {
+    const [provider, ...parts] = explicit.split("/");
+    await tryCandidate(ctx.modelRegistry?.find?.(provider, parts.join("/")), explicit, false);
+  } else {
+    const primary = preferred[0];
+    const [provider, ...parts] = primary.split("/");
+    const found = ctx.modelRegistry?.find?.(provider, parts.join("/"));
+    await tryCandidate(found ?? getAvailableModels().find((item) => modelId(item) === primary), primary, false);
   }
-  if (!explicit && candidates.length === 0) {
-    const preferredRank = (id: string): number => {
-      const index = preferred.indexOf(id);
-      return index < 0 ? preferred.length : index;
-    };
-    for (const found of available().sort((a, b) => preferredRank(modelId(a)) - preferredRank(modelId(b)))) {
-      if (candidates.length >= 1 || seen.has(modelId(found))) break;
-      const id = modelId(found);
-      if (!id) continue;
-      seen.add(id);
-      try {
-        const auth = await awaitAdvisorWork(ctx.modelRegistry?.getApiKeyAndHeaders(found), signal);
-        if (auth?.ok && typeof auth.apiKey === "string" && auth.apiKey) candidates.push({ model: found, auth: { apiKey: auth.apiKey, headers: auth.headers }, label: id });
-      } catch (error) {
-        if (signal.aborted) throw error;
+
+  // At most one fallback is attempted. Prefer the same role ranking shown by
+  // `model list`; the static preference lookup is only a compatibility path
+  // for runtimes whose registry cannot enumerate available models. An
+  // explicit override keeps a fallback candidate even when it resolves, so a
+  // provider completion failure can still fail over once.
+  if ((explicit && candidates.length <= 1) || (!explicit && candidates.length === 0)) {
+    // Prefer a static fallback without enumerating the catalog when it is
+    // already resolvable. This keeps explicit resolution cheap and preserves
+    // compatibility with registries that do not expose model enumeration.
+    const staticFallbackId = preferred.find((id) => !seen.has(id));
+    if (staticFallbackId) {
+      const [provider, ...parts] = staticFallbackId.split("/");
+      const staticFallback = ctx.modelRegistry?.find?.(provider, parts.join("/"));
+      const hasConfiguredAuth = ctx.modelRegistry?.hasConfiguredAuth;
+      const staticAuthConfigured = typeof hasConfiguredAuth === "function" && staticFallback
+        ? hasConfiguredAuth.call(ctx.modelRegistry, staticFallback) === true
+        : undefined;
+      if (staticFallback && staticAuthConfigured !== false) {
+        // The static fallback consumes the one fallback attempt, even when
+        // request-auth resolution fails. Real registries expose
+        // hasConfiguredAuth, allowing an unauthenticated static model to be
+        // skipped in favor of an authenticated catalog candidate below.
+        await tryCandidate(staticFallback, staticFallbackId, true);
+        return candidates;
       }
     }
+
+    let fallback: unknown;
+    let fallbackId: string | undefined;
+    const ranked = rankAvailableAdvisorModels(role, getAvailableModels());
+    const rankedCandidate = ranked.find((item) => !seen.has(item.id));
+    if (rankedCandidate) {
+      fallbackId = rankedCandidate.id;
+      fallback = getAvailableModels().find((item) => modelId(item) === fallbackId);
+    }
+    if (fallback && fallbackId) await tryCandidate(fallback, fallbackId, true);
   }
   return candidates;
 }
@@ -1701,14 +1893,14 @@ export function registerAdvisor(pi: ExtensionAPI): void {
       const text = command === "doctor"
         ? piRogueDoctorText(ctx)
         : command === "help"
-          ? "Pi-Rogue commands:\n/pi-rogue status|help|doctor\n/pi-rogue-advisor status|settings|model [advisor|specialist|head] <provider>/<model>|null|board ..."
+          ? "Pi-Rogue commands:\n/pi-rogue status|help|doctor\n/pi-rogue-advisor status|settings|model [list [advisor|specialist|head]|advisor|specialist|head] <provider>/<model>|null|board ..."
           : piRogueCockpitText(config, state, "", ctx);
       ctx.ui.notify(text, "info");
     },
   });
 
   pi.registerCommand("pi-rogue-advisor", {
-    description: `Explicit Advisor and Board calls (${ADVISOR_CANONICAL_CONTROL_LEAVES.join("|")}). Usage: /pi-rogue-advisor model <provider>/<model> or a question`,
+    description: `Explicit Advisor and Board calls (${ADVISOR_CANONICAL_CONTROL_LEAVES.join("|")}). Usage: /pi-rogue-advisor model list or model <provider>/<model>`,
     getArgumentCompletions: (prefix: string) => advisorArgumentCompletions(prefix),
     handler: async (args, ctx) => {
       const rawArg = String(args ?? "").trim();
@@ -1718,30 +1910,40 @@ export function registerAdvisor(pi: ExtensionAPI): void {
       const state = loadState(ctx);
 
       if (command === "model") {
-        const first = String(parts[1] ?? "");
+        const first = String(parts[1] ?? "").toLowerCase();
+        if (first === "list") {
+          const role = String(parts[2] ?? "").toLowerCase();
+          const roleFilter = role === "advisor" || role === "specialist" || role === "head" ? role : undefined;
+          if (role && !roleFilter) {
+            ctx.ui.notify("Usage: /pi-rogue-advisor model list [advisor|specialist|head]", "error");
+            return;
+          }
+          ctx.ui.notify(advisorModelInspectionText(cfg, availableAdvisorModels(ctx), roleFilter), "info");
+          return;
+        }
         const slot = first === "advisor" || first === "specialist" || first === "head" ? first : "advisor";
-        const value = slot === "advisor" && first !== "advisor" ? first : String(parts[2] ?? "");
+        const value = slot === "advisor" && first !== "advisor" ? String(parts[1] ?? "") : String(parts[2] ?? "");
         const selected = value.trim().toLowerCase() === "null" ? undefined : cleanModelSlot(value);
         if (!selected && value.trim().toLowerCase() !== "null") {
-          ctx.ui.notify("Usage: /pi-rogue-advisor model [advisor|specialist|head] <provider>/<model>|null", "error");
+          ctx.ui.notify("Usage: /pi-rogue-advisor model [advisor|specialist|head] <provider>/<model>|null\nOr: /pi-rogue-advisor model list [advisor|specialist|head]", "error");
           return;
         }
         const models = { ...cfg.models };
         if (selected) models[slot] = selected;
         else delete models[slot];
         saveConfig(normalizeAdvisorConfig({ ...cfg, models }));
-        ctx.ui.notify(`${slot} model ${selected ? `set to ${selected}` : "cleared (auto selection restored)"}.`, "info");
+        const available = selected && availableAdvisorModels(ctx).some((model) => modelId(model) === selected);
+        const warning = selected && !available ? " Warning: it is not currently available or authenticated; run `model list` to inspect choices." : "";
+        ctx.ui.notify(`${slot} model ${selected ? `set to ${selected}` : "cleared (auto selection restored)"}.${warning}`, selected && !available ? "warning" : "info");
         return;
       }
 
       if (!rawArg || command === "status" || command === "settings" || command === "config") {
-        const resolved = await resolveModel(ctx, cfg);
         ctx.ui.notify([
-          `Advisor model: ${resolved?.label ?? cfg.models.advisor ?? "no compatible model"}`,
-          `Specialist model: ${cfg.models.specialist ?? "preferred cheapest compatible text model"}`,
-          `Head-of-Board model: ${cfg.models.head ?? "preferred strongest compatible text model"}`,
+          advisorModelStatusText(cfg, availableAdvisorModels(ctx)),
           `Board: specialists=${cfg.board.specialists}, maxSpecialistCalls=${cfg.board.maxSpecialistCalls}, specialistMaxTokens=${cfg.board.specialistMaxTokens}, headMaxTokens=${cfg.board.headMaxTokens}`,
           `Explicit calls: ${state.advisorCalls} advisor, ${state.specialistDispatch?.calls ?? 0} specialist, ${state.headOfBoard?.calls ?? 0} head`,
+          "Use /pi-rogue-advisor model list for role recommendations and available model facts.",
         ].join("\n"), "info");
         return;
       }
