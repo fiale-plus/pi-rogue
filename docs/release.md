@@ -60,9 +60,9 @@ Example legacy deprecation commands (run only for names that still exist in the 
 
 ```bash
 npm deprecate "@fiale-plus/pi-rogue-bundle@*" 'Deprecated: replaced by @fiale-plus/pi-rogue. Install via "pi install npm:@fiale-plus/pi-rogue".'
-npm deprecate "@fiale-plus/pi-rogue-advisor@*" 'Deprecated: bundled internal leaf; install @fiale-plus/pi-rogue via "pi install npm:@fiale-plus/pi-rogue".'
-npm deprecate "@fiale-plus/pi-rogue-orchestration@*" 'Deprecated: retired package. Install via "pi install npm:@fiale-plus/pi-rogue".'
-npm deprecate "@fiale-plus/pi-orchestration@*" 'Deprecated: retired compatibility package. Install via "pi install npm:@fiale-plus/pi-rogue".'
+npm deprecate "@fiale-plus/pi-rogue-advisor@*" 'Deprecated: advisor/orchestration are bundled in @fiale-plus/pi-rogue. Install via "pi install npm:@fiale-plus/pi-rogue".'
+npm deprecate "@fiale-plus/pi-rogue-orchestration@*" 'Deprecated: advisor/orchestration are bundled in @fiale-plus/pi-rogue. Install via "pi install npm:@fiale-plus/pi-rogue".'
+npm deprecate "@fiale-plus/pi-orchestration@*" 'Deprecated: replaced by @fiale-plus/pi-rogue. Install via "pi install npm:@fiale-plus/pi-rogue".'
 ```
 
 See also: `.github/ISSUE_TEMPLATE/release.md`, `AGENTS.md` maintenance references, and the canonical package README.
