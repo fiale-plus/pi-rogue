@@ -19,8 +19,7 @@
   },
   "main": "./src/index.ts",
   "exports": {
-    ".": "./src/index.ts",
-    "./status": "./src/status.ts"
+    ".": "./src/index.ts"
   },
   "pi": {
     "extensions": [
