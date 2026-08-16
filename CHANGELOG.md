@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.3.37
+
+### Summary
+
+This patch release makes Advisor model selection inspectable, explainable, and consistent with bounded runtime fallback behavior.
+
+### Changes
+
+- Add `/pi-rogue-advisor model list [advisor|specialist|head]` for read-only inspection of authenticated compatible models.
+- Show role-specific recommendations, selected model slots, reasoning/context metadata, token limits, and declared costs without making an LLM call.
+- Warn when explicit model overrides are unavailable or unauthenticated while retaining the user's configuration.
+- Align runtime resolution with displayed role rankings and preserve bounded authenticated fallback behavior.
+
+### Validation
+
+- TypeScript checks passed.
+- Full Vitest suite passed: 13 files, 101 tests.
+- Packed minimum-Node Pi-host smoke test passed.
+- GitHub Actions check passed on Node.js 22.19.0.
+- Independent final review found no blockers or majors.
+
 ## 0.3.36
 
 ### Summary
