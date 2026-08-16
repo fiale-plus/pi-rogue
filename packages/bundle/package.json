@@ -1,6 +1,6 @@
 {
   "name": "@fiale-plus/pi-rogue",
-  "version": "0.3.36",
+  "version": "0.3.37",
   "description": "Public Pi-Rogue package containing the explicit Advisor and read-only Board extension.",
   "type": "module",
   "license": "MIT",
