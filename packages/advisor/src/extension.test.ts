@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { readFileSync } from "node:fs";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { completeSimple } from "@earendil-works/pi-ai/compat";
-import { advisorSessionStatePath, normalizeAdvisorConfig, registerAdvisor, resolveModelCandidates, type AdvisorConfig } from "./extension.js";
+import { advisorModelInspectionText, inspectAdvisorModels, advisorSessionStatePath, normalizeAdvisorConfig, rankAvailableAdvisorModels, registerAdvisor, resolveModelCandidates, type AdvisorConfig } from "./extension.js";
 
 vi.mock("@earendil-works/pi-ai/compat", async () => {
   const actual = await vi.importActual<typeof import("@earendil-works/pi-ai/compat")>("@earendil-works/pi-ai/compat");
@@ -45,6 +45,30 @@ describe("Advisor PR1 configuration", () => {
   });
 });
 
+describe("Advisor model choice inspection", () => {
+  it("ranks role candidates with stable, role-specific policies", () => {
+    const models = [
+      { ...model("provider", "expensive"), name: "Expensive", reasoning: true, contextWindow: 128000, maxTokens: 16000, cost: { input: 10, output: 20 } },
+      { ...model("provider", "cheap"), name: "Cheap", reasoning: false, contextWindow: 32000, maxTokens: 4000, cost: { input: 0.1, output: 0.2 } },
+      { ...model("openai-codex", "gpt-5.5"), name: "Preferred", reasoning: true, contextWindow: 64000, maxTokens: 8000, cost: { input: 5, output: 10 } },
+    ];
+    expect(rankAvailableAdvisorModels("advisor", models).map((entry) => entry.id)).toEqual([
+      "openai-codex/gpt-5.5", "provider/expensive", "provider/cheap",
+    ]);
+    expect(rankAvailableAdvisorModels("specialist", models).map((entry) => entry.id)).toEqual([
+      "provider/cheap", "openai-codex/gpt-5.5", "provider/expensive",
+    ]);
+  });
+
+  it("marks an unavailable explicit override and handles an empty catalog", () => {
+    const config = normalizeAdvisorConfig({ models: { advisor: "missing/model" } });
+    const inspection = inspectAdvisorModels(config, [model("provider", "available")]);
+    expect(inspection[0]).toMatchObject({ configured: "missing/model", configuredAvailable: false, selected: "provider/available" });
+    expect(advisorModelInspectionText(config, [])).toContain("No compatible authenticated text models found");
+    expect(advisorModelInspectionText(config, [model("provider", "available")])).toContain("WARNING: configured model missing/model");
+  });
+});
+
 describe("Advisor PR1 bounded model resolution", () => {
   it("uses an explicit model and at most one preferred fallback", async () => {
     const explicit = model("provider-a", "chosen");
@@ -84,6 +108,60 @@ describe("Advisor PR1 bounded model resolution", () => {
     };
     await resolveModelCandidates(ctx, normalizeAdvisorConfig({}));
     expect(attempted).toEqual(["openai-codex/gpt-5.5"]);
+  });
+
+  it("fails over to an authenticated catalog model when an explicit path cannot authenticate", async () => {
+    const explicit = model("provider-a", "chosen");
+    const fallback = model("provider-b", "cheap");
+    const attempted: string[] = [];
+    const ctx = {
+      modelRegistry: {
+        find: (provider: string, id: string) => provider === explicit.provider && id === explicit.id ? explicit : undefined,
+        getAvailable: () => [fallback],
+        getApiKeyAndHeaders: async (candidate: TestModel) => {
+          attempted.push(`${candidate.provider}/${candidate.id}`);
+          return candidate === explicit ? { ok: false, error: "not authenticated" } : { ok: true, apiKey: "key" };
+        },
+      },
+    };
+    const result = await resolveModelCandidates(ctx, normalizeAdvisorConfig({ models: { advisor: "provider-a/chosen" } }));
+    expect(result.map((entry) => entry.label)).toEqual(["provider-b/cheap"]);
+    expect(attempted).toEqual(["provider-a/chosen", "provider-b/cheap"]);
+  });
+
+  it("skips an unauthenticated static fallback for an authenticated catalog model", async () => {
+    const explicit = model("provider-a", "chosen");
+    const staticFallback = model("openai-codex", "gpt-5.5");
+    const catalogFallback = model("provider-b", "cheap");
+    const attempted: string[] = [];
+    const ctx = {
+      modelRegistry: {
+        find: (provider: string, id: string) => provider === explicit.provider && id === explicit.id ? explicit : provider === staticFallback.provider && id === staticFallback.id ? staticFallback : undefined,
+        hasConfiguredAuth: (candidate: TestModel) => candidate !== staticFallback,
+        getAvailable: () => [catalogFallback],
+        getApiKeyAndHeaders: async (candidate: TestModel) => {
+          attempted.push(`${candidate.provider}/${candidate.id}`);
+          return { ok: true, apiKey: "key" };
+        },
+      },
+    };
+    const result = await resolveModelCandidates(ctx, normalizeAdvisorConfig({ models: { advisor: "provider-a/chosen" } }));
+    expect(result.map((entry) => entry.label)).toEqual(["provider-a/chosen", "provider-b/cheap"]);
+    expect(attempted).toEqual(["provider-a/chosen", "provider-b/cheap"]);
+  });
+
+  it("uses the same metadata ranking as inspection for an automatic specialist choice", async () => {
+    const expensive = { ...model("provider", "expensive"), cost: { input: 10, output: 20 }, contextWindow: 128000 };
+    const cheap = { ...model("provider", "cheap"), cost: { input: 0.1, output: 0.2 }, contextWindow: 32000 };
+    const ctx = {
+      modelRegistry: {
+        find: () => undefined,
+        getAvailable: () => [expensive, cheap],
+        getApiKeyAndHeaders: async () => ({ ok: true, apiKey: "key" }),
+      },
+    };
+    const result = await resolveModelCandidates(ctx, normalizeAdvisorConfig({}), { role: "specialist" });
+    expect(result.map((entry) => entry.label)).toEqual(["provider/cheap"]);
   });
 });
 describe("Advisor PR1 lifecycle", () => {

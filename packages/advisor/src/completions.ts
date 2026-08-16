@@ -25,9 +25,10 @@ function completionsForPrefix(prefix: string, topLevel: Array<[string, string?]>
     if (top) return top;
   }
 
-  const next = nested[head];
-  if (next) {
-    return complete(next, rest.join(" "));
+  for (let split = rest.length; split >= 0; split -= 1) {
+    const key = [head, ...rest.slice(0, split)].join(" ");
+    const next = nested[key];
+    if (next) return complete(next, rest.slice(split).join(" "));
   }
 
   return complete(topLevel, q);
@@ -43,7 +44,8 @@ const advisorTopLevel: Array<[string, string?]> = [
 ];
 
 const advisorNested: Record<string, Array<[string, string?]>> = {
-  model: [["advisor"], ["specialist"], ["head"], ["null"]],
+  model: [["list", "inspect available role candidates"], ["advisor"], ["specialist"], ["head"], ["null"]],
+  "model list": [["advisor"], ["specialist"], ["head"]],
   board: [["specialist"], ["head"]],
 };
 

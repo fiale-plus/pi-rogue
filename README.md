@@ -44,6 +44,7 @@ Specialists are read/search-only and suggest-only by default. They can return fi
 /pi-rogue status
 /pi-rogue-advisor <question>
 /pi-rogue-advisor settings
+/pi-rogue-advisor model list
 /pi-rogue-advisor board specialist ask reviewer inspect the proposed change for regressions
 /pi-rogue-advisor board head ask what decision is safest before merging
 ```
@@ -70,7 +71,7 @@ Advisor model selection is separate from Pi's active model. The user-visible con
 }
 ```
 
-`null` selects one compatible model using the bounded preference for that role. An explicit `<provider>/<model>` value overrides discovery. Advisor and Head prefer a strong compatible model; specialists prefer a cheaper compatible model. Resolution attempts the configured model and at most one preferred fallback—never an unbounded provider loop. Model selection never changes Pi's global active model.
+`null` selects one authenticated compatible text model using the bounded preference for that role. `/pi-rogue-advisor model list [advisor|specialist|head]` shows available candidates, role recommendations, and declared reasoning/context/cost facts without making an LLM call. The explainable policy is quality-balanced Advisor, efficient specialists, and reasoning/context-oriented Head—not a universal quality ranking. An explicit `<provider>/<model>` value overrides discovery and is warned about if unavailable. Resolution attempts the configured model and at most one preferred fallback—never an unbounded provider loop. Model selection never changes Pi's global active model.
 
 ## Explicit-only safety boundary
 

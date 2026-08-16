@@ -32,6 +32,7 @@ The `advisor` tool is also explicit. Registering the bundle does not start model
 ```text
 /pi-rogue-advisor status
 /pi-rogue-advisor settings
+/pi-rogue-advisor model list [advisor|specialist|head]
 /pi-rogue-advisor model [advisor|specialist|head] <provider>/<model>|null
 /pi-rogue-advisor board specialist status
 /pi-rogue-advisor board specialist suggest
@@ -63,7 +64,7 @@ Advisor configuration keeps three independent model slots:
 }
 ```
 
-`null` means bounded role-appropriate selection from compatible text models. Explicit values override discovery. Advisor and Head prefer the strongest compatible candidate; specialists prefer the cheapest compatible candidate. Resolution stops after the explicit model and at most one preferred fallback. It never scans an unbounded provider list and never changes Pi's global active model.
+`null` means bounded role-appropriate selection from authenticated compatible text models. `model list` shows the available catalog, selected/recommended candidate per role, and model facts including reasoning support, context window, token limit, and declared input/output cost—without making an LLM call. The policy is explainable rather than a universal quality claim: Advisor balances quality, specialists prefer efficiency, and Head prefers reasoning/context. Explicit values override discovery; unavailable or unauthenticated overrides are retained but warned about. Resolution stops after the explicit model and at most one preferred fallback. It never scans an unbounded provider list and never changes Pi's global active model.
 
 ## Zero-background-call guarantee
 
