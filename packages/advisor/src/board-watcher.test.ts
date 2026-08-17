@@ -41,6 +41,7 @@ describe("Board watcher", () => {
     const first = runBoardWatch(config, defaultBoardWatchState(), riskyLedger(1), 1);
     const changed = runBoardWatch(config, first.state, riskyLedger(2), 2);
     expect(changed.advice).toBeUndefined();
+    expect(changed.riskFingerprint).toBeDefined();
     expect(changed.skipped).toBe("cooldown");
     const consecutive = runBoardWatch(config, changed.state, riskyLedger(3), 3);
     expect(consecutive.advice).toBeUndefined();
