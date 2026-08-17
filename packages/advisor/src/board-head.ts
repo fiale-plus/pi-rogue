@@ -83,7 +83,8 @@ export interface HeadOfBoardResult {
 export type HeadOfBoardComplete = (systemPrompt: string, messages: Array<{ role: "user"; content: string }>, options: { maxTokens: number; reasoning: ThinkingLevel }) => Promise<HeadOfBoardCompletion | null>;
 
 const SECRET_RE = /\b(?:(?:sk|ghp|gho|github_pat|xox[abprs]|hf)[-_][A-Za-z0-9_\-]{8,}|AKIA[A-Z0-9]{12,})\b/g;
-const KEYED_SECRET_RE = /\b(?:api[_-]?key|token|secret|password|authorization)\b\s*[:=]\s*["']?[^\s"',;}]{4,}/gi;
+const KEYED_SECRET_RE = /(["']?\b(?:api[_-]?key|token|secret|password|authorization)\b["']?)\s*[:=]\s*["']?[^\s"',;}]{4,}/gi;
+const BASIC_AUTH_RE = /(["']?authorization["']?\s*[:=]\s*["']?)Basic\s+[A-Za-z0-9+/=]+/gi;
 const NAMED_SECRET_ASSIGNMENT_RE = /\b[A-Z0-9_]*(?:SECRET|TOKEN|PASSWORD|API_KEY|ACCESS_KEY)[A-Z0-9_]*\s*=\s*[^\s"',;}]{4,}/gi;
 const BARE_BEARER_RE = /\bbearer\s+[A-Za-z0-9._~+/=-]{8,}/gi;
 
@@ -125,8 +126,9 @@ export function normalizeHeadOfBoardConfig(raw: unknown): HeadOfBoardConfig {
 function cleanText(value: unknown, max = 500): string {
   return String(value ?? "")
     .replace(BARE_BEARER_RE, "Bearer [secret]")
+    .replace(BASIC_AUTH_RE, "$1[secret]")
     .replace(SECRET_RE, "[secret]")
-    .replace(KEYED_SECRET_RE, (match) => `${match.split(/[:=]/, 1)[0]}=[secret]`)
+    .replace(KEYED_SECRET_RE, (_match, key: string) => `${key}=[secret]`)
     .replace(NAMED_SECRET_ASSIGNMENT_RE, (match) => `${match.split(/=/, 1)[0].trim()}=[secret]`)
     .replace(/\s+/g, " ")
     .trim()

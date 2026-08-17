@@ -291,6 +291,9 @@ describe("Advisor PR1 lifecycle", () => {
       await new Promise((resolve) => setTimeout(resolve, 20));
       expect(sendMessage).toHaveBeenCalledWith(expect.objectContaining({ customType: "advisor:board", details: expect.objectContaining({ readOnly: true }) }), expect.objectContaining({ triggerTurn: false, deliverAs: "nextTurn" }));
       expect(vi.mocked(completeSimple)).toHaveBeenCalledTimes(1);
+      handlers.get("turn_end")?.({ turnIndex: 1, toolResults: [{ toolName: "edit", input: { path: "packages/advisor/src/another-head-watched.ts" }, status: "success" }] }, ctx);
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      expect(vi.mocked(completeSimple)).toHaveBeenCalledTimes(1);
     } finally {
       unlinkSync(advisorBoardWatchConfigPath());
     }

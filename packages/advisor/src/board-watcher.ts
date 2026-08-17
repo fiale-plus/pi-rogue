@@ -14,6 +14,7 @@ export interface BoardWatchConfig {
 export interface BoardWatchState {
   runs: number;
   interventions: number;
+  headAttempts: number;
   suppressed: number;
   lastAt?: string;
   lastTurn?: number;
@@ -66,7 +67,7 @@ export function normalizeBoardWatchConfig(raw: unknown): BoardWatchConfig {
 }
 
 export function defaultBoardWatchState(): BoardWatchState {
-  return { runs: 0, interventions: 0, suppressed: 0 };
+  return { runs: 0, interventions: 0, headAttempts: 0, suppressed: 0 };
 }
 
 export function normalizeBoardWatchState(raw: unknown): BoardWatchState {
@@ -76,6 +77,7 @@ export function normalizeBoardWatchState(raw: unknown): BoardWatchState {
   return {
     runs: count(record.runs),
     interventions: count(record.interventions),
+    headAttempts: count(record.headAttempts),
     suppressed: count(record.suppressed),
     lastAt: typeof record.lastAt === "string" ? record.lastAt : undefined,
     lastTurn: Number.isFinite(Number(record.lastTurn)) ? Math.max(0, Math.floor(Number(record.lastTurn))) : undefined,

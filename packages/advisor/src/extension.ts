@@ -1846,7 +1846,10 @@ function collectLifecycleBoardEvents(state: SessionState, toolResults: unknown[]
 
 async function escalateBoardHead(pi: ExtensionAPI, ctx: any, cfg: AdvisorConfig, state: SessionState, riskFingerprint: string): Promise<void> {
   const watch = loadBoardWatchConfig();
-  if (watch.headEscalation !== "enabled" || watch.headMaxCalls <= 0 || state.boardWatch.lastEscalatedRiskFingerprint === riskFingerprint) return;
+  if (watch.headEscalation !== "enabled" || watch.headMaxCalls <= 0 || state.boardWatch.lastEscalatedRiskFingerprint === riskFingerprint || state.boardWatch.headAttempts >= watch.headMaxCalls) return;
+  state.boardWatch.headAttempts += 1;
+  state.boardWatch.lastEscalatedRiskFingerprint = riskFingerprint;
+  saveState(state);
   const headConfig = {
     ...defaultHeadOfBoardConfig(),
     mode: "enabled" as const,
@@ -1882,7 +1885,6 @@ async function escalateBoardHead(pi: ExtensionAPI, ctx: any, cfg: AdvisorConfig,
     state.headOfBoard.lastAt = new Date().toISOString();
     state.headOfBoard.lastModel = result.response.model;
     state.headOfBoard.lastSkipped = undefined;
-    state.boardWatch.lastEscalatedRiskFingerprint = riskFingerprint;
     saveState(state);
     if (typeof pi.sendMessage === "function") {
       pi.sendMessage({
@@ -2133,7 +2135,7 @@ export function registerAdvisor(pi: ExtensionAPI): void {
           if (action === "status") {
             ctx.ui.notify([
               `Board watcher: ${current.mode}`,
-              `Runs: ${state.boardWatch.runs}; interventions: ${state.boardWatch.interventions}; suppressed: ${state.boardWatch.suppressed}`,
+              `Runs: ${state.boardWatch.runs}; interventions: ${state.boardWatch.interventions}; Head attempts: ${state.boardWatch.headAttempts}; suppressed: ${state.boardWatch.suppressed}`,
               `Cooldown: ${current.cooldownTurns} turn(s); max interventions: ${current.maxInterventions}`,
               `Head escalation: ${current.headEscalation}; max calls: ${current.headMaxCalls}`,
               "Watcher is deterministic and read-only; interventions are non-binding next-turn advice.",

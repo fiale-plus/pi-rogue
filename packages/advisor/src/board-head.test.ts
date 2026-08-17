@@ -114,8 +114,8 @@ describe("head-of-board adapter", () => {
     const ledger = ledgerFrom([{ type: "file_changed", path: "packages/advisor/src/board-head.ts", turn: 4 }]);
     const request = buildHeadOfBoardRequest({
       ledger,
-      decision: { action: "would_whisper", severity: "important", reason: "rerun with Authorization: Bearer abcdef1234567890 token=abcd1234 AWS_ACCESS_KEY_ID=AKIAABCDEFGHIJKLMNOP", riskIds: ["risk:token=abcd1234"] },
-      question: "Assess release readiness with MY_SECRET=shhhhhhh",
+      decision: { action: "would_whisper", severity: "important", reason: "rerun with Authorization: Bearer abcdef1234567890 Authorization: Basic dXNlcjpwYXNz token=abcd1234 AWS_ACCESS_KEY_ID=AKIAABCDEFGHIJKLMNOP", riskIds: ["risk:token=abcd1234"] },
+      question: "Assess release readiness with MY_SECRET=shhhhhhh and {\"apiKey\": \"json-secret-value\"}",
     });
     const payload = JSON.stringify({ content: request.messages[0]?.content, escalation: request.escalation });
 
@@ -123,6 +123,8 @@ describe("head-of-board adapter", () => {
     expect(payload).not.toContain("abcdef1234567890");
     expect(payload).not.toContain("AKIAABCDEFGHIJKLMNOP");
     expect(payload).not.toContain("shhhhhhh");
+    expect(payload).not.toContain("dXNlcjpwYXNz");
+    expect(payload).not.toContain("json-secret-value");
     expect(payload).toContain("[secret]");
   });
 
