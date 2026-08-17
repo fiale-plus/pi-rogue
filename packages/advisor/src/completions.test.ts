@@ -38,7 +38,12 @@ describe("advisor completions", () => {
 describe("pi-rogue cockpit completions", () => {
   it("offers only concise root management commands", () => {
     const values = piRogueArgumentCompletions("")?.map((i) => i.value);
-    expect(values).toEqual(["status", "help", "doctor"]);
+    expect(values).toEqual(["status", "help", "doctor", "closeout"]);
+  });
+
+  it("offers bounded closeout actions", () => {
+    expect(piRogueArgumentCompletions("closeout ")?.map((i) => i.value)).toEqual(["start", "add-evidence", "record", "show", "export"]);
+    expect(piRogueArgumentCompletions("closeout record ")?.map((i) => i.value)).toEqual(["success", "partial", "failed", "abandoned"]);
   });
 
   it("does not fan out subsystem or deprecated configure choices", () => {

@@ -38,7 +38,7 @@ The leaf package is private and is not an independent user install target.
 
 | Command | What it does |
 |---|---|
-| `/pi-rogue` | Show the retained Pi-Rogue cockpit (`status`, `help`, or `doctor`) |
+| `/pi-rogue` | Show the retained Pi-Rogue cockpit (`status`, `help`, `doctor`, or `closeout`) |
 | `/pi-rogue-advisor` | Show explicit Advisor/Board status |
 | `/pi-rogue-advisor status` | Show selected model slots, Board bounds, and explicit-call counters |
 | `/pi-rogue-advisor settings` | Show the same local configuration without starting an advisory call |
@@ -50,6 +50,7 @@ The leaf package is private and is not an independent user install target.
 | `/pi-rogue-advisor board head status` | Show Head-of-Board bounds and call count |
 | `/pi-rogue-advisor board head ask <decision question>` | Make one explicit bounded Head-of-Board call |
 | `/pi-rogue-advisor <question>` | Make one explicit Advisor call |
+| `/pi-rogue closeout start|add-evidence|record|show|export` | Record and inspect bounded local session evidence; never infers success |
 
 The `advisor` tool is the equivalent explicit one-shot API. No command or tool silently invokes another command, role, retry, or model call.
 
@@ -76,6 +77,10 @@ The user-visible configuration is intentionally small:
 `null` uses bounded role-appropriate selection from compatible text models. Use `model list` to see authenticated text models, the selected/recommended candidate for each role, and facts such as reasoning support, context window, token limit, and declared input/output cost. The role policy is intentionally explainable rather than a universal quality claim: Advisor balances quality, specialists prefer efficiency, and Head prefers reasoning/context. Explicit values use `<provider>/<model>` and take precedence; unavailable or unauthenticated overrides are retained but shown with a warning. Resolution attempts the configured candidate and at most one preferred fallback. Inspection never calls a model, changes Pi's global active model, or persists config.
 
 Specialists default to `suggest` mode and are limited to three calls per session. Board inputs are compact, bounded, sanitized ledger data rather than raw transcripts. Disallowed roles/tools, missing evidence, oversized input, unavailable models, rate limits, and malformed responses fail closed with visible metadata. Suggestions cannot suppress the user's task, edit files, execute commands, or trigger a specialist or Head call.
+
+## Session closeout
+
+Closeout is an explicit local evidence ledger for carrying useful facts between work sessions. Start it with `/pi-rogue closeout start [summary]`, add handles or notes with `add-evidence`, record a user-selected `success`, `partial`, `failed`, or `abandoned` outcome, then inspect or export it. Lifecycle hooks only snapshot bounded changed-file, validation, failure, and call-count facts after a closeout exists; they do not make model calls or infer completion.
 
 ## Explicit-only guarantee
 

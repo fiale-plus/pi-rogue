@@ -42,6 +42,9 @@ Specialists are read/search-only and suggest-only by default. They can return fi
 
 ```text
 /pi-rogue status
+/pi-rogue closeout start implement the requested change
+/pi-rogue closeout record success
+/pi-rogue closeout export
 /pi-rogue-advisor <question>
 /pi-rogue-advisor settings
 /pi-rogue-advisor model list
@@ -49,7 +52,7 @@ Specialists are read/search-only and suggest-only by default. They can return fi
 /pi-rogue-advisor board head ask what decision is safest before merging
 ```
 
-The `advisor` tool is also explicit: invoke it when you want advice, rather than relying on lifecycle hooks. `/pi-rogue status|help|doctor` and `/pi-rogue-advisor status|settings|model|board ...` are the only command roots registered by the package.
+The `advisor` tool is also explicit: invoke it when you want advice, rather than relying on lifecycle hooks. `/pi-rogue status|help|doctor|closeout ...` and `/pi-rogue-advisor status|settings|model|board ...` are the only command roots registered by the package. Closeout is local, explicit, bounded evidence bookkeeping; it never claims success without the user's status command.
 
 ## Model map and bounds
 

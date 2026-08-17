@@ -9,6 +9,7 @@ import { Type } from "typebox";
 import { sessionKey as sharedSessionKey, sessionScopedDir } from "@fiale-plus/pi-core";
 import { appendText, featureDir, featureFile, readText, truncate, writeText, atomicWriteText } from "./internal.js";
 import { ADVISOR_CANONICAL_CONTROL_LEAVES, advisorArgumentCompletions, piRogueArgumentCompletions } from "./completions.js";
+import { addCloseoutEvidence, closeoutText, exportCloseout, loadCloseout, recordCloseoutStatus, startCloseout, syncCloseoutFacts } from "./closeout.js";
 import { buildBoardLedger, decideBoardAction, type BoardEvent } from "./board.js";
 import {
   callHeadOfBoardAdapter,
@@ -1324,7 +1325,8 @@ function piRogueCockpitText(config: AdvisorConfig, state: SessionState, _current
     "Pi-Rogue status",
     formatSubsystemStatusRows(piRogueSubsystemRows(config, state, ctx)),
     "",
-    "Commands: /pi-rogue status|help|doctor · /pi-rogue-advisor status|settings|model|board",
+    `Closeout: ${loadCloseout(ctx)?.status ?? "none"}`,
+    "Commands: /pi-rogue status|help|doctor|closeout · /pi-rogue-advisor status|settings|model|board",
   ].join("\n");
 }
 
@@ -1833,6 +1835,7 @@ function collectLifecycleEvidence(event: unknown, ctx: any, agentEnd: boolean): 
   }
   if (agentEnd && text) state.lastTask = text.slice(0, 500);
   saveState(state);
+  syncCloseoutFacts(ctx, state);
 }
 
 // ── Extension entry point ──────────────────────────────────────────────────
@@ -1860,6 +1863,9 @@ export function registerAdvisor(pi: ExtensionAPI): void {
   pi.on("agent_end", (event, ctx) => {
     collectLifecycleEvidence(event, ctx, true);
   });
+  pi.on("agent_settled", (_event, ctx) => {
+    syncCloseoutFacts(ctx, loadState(ctx));
+  });
   pi.on("session_shutdown", (_event, ctx) => {
     const key = sessionKey(ctx);
     closedAdvisorSessions.add(key);
@@ -1884,16 +1890,52 @@ export function registerAdvisor(pi: ExtensionAPI): void {
   });
 
   pi.registerCommand("pi-rogue", {
-    description: "Pi-Rogue management: status|help|doctor",
+    description: "Pi-Rogue management: status|help|doctor|closeout",
     getArgumentCompletions: (prefix: string) => piRogueArgumentCompletions(prefix),
     handler: async (args, ctx) => {
-      const command = String(args ?? "").trim().toLowerCase();
+      const rawArg = String(args ?? "").trim();
+      const parts = rawArg ? rawArg.split(/\s+/) : [];
+      const command = String(parts[0] ?? "").toLowerCase();
+      if (command === "closeout") {
+        const action = String(parts[1] ?? "show").toLowerCase();
+        if (action === "start") {
+          const record = startCloseout(ctx, parts.slice(2).join(" "));
+          ctx.ui.notify(`Closeout started for session ${record.session.key}.`, "info");
+          return;
+        }
+        if (action === "add-evidence") {
+          const record = addCloseoutEvidence(ctx, parts.slice(2).join(" "));
+          ctx.ui.notify(record ? `Evidence reference added (${record.evidence.length}/${24}).` : "No active closeout. Start one with /pi-rogue closeout start [summary].", record ? "info" : "warning");
+          return;
+        }
+        if (action === "record") {
+          const next = String(parts[2] ?? "").toLowerCase();
+          if (next !== "success" && next !== "partial" && next !== "failed" && next !== "abandoned") {
+            ctx.ui.notify("Usage: /pi-rogue closeout record success|partial|failed|abandoned", "error");
+            return;
+          }
+          const record = recordCloseoutStatus(ctx, next);
+          ctx.ui.notify(record ? `Closeout recorded as ${record.status}.` : "No active closeout. Start one with /pi-rogue closeout start [summary].", record ? "info" : "warning");
+          return;
+        }
+        if (action === "export") {
+          const exported = exportCloseout(ctx);
+          ctx.ui.notify(exported.path ? `Closeout exported to ${exported.path}` : "No active closeout. Start one with /pi-rogue closeout start [summary].", exported.path ? "info" : "warning");
+          return;
+        }
+        if (action !== "show") {
+          ctx.ui.notify("Usage: /pi-rogue closeout start|add-evidence|record|show|export ...", "error");
+          return;
+        }
+        ctx.ui.notify(closeoutText(loadCloseout(ctx)), "info");
+        return;
+      }
       const config = loadConfig();
       const state = loadState(ctx);
       const text = command === "doctor"
         ? piRogueDoctorText(ctx)
         : command === "help"
-          ? "Pi-Rogue commands:\n/pi-rogue status|help|doctor\n/pi-rogue-advisor status|settings|model [list [advisor|specialist|head]|advisor|specialist|head] <provider>/<model>|null|board ..."
+          ? "Pi-Rogue commands:\n/pi-rogue status|help|doctor|closeout [start|add-evidence|record|show|export]\n/pi-rogue-advisor status|settings|model [list [advisor|specialist|head]|advisor|specialist|head] <provider>/<model>|null|board ..."
           : piRogueCockpitText(config, state, "", ctx);
       ctx.ui.notify(text, "info");
     },

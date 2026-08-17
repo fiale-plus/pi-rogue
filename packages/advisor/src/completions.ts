@@ -53,9 +53,13 @@ const piRogueTopLevel: Array<[string, string?]> = [
   ["status", "show aggregate Pi-Rogue setup and cockpit"],
   ["help", "show canonical command roots"],
   ["doctor", "show setup/diagnostic checklist"],
+  ["closeout", "record and inspect explicit session evidence"],
 ];
 
-const piRogueNested: Record<string, Array<[string, string?]>> = {};
+const piRogueNested: Record<string, Array<[string, string?]>> = {
+  closeout: [["start"], ["add-evidence"], ["record"], ["show"], ["export"]],
+  "closeout record": [["success"], ["partial"], ["failed"], ["abandoned"]],
+};
 
 export function advisorArgumentCompletions(prefix: string): CompletionItem[] | null {
   return completionsForPrefix(prefix, advisorTopLevel, advisorNested);
