@@ -44,6 +44,9 @@ The leaf package is private and is not an independent user install target.
 | `/pi-rogue-advisor settings` | Show the same local configuration without starting an advisory call |
 | `/pi-rogue-advisor model list [advisor\|specialist\|head]` | Inspect available models and role recommendations without an LLM call |
 | `/pi-rogue-advisor model [advisor\|specialist\|head] <provider>/<model>\|null` | Set or clear one model-map slot |
+| `/pi-rogue-advisor board watch status` | Show deterministic watcher mode, risk runs, interventions, and suppression counts |
+| `/pi-rogue-advisor board watch off\|shadow\|intervene` | Disable, record-only, or queue non-binding next-turn Board suggestions |
+| `/pi-rogue-advisor board watch head status\|on\|off` | Inspect or enable bounded automatic Head escalation |
 | `/pi-rogue-advisor board specialist status` | Show specialist mode, limits, and call counts |
 | `/pi-rogue-advisor board specialist suggest` | Return a local suggestion about which static role may help; does not call a model |
 | `/pi-rogue-advisor board specialist ask <role-id> <task>` | Make one explicit bounded specialist call |
@@ -76,6 +79,8 @@ The user-visible configuration is intentionally small:
 
 `null` uses bounded role-appropriate selection from compatible text models. Use `model list` to see authenticated text models, the selected/recommended candidate for each role, and facts such as reasoning support, context window, token limit, and declared input/output cost. The role policy is intentionally explainable rather than a universal quality claim: Advisor balances quality, specialists prefer efficiency, and Head prefers reasoning/context. Explicit values use `<provider>/<model>` and take precedence; unavailable or unauthenticated overrides are retained but shown with a warning. Resolution attempts the configured candidate and at most one preferred fallback. Inspection never calls a model, changes Pi's global active model, or persists config.
 
+The active **main Pi model is separate from all three Pi-Rogue role slots**. Pi-Rogue reports it but never changes it. For a cheap/fast starting point, use a currently authenticated registry entry such as `pi --model openrouter/deepseek/deepseek-v4-flash`; verify current IDs and pricing with Pi's model list and the provider's pricing page. Luna/Kimi high-end variants should be treated as quality-oriented escalation choices, not assumed to be cheaper.
+
 Specialists default to `suggest` mode and are limited to three calls per session. Board inputs are compact, bounded, sanitized ledger data rather than raw transcripts. Disallowed roles/tools, missing evidence, oversized input, unavailable models, rate limits, and malformed responses fail closed with visible metadata. Suggestions cannot suppress the user's task, edit files, execute commands, or trigger a specialist or Head call.
 
 ## Session closeout
@@ -94,4 +99,4 @@ Each fixture compares a no-Advisor baseline with an explicit Advisor/Board obser
 
 ## Explicit-only guarantee
 
-There is no automatic preflight, review, check-in, route decision, model switch, prompt rewrite, context database, orchestration loop, Fusion/panel call, background worker, or lifecycle model work. Pi-Rogue makes zero model calls during ordinary session startup, turn-end, and agent-end handling. Only an explicit Advisor, specialist, or Head invocation can perform bounded model work.
+The deterministic Board watcher may run during ordinary lifecycle events in `shadow` mode without model work. `intervene` mode queues a visible, non-binding `nextTurn` Board suggestion with no automatic turn, model switch, prompt rewrite, or mutation. Head escalation is off by default and, when explicitly enabled, is bounded, deduplicated, read-only, and fail-closed. The regular Advisor and specialist calls remain on-demand. Pi-Rogue makes zero model calls during ordinary startup, turn-end, and agent-end handling unless the user explicitly enabled Board-to-Head escalation.

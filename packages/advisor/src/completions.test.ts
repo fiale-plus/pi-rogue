@@ -16,6 +16,8 @@ describe("advisor completions", () => {
     for (const leaf of ADVISOR_CANONICAL_CONTROL_LEAVES) {
       expect(readme, `README: ${leaf}`).toContain(`/pi-rogue-advisor ${leaf}`);
     }
+    expect(readme).toContain("/pi-rogue-advisor board watch status");
+    expect(readme).toContain("/pi-rogue-advisor board watch head status\\|on\\|off");
     expect(readme).toContain("/pi-rogue-advisor board specialist ask");
     expect(readme).toContain("/pi-rogue-advisor board head ask");
     expect(agents).toContain("/pi-rogue-advisor");

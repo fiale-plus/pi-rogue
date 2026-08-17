@@ -48,6 +48,9 @@ Specialists are read/search-only and suggest-only by default. They can return fi
 /pi-rogue-advisor <question>
 /pi-rogue-advisor settings
 /pi-rogue-advisor model list
+/pi-rogue-advisor board watch status
+/pi-rogue-advisor board watch intervene
+/pi-rogue-advisor board watch head on
 /pi-rogue-advisor board specialist ask reviewer inspect the proposed change for regressions
 /pi-rogue-advisor board head ask what decision is safest before merging
 ```
@@ -76,9 +79,11 @@ Advisor model selection is separate from Pi's active model. The user-visible con
 
 `null` selects one authenticated compatible text model using the bounded preference for that role. `/pi-rogue-advisor model list [advisor|specialist|head]` shows available candidates, role recommendations, and declared reasoning/context/cost facts without making an LLM call. The explainable policy is quality-balanced Advisor, efficient specialists, and reasoning/context-oriented Head—not a universal quality ranking. An explicit `<provider>/<model>` value overrides discovery and is warned about if unavailable. Resolution attempts the configured model and at most one preferred fallback—never an unbounded provider loop. Model selection never changes Pi's global active model.
 
+The **main Pi model is separate and Pi-owned**. Pi-Rogue never changes it. For a cheap/fast default, start Pi with an authenticated registry entry such as `pi --model openrouter/deepseek/deepseek-v4-flash`. Equivalent provider IDs may be available (`opencode-go/deepseek-v4-flash`, `ollama-cloud/deepseek-v4-flash`); Pi's `/list-models` output is authoritative for the current host. DeepSeek's official pricing page currently lists V4 Flash as an efficiency-oriented option; prices, limits, availability, and provider markups change, so verify them before budgeting. Treat Luna/Kimi high-end variants as quality/escalation choices rather than assuming they are cheaper. The active model is shown by `/pi-rogue-advisor status`.
+
 ## Explicit-only safety boundary
 
-Normal session lifecycle events do not call models. Pi-Rogue has no automatic review, check-in, routing, model switching, prompt rewriting, context database, Fusion/panel calls, orchestration loops, or background workers. An explicit Advisor, specialist, or Head call is bounded by its configured token/time/call limits and fails closed for unavailable models, oversized or unsanitized input, disallowed roles, and mutating tools. Results are suggestions only; they do not suppress work, retry themselves, or trigger another call.
+Normal session lifecycle events do not call models. The deterministic Board watcher runs in `shadow` mode by default to record compact risks without model calls. `intervene` mode explicitly queues a visible, non-binding next-turn suggestion; it does not trigger a turn, switch models, or mutate anything. Head escalation is separately off by default and can be enabled with `/pi-rogue-advisor board watch head on`. Pi-Rogue has no automatic review, model switching, prompt rewriting, or worker mutation. Explicit Advisor, specialist, and Head calls remain bounded and fail closed.
 
 ## Package and development
 
