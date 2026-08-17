@@ -33,6 +33,19 @@ describe("bundle extension", () => {
     expect(commands.has("pi-rogue-orchestration")).toBe(false);
     expect(commands.has("pi-rogue-context")).toBe(false);
   });
+
+  it("keeps the root and bundle docs aligned with the registered surface", () => {
+    const rootReadme = readFileSync(join(process.cwd(), "README.md"), "utf8");
+    const bundleReadme = readFileSync(join(process.cwd(), "packages", "bundle", "README.md"), "utf8");
+    expect(rootReadme).toContain("/pi-rogue status");
+    expect(rootReadme).toContain("/pi-rogue-advisor <question>");
+    expect(rootReadme).not.toContain("/pi-rogue-router");
+    expect(rootReadme).not.toContain("/pi-rogue-fusion");
+    expect(rootReadme).not.toContain("/pi-rogue-orchestration");
+    expect(rootReadme).not.toContain("/pi-rogue-context");
+    expect(bundleReadme).toContain("## Supported surface");
+    expect(bundleReadme).toContain("/pi-rogue-advisor model list");
+  });
 });
 
 describe("bundle publish metadata", () => {
