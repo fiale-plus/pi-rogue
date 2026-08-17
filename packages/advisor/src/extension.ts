@@ -23,7 +23,7 @@ import {
   type SpecialistCallState,
 } from "./board-specialist.js";
 import { loadBoardRoleBody, loadBoardRoleCatalog } from "./board-roles.js";
-import { defaultBoardWatchConfig, normalizeBoardWatchConfig, normalizeBoardWatchState, runBoardWatch, type BoardWatchConfig, type BoardWatchState } from "./board-watcher.js";
+import { boardWatchRiskFingerprint, defaultBoardWatchConfig, normalizeBoardWatchConfig, normalizeBoardWatchState, runBoardWatch, type BoardWatchConfig, type BoardWatchState } from "./board-watcher.js";
 
 // ── Explicit-only configuration ─────────────────────────────────────────
 
@@ -1844,6 +1844,86 @@ function collectLifecycleBoardEvents(state: SessionState, toolResults: unknown[]
   state.boardEvents = [...state.boardEvents, ...events].slice(-MAX_BOARD_EVENTS);
 }
 
+function reserveBoardHeadEscalation(config: BoardWatchConfig, state: SessionState, riskFingerprint: string): boolean {
+  if (config.headEscalation !== "enabled" || config.headMaxCalls <= 0) return false;
+  if (state.boardWatch.lastEscalatedRiskFingerprint === riskFingerprint || state.boardWatch.headAttempts >= config.headMaxCalls) return false;
+  state.boardWatch.headAttempts += 1;
+  state.boardWatch.lastEscalatedRiskFingerprint = riskFingerprint;
+  saveState(state);
+  return true;
+}
+
+async function escalateBoardHead(pi: ExtensionAPI, ctx: any, cfg: AdvisorConfig, state: SessionState, riskFingerprint: string): Promise<void> {
+  const watch = loadBoardWatchConfig();
+  const headConfig = {
+    ...defaultHeadOfBoardConfig(),
+    mode: "enabled" as const,
+    maxTokens: cfg.board.headMaxTokens,
+    maxCallsPerSession: watch.headMaxCalls,
+    callsUsed: state.headOfBoard?.calls ?? 0,
+  };
+  try {
+    const ledger = currentBoardLedger(ctx, state);
+    const decision = decideBoardAction(ledger);
+    const result = await callHeadOfBoardAdapter(headConfig, {
+      ledger,
+      decision,
+      question: "Review this material Board risk and recommend the next safe step. Do not request or perform mutations.",
+    }, async (systemPrompt, messages, options) => completeWithHigherAdvisorModel(ctx, cfg, systemPrompt, messages, {
+      ...options,
+      role: "head",
+      maxAttempts: 1,
+    }));
+    state.headOfBoard = state.headOfBoard ?? { calls: 0 };
+    if (result.skipped) {
+      const latest = loadState(ctx);
+      latest.headOfBoard = { ...(latest.headOfBoard ?? { calls: 0 }), lastSkipped: result.skipped };
+      latest.boardWatch.headAttempts = Math.max(latest.boardWatch.headAttempts, state.boardWatch.headAttempts);
+      saveState(latest);
+      return;
+    }
+    if (!result.response) {
+      const latest = loadState(ctx);
+      latest.headOfBoard = { ...(latest.headOfBoard ?? { calls: 0 }), lastSkipped: "no_response" };
+      latest.boardWatch.headAttempts = Math.max(latest.boardWatch.headAttempts, state.boardWatch.headAttempts);
+      saveState(latest);
+      return;
+    }
+    const latest = loadState(ctx);
+    const latestLedger = currentBoardLedger(ctx, latest);
+    const latestDecision = decideBoardAction(latestLedger);
+    if (boardWatchRiskFingerprint(latestLedger, latestDecision) !== riskFingerprint) {
+      latest.headOfBoard = { ...(latest.headOfBoard ?? { calls: 0 }), lastSkipped: "stale_risk" };
+      latest.boardWatch.headAttempts = Math.max(latest.boardWatch.headAttempts, state.boardWatch.headAttempts);
+      saveState(latest);
+      return;
+    }
+    latest.headOfBoard = {
+      ...(latest.headOfBoard ?? { calls: 0 }),
+      calls: (latest.headOfBoard?.calls ?? 0) + result.accounting.headOfBoardCalls,
+      lastAt: new Date().toISOString(),
+      lastModel: result.response.model,
+      lastSkipped: undefined,
+    };
+    latest.boardWatch.headAttempts = Math.max(latest.boardWatch.headAttempts, state.boardWatch.headAttempts);
+    saveState(latest);
+    if (typeof pi.sendMessage === "function") {
+      pi.sendMessage({
+        customType: "advisor:board",
+        content: `Head-of-Board advice (read-only, non-binding; model ${result.response.model}):\n${String(result.response.text).slice(0, 1800)}`,
+        display: true,
+        details: { kind: "board-head", decision: "would_whisper", severity: latestDecision.action === "would_whisper" ? latestDecision.severity : "important", reason: "Board escalation", nonBinding: true, readOnly: true },
+      }, { triggerTurn: false, deliverAs: "nextTurn" });
+    }
+  } catch (error) {
+    const latest = loadState(ctx);
+    latest.headOfBoard = { ...(latest.headOfBoard ?? { calls: 0 }), lastSkipped: "error" };
+    latest.boardWatch.headAttempts = Math.max(latest.boardWatch.headAttempts, state.boardWatch.headAttempts);
+    saveState(latest);
+    appendAdvisorDiagnostic("board_head_escalation_failed", { error: error instanceof Error ? error.message : String(error) });
+  }
+}
+
 function recordBoardWatchIfEnabled(pi: ExtensionAPI, ctx: any, state: SessionState): void {
   const config = loadBoardWatchConfig();
   if (config.mode === "off") return;
@@ -1856,6 +1936,9 @@ function recordBoardWatchIfEnabled(pi: ExtensionAPI, ctx: any, state: SessionSta
       display: true,
       details: result.advice.details,
     }, { triggerTurn: false, deliverAs: "nextTurn" });
+  }
+  if (result.decision.action === "would_whisper" && result.riskFingerprint && reserveBoardHeadEscalation(config, state, result.riskFingerprint)) {
+    void escalateBoardHead(pi, ctx, loadConfig(), state, result.riskFingerprint);
   }
 }
 
@@ -2076,8 +2159,9 @@ export function registerAdvisor(pi: ExtensionAPI): void {
           if (action === "status") {
             ctx.ui.notify([
               `Board watcher: ${current.mode}`,
-              `Runs: ${state.boardWatch.runs}; interventions: ${state.boardWatch.interventions}; suppressed: ${state.boardWatch.suppressed}`,
+              `Runs: ${state.boardWatch.runs}; interventions: ${state.boardWatch.interventions}; Head attempts: ${state.boardWatch.headAttempts}; suppressed: ${state.boardWatch.suppressed}`,
               `Cooldown: ${current.cooldownTurns} turn(s); max interventions: ${current.maxInterventions}`,
+              `Head escalation: ${current.headEscalation}; max calls: ${current.headMaxCalls}`,
               "Watcher is deterministic and read-only; interventions are non-binding next-turn advice.",
             ].join("\n"), "info");
             return;
@@ -2087,7 +2171,19 @@ export function registerAdvisor(pi: ExtensionAPI): void {
             ctx.ui.notify(`Board watcher mode set to ${action}.`, "info");
             return;
           }
-          ctx.ui.notify("Usage: board watch status|off|shadow|intervene", "error");
+          if (action === "head") {
+            const headAction = String(parts[3] ?? "status").toLowerCase();
+            if (headAction === "status") {
+              ctx.ui.notify(`Board Head escalation: ${current.headEscalation} (max ${current.headMaxCalls} call(s)).`, "info");
+              return;
+            }
+            if (headAction === "on" || headAction === "off") {
+              saveBoardWatchConfig({ ...current, headEscalation: headAction === "on" ? "enabled" : "off" });
+              ctx.ui.notify(`Board Head escalation ${headAction === "on" ? "enabled" : "disabled"}.`, "info");
+              return;
+            }
+          }
+          ctx.ui.notify("Usage: board watch status|off|shadow|intervene|head status|on|off", "error");
           return;
         }
         if (area === "head") {

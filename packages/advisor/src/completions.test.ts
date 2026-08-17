@@ -29,7 +29,8 @@ describe("advisor completions", () => {
 
   it("offers explicit Board controls and roles", () => {
     expect(advisorArgumentCompletions("board ")?.map((i) => i.value)).toEqual(["watch", "specialist", "head"]);
-    expect(advisorArgumentCompletions("board watch ")?.map((i) => i.value)).toEqual(["status", "off", "shadow", "intervene"]);
+    expect(advisorArgumentCompletions("board watch ")?.map((i) => i.value)).toEqual(["status", "off", "shadow", "intervene", "head"]);
+    expect(advisorArgumentCompletions("board watch head ")?.map((i) => i.value)).toEqual(["status", "on", "off"]);
     expect(advisorArgumentCompletions("review ")).toBeNull();
     expect(advisorArgumentCompletions("profile ")).toBeNull();
   });

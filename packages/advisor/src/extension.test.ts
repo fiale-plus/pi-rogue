@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { readFileSync, unlinkSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { completeSimple } from "@earendil-works/pi-ai/compat";
 import { advisorBoardWatchConfigPath, advisorModelInspectionText, inspectAdvisorModels, advisorSessionStatePath, normalizeAdvisorConfig, rankAvailableAdvisorModels, registerAdvisor, resolveModelCandidates, type AdvisorConfig } from "./extension.js";
@@ -259,7 +259,77 @@ describe("Advisor PR1 lifecycle", () => {
       expect(sendMessage).toHaveBeenCalledWith(expect.objectContaining({ customType: "advisor:board", details: expect.objectContaining({ nonBinding: true, readOnly: true }) }), { triggerTurn: false, deliverAs: "nextTurn" });
       expect(vi.mocked(completeSimple)).not.toHaveBeenCalled();
     } finally {
-      unlinkSync(advisorBoardWatchConfigPath());
+      if (existsSync(advisorBoardWatchConfigPath())) unlinkSync(advisorBoardWatchConfigPath());
+    }
+  });
+
+  it("escalates one material Board risk to a bounded read-only Head", async () => {
+    const handlers = new Map<string, (event: unknown, ctx: any) => void>();
+    const sendMessage = vi.fn();
+    const pi = {
+      on: (event: string, handler: (event: unknown, ctx: any) => void) => { handlers.set(event, handler); },
+      registerMessageRenderer: vi.fn(),
+      registerTool: vi.fn(),
+      registerCommand: vi.fn(),
+      sendMessage,
+    } as unknown as ExtensionAPI;
+    vi.mocked(completeSimple).mockResolvedValue({ content: [{ type: "text", text: "Validate the changed file before proceeding." }] } as any);
+    writeFileSync(advisorBoardWatchConfigPath(), JSON.stringify({ mode: "intervene", cooldownTurns: 0, maxInterventions: 4, headEscalation: "enabled", headMaxCalls: 1 }));
+    try {
+      registerAdvisor(pi);
+      const ctx = {
+        session: { id: `advisor-head-watch-${Date.now()}-${Math.random()}` },
+        cwd: process.cwd(),
+        ui: { setStatus: vi.fn() },
+        modelRegistry: {
+          find: (provider: string, id: string) => provider === "openai-codex" && id === "gpt-5.5" ? { provider, id, input: ["text"] } : undefined,
+          getApiKeyAndHeaders: async () => ({ ok: true, apiKey: "test-key" }),
+        },
+      };
+      handlers.get("session_start")?.({}, ctx);
+      handlers.get("turn_end")?.({ turnIndex: 0, toolResults: [{ toolName: "edit", input: { path: "packages/advisor/src/head-watched.ts" }, status: "success" }] }, ctx);
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      expect(sendMessage).toHaveBeenCalledWith(expect.objectContaining({ customType: "advisor:board", details: expect.objectContaining({ readOnly: true }) }), expect.objectContaining({ triggerTurn: false, deliverAs: "nextTurn" }));
+      expect(vi.mocked(completeSimple)).toHaveBeenCalledTimes(1);
+      handlers.get("turn_end")?.({ turnIndex: 1, toolResults: [{ toolName: "edit", input: { path: "packages/advisor/src/another-head-watched.ts" }, status: "success" }] }, ctx);
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      expect(vi.mocked(completeSimple)).toHaveBeenCalledTimes(1);
+    } finally {
+      if (existsSync(advisorBoardWatchConfigPath())) unlinkSync(advisorBoardWatchConfigPath());
+    }
+  });
+
+  it("can escalate a shadow risk to Head without enabling Board intervention", async () => {
+    const handlers = new Map<string, (event: unknown, ctx: any) => void>();
+    const sendMessage = vi.fn();
+    const pi = {
+      on: (event: string, handler: (event: unknown, ctx: any) => void) => { handlers.set(event, handler); },
+      registerMessageRenderer: vi.fn(),
+      registerTool: vi.fn(),
+      registerCommand: vi.fn(),
+      sendMessage,
+    } as unknown as ExtensionAPI;
+    const callsBefore = vi.mocked(completeSimple).mock.calls.length;
+    vi.mocked(completeSimple).mockResolvedValue({ content: [{ type: "text", text: "Validate before continuing." }] } as any);
+    writeFileSync(advisorBoardWatchConfigPath(), JSON.stringify({ mode: "shadow", maxInterventions: 0, headEscalation: "enabled", headMaxCalls: 1 }));
+    try {
+      registerAdvisor(pi);
+      const ctx = {
+        session: { id: `advisor-shadow-head-${Date.now()}-${Math.random()}` },
+        cwd: process.cwd(),
+        ui: { setStatus: vi.fn() },
+        modelRegistry: {
+          find: (provider: string, id: string) => provider === "openai-codex" && id === "gpt-5.5" ? { provider, id, input: ["text"] } : undefined,
+          getApiKeyAndHeaders: async () => ({ ok: true, apiKey: "test-key" }),
+        },
+      };
+      handlers.get("turn_end")?.({ turnIndex: 0, toolResults: [{ toolName: "edit", input: { path: "packages/advisor/src/shadow-head.ts" }, status: "success" }] }, ctx);
+      handlers.get("turn_end")?.({ turnIndex: 1, toolResults: [{ toolName: "edit", input: { path: "packages/advisor/src/shadow-head-2.ts" }, status: "success" }] }, ctx);
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      expect(vi.mocked(completeSimple)).toHaveBeenCalledTimes(callsBefore + 1);
+      expect(sendMessage).not.toHaveBeenCalled();
+    } finally {
+      if (existsSync(advisorBoardWatchConfigPath())) unlinkSync(advisorBoardWatchConfigPath());
     }
   });
 

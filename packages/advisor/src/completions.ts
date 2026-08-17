@@ -47,7 +47,8 @@ const advisorNested: Record<string, Array<[string, string?]>> = {
   model: [["list", "inspect available role candidates"], ["advisor"], ["specialist"], ["head"], ["null"]],
   "model list": [["advisor"], ["specialist"], ["head"]],
   board: [["watch"], ["specialist"], ["head"]],
-  "board watch": [["status"], ["off"], ["shadow"], ["intervene"]],
+  "board watch": [["status"], ["off"], ["shadow"], ["intervene"], ["head"]],
+  "board watch head": [["status"], ["on"], ["off"]],
 };
 
 const piRogueTopLevel: Array<[string, string?]> = [

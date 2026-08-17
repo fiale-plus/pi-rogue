@@ -7,16 +7,20 @@ export interface BoardWatchConfig {
   mode: BoardWatchMode;
   cooldownTurns: number;
   maxInterventions: number;
+  headEscalation: "off" | "enabled";
+  headMaxCalls: number;
 }
 
 export interface BoardWatchState {
   runs: number;
   interventions: number;
+  headAttempts: number;
   suppressed: number;
   lastAt?: string;
   lastTurn?: number;
   lastInterventionTurn?: number;
   lastRiskFingerprint?: string;
+  lastEscalatedRiskFingerprint?: string;
   lastDecision?: BoardDecision;
 }
 
@@ -42,7 +46,7 @@ export interface BoardWatchResult {
 }
 
 export function defaultBoardWatchConfig(): BoardWatchConfig {
-  return { mode: "shadow", cooldownTurns: 3, maxInterventions: 4 };
+  return { mode: "shadow", cooldownTurns: 3, maxInterventions: 4, headEscalation: "off", headMaxCalls: 1 };
 }
 
 export function normalizeBoardWatchConfig(raw: unknown): BoardWatchConfig {
@@ -57,11 +61,13 @@ export function normalizeBoardWatchConfig(raw: unknown): BoardWatchConfig {
     mode: record.mode === "off" || record.mode === "intervene" ? record.mode : "shadow",
     cooldownTurns: bounded(record.cooldownTurns, defaults.cooldownTurns, 0, 100),
     maxInterventions: bounded(record.maxInterventions, defaults.maxInterventions, 0, 32),
+    headEscalation: record.headEscalation === "enabled" ? "enabled" : "off",
+    headMaxCalls: bounded(record.headMaxCalls, defaults.headMaxCalls, 0, 4),
   };
 }
 
 export function defaultBoardWatchState(): BoardWatchState {
-  return { runs: 0, interventions: 0, suppressed: 0 };
+  return { runs: 0, interventions: 0, headAttempts: 0, suppressed: 0 };
 }
 
 export function normalizeBoardWatchState(raw: unknown): BoardWatchState {
@@ -71,11 +77,13 @@ export function normalizeBoardWatchState(raw: unknown): BoardWatchState {
   return {
     runs: count(record.runs),
     interventions: count(record.interventions),
+    headAttempts: count(record.headAttempts),
     suppressed: count(record.suppressed),
     lastAt: typeof record.lastAt === "string" ? record.lastAt : undefined,
     lastTurn: Number.isFinite(Number(record.lastTurn)) ? Math.max(0, Math.floor(Number(record.lastTurn))) : undefined,
     lastInterventionTurn: Number.isFinite(Number(record.lastInterventionTurn)) ? Math.max(0, Math.floor(Number(record.lastInterventionTurn))) : undefined,
     lastRiskFingerprint: typeof record.lastRiskFingerprint === "string" ? record.lastRiskFingerprint : undefined,
+    lastEscalatedRiskFingerprint: typeof record.lastEscalatedRiskFingerprint === "string" ? record.lastEscalatedRiskFingerprint : undefined,
     lastDecision: record.lastDecision as BoardDecision | undefined,
   };
 }
@@ -97,6 +105,10 @@ function adviceText(decision: Extract<BoardDecision, { action: "would_whisper" }
     pointers.length ? `Evidence: ${pointers.join(", ")}` : "Evidence: compact Board ledger only.",
     "The main model may accept, ignore, or ask for clarification; no action was taken automatically.",
   ].join("\n").slice(0, 1800);
+}
+
+export function boardWatchRiskFingerprint(ledger: BoardLedger, decision: BoardDecision): string | undefined {
+  return decision.action === "would_whisper" ? fingerprint(ledger, decision) : undefined;
 }
 
 export function runBoardWatch(config: BoardWatchConfig, previous: BoardWatchState, ledger: BoardLedger, turn: number, now = new Date().toISOString()): BoardWatchResult {
@@ -121,7 +133,7 @@ export function runBoardWatch(config: BoardWatchConfig, previous: BoardWatchStat
     state.suppressed += 1;
     return { state, decision, riskFingerprint: id, skipped: "cooldown" };
   }
-  if (prior.interventions >= config.maxInterventions) {
+  if (config.mode === "intervene" && prior.interventions >= config.maxInterventions) {
     state.suppressed += 1;
     return { state, decision, riskFingerprint: id, skipped: "limit" };
   }
