@@ -299,6 +299,39 @@ describe("Advisor PR1 lifecycle", () => {
     }
   });
 
+  it("can escalate a shadow risk to Head without enabling Board intervention", async () => {
+    const handlers = new Map<string, (event: unknown, ctx: any) => void>();
+    const sendMessage = vi.fn();
+    const pi = {
+      on: (event: string, handler: (event: unknown, ctx: any) => void) => { handlers.set(event, handler); },
+      registerMessageRenderer: vi.fn(),
+      registerTool: vi.fn(),
+      registerCommand: vi.fn(),
+      sendMessage,
+    } as unknown as ExtensionAPI;
+    const callsBefore = vi.mocked(completeSimple).mock.calls.length;
+    vi.mocked(completeSimple).mockResolvedValue({ content: [{ type: "text", text: "Validate before continuing." }] } as any);
+    writeFileSync(advisorBoardWatchConfigPath(), JSON.stringify({ mode: "shadow", headEscalation: "enabled", headMaxCalls: 1 }));
+    try {
+      registerAdvisor(pi);
+      const ctx = {
+        session: { id: `advisor-shadow-head-${Date.now()}-${Math.random()}` },
+        cwd: process.cwd(),
+        ui: { setStatus: vi.fn() },
+        modelRegistry: {
+          find: (provider: string, id: string) => provider === "openai-codex" && id === "gpt-5.5" ? { provider, id, input: ["text"] } : undefined,
+          getApiKeyAndHeaders: async () => ({ ok: true, apiKey: "test-key" }),
+        },
+      };
+      handlers.get("turn_end")?.({ turnIndex: 0, toolResults: [{ toolName: "edit", input: { path: "packages/advisor/src/shadow-head.ts" }, status: "success" }] }, ctx);
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      expect(vi.mocked(completeSimple)).toHaveBeenCalledTimes(callsBefore + 1);
+      expect(sendMessage).toHaveBeenCalledWith(expect.objectContaining({ customType: "advisor:board", details: expect.objectContaining({ kind: "board-head", readOnly: true }) }), expect.objectContaining({ triggerTurn: false, deliverAs: "nextTurn" }));
+    } finally {
+      unlinkSync(advisorBoardWatchConfigPath());
+    }
+  });
+
   it("deduplicates repeated lifecycle events while preserving same-turn failures", () => {
     const handlers = new Map<string, (event: unknown, ctx: any) => void>();
     const pi = {

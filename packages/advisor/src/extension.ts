@@ -1923,7 +1923,9 @@ function recordBoardWatchIfEnabled(pi: ExtensionAPI, ctx: any, state: SessionSta
       display: true,
       details: result.advice.details,
     }, { triggerTurn: false, deliverAs: "nextTurn" });
-    if (config.headEscalation === "enabled") void escalateBoardHead(pi, ctx, loadConfig(), state, result.advice.fingerprint);
+  }
+  if (config.headEscalation === "enabled" && result.decision.action === "would_whisper" && result.riskFingerprint) {
+    void escalateBoardHead(pi, ctx, loadConfig(), state, result.riskFingerprint);
   }
 }
 
