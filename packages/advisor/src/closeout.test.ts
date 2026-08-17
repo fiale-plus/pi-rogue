@@ -45,16 +45,21 @@ describe("session closeout ledger", () => {
 
     const updated = closeout.syncCloseoutFacts(current, {
       turns: 4,
-      files: ["src/fixed.ts"],
+      files: [],
+      boardEvents: [{ type: "file_changed", path: "src/fixed.ts" }],
       errors: ["permission denied"],
       advisorCalls: 1,
       specialistDispatch: { calls: 2 },
       headOfBoard: { calls: 1 },
-      evidenceLedger: [{ command: "npm test", result: "pass", exitCode: 0, timestamp: "2026-01-01T00:00:00Z" }],
+      evidenceLedger: [
+        { kind: "validation", command: "npm test", result: "pass", exitCode: 0, timestamp: "2026-01-01T00:00:00Z" },
+        { kind: "merge", command: "gh pr merge 1", result: "merged", timestamp: "2026-01-01T00:00:00Z" },
+      ],
       rawTranscript: "SECRET transcript must not be copied",
     });
 
     expect(updated?.facts).toMatchObject({ turns: 4, changedFiles: ["src/fixed.ts"], advisorCalls: 1, specialistCalls: 2, headCalls: 1 });
+    expect(updated?.facts.validations).toHaveLength(1);
     expect(updated?.facts.validations[0]).toMatchObject({ command: "npm test", result: "pass", exitCode: 0 });
     expect(JSON.stringify(updated)).not.toContain("SECRET transcript");
   });

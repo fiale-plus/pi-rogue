@@ -211,7 +211,9 @@ export function emptyFacts(): CloseoutFacts {
 export function syncCloseoutFacts(ctx: any, state: any): CloseoutRecord | undefined {
   const current = loadCloseout(ctx);
   if (!current) return undefined;
-  const evidence = Array.isArray(state?.evidenceLedger) ? state.evidenceLedger : [];
+  const evidence = Array.isArray(state?.evidenceLedger)
+    ? state.evidenceLedger.filter((entry: any) => entry?.kind === "validation")
+    : [];
   const validations: CloseoutValidation[] = evidence.flatMap((entry: any): CloseoutValidation[] => {
     const command = text(entry?.command ?? entry?.source, 240);
     if (!command) return [];
@@ -224,7 +226,12 @@ export function syncCloseoutFacts(ctx: any, state: any): CloseoutRecord | undefi
     updatedAt: new Date().toISOString(),
     facts: normalizeFacts({
       turns: state?.turns,
-      changedFiles: state?.files,
+      changedFiles: [
+        ...(Array.isArray(state?.files) ? state.files : []),
+        ...(Array.isArray(state?.boardEvents)
+          ? state.boardEvents.filter((entry: any) => entry?.type === "file_changed").map((entry: any) => entry.path)
+          : []),
+      ],
       validations,
       failures: state?.errors,
       advisorCalls: state?.advisorCalls,

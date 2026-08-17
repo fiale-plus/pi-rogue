@@ -1321,11 +1321,12 @@ function piRogueSubsystemRows(_config: AdvisorConfig, state: SessionState, _ctx:
 }
 
 function piRogueCockpitText(config: AdvisorConfig, state: SessionState, _currentNote: string, ctx: any): string {
+  const closeout = syncCloseoutFacts(ctx, state) ?? loadCloseout(ctx);
   return [
     "Pi-Rogue status",
     formatSubsystemStatusRows(piRogueSubsystemRows(config, state, ctx)),
     "",
-    `Closeout: ${loadCloseout(ctx)?.status ?? "none"}`,
+    `Closeout: ${closeout?.status ?? "none"}`,
     "Commands: /pi-rogue status|help|doctor|closeout · /pi-rogue-advisor status|settings|model|board",
   ].join("\n");
 }
@@ -1828,6 +1829,10 @@ function collectLifecycleEvidence(event: unknown, ctx: any, agentEnd: boolean): 
   const toolResults = Array.isArray(record.toolResults) ? record.toolResults : [];
   const timestamp = new Date().toISOString();
   collectLifecycleBoardEvents(state, toolResults, state.turns, timestamp);
+  state.files = [...new Set([
+    ...state.files,
+    ...state.boardEvents.filter((entry) => entry.type === "file_changed").map((entry) => entry.path),
+  ])].slice(-MAX_FILES);
   observeWorkflowEvidence(state, ctx, agentEnd ? "agent_end" : "turn_end", toolResults, text);
   for (const result of toolResults) {
     const summary = boardEvidenceText(toolEvidenceText(result), 500);
@@ -1897,6 +1902,7 @@ export function registerAdvisor(pi: ExtensionAPI): void {
       const parts = rawArg ? rawArg.split(/\s+/) : [];
       const command = String(parts[0] ?? "").toLowerCase();
       if (command === "closeout") {
+        syncCloseoutFacts(ctx, loadState(ctx));
         const action = String(parts[1] ?? "show").toLowerCase();
         if (action === "start") {
           const record = startCloseout(ctx, parts.slice(2).join(" "));
