@@ -30,7 +30,7 @@ describe("closeout evaluation", () => {
     const report = evaluateCloseoutCases([
       evaluationCase(),
       evaluationCase({ id: "case-2", taskClass: "debug", advisor: { ...evaluationCase().advisor, utility: "neutral", disposition: "corrected", ran: true, evidenceBacked: false } }),
-      evaluationCase({ id: "case-3", taskClass: "safety", safetySensitive: true, advisor: { ...evaluationCase().advisor, ran: false, utility: "not_run", safety: "fail_closed" } }),
+      evaluationCase({ id: "case-3", taskClass: "safety", safetySensitive: true, advisor: { ...evaluationCase().advisor, ran: false, utility: "not_run", safety: "unknown" } }),
     ]);
 
     expect(report.samples).toBe(3);

@@ -193,7 +193,7 @@ function buildSlice(taskClass: string, cases: CloseoutEvaluationCase[]): Evaluat
     advisorCalls: calls.length,
     advisorHelpfulRate: round(calls.length ? helpfulRows.length / calls.length : 0),
     evidenceBackedRate: round(calls.length ? evidenceRows.length / calls.length : 0),
-    safetyViolations: cases.filter((item) => item.safetySensitive && item.advisor.safety !== "fail_closed").length,
+    safetyViolations: calls.filter((item) => item.safetySensitive && item.advisor.safety !== "fail_closed").length,
   };
 }
 
@@ -226,7 +226,7 @@ export function evaluateCloseoutCases(cases: CloseoutEvaluationCase[]): Closeout
     averageLatencyMs: latencies.length ? round(average(latencies)) : undefined,
     totalTokens: calls.reduce((sum, item) => sum + (item.advisor.tokens ?? 0), 0),
     totalCost: round(calls.reduce((sum, item) => sum + (item.advisor.cost ?? 0), 0)),
-    safetyViolations: normalized.filter((item) => item.safetySensitive && item.advisor.safety !== "fail_closed").length,
+    safetyViolations: calls.filter((item) => item.safetySensitive && item.advisor.safety !== "fail_closed").length,
     slices,
   };
 }
