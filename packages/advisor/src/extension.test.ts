@@ -174,7 +174,7 @@ describe("Advisor PR1 lifecycle", () => {
       registerCommand: vi.fn(),
     } as unknown as ExtensionAPI;
     registerAdvisor(pi);
-    expect(events).toEqual(["session_start", "turn_end", "agent_end", "session_shutdown"]);
+    expect(events).toEqual(["session_start", "turn_end", "agent_end", "agent_settled", "session_shutdown"]);
     expect(events).not.toContain("before_agent_start");
     expect(vi.mocked(completeSimple)).not.toHaveBeenCalled();
   });

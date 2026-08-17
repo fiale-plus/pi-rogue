@@ -22,7 +22,7 @@ The published artifact is loaded through Pi's TypeScript package loader. Its `.t
 
 The bundle registers only these command roots:
 
-1. `/pi-rogue` — `status`, `help`, and `doctor`.
+1. `/pi-rogue` — `status`, `help`, `doctor`, and explicit local `closeout` evidence bookkeeping.
 2. `/pi-rogue-advisor` — explicit Advisor and Board status, model selection, specialist calls, Head-of-Board calls, and one-shot questions.
 
 The `advisor` tool is also explicit. Registering the bundle does not start model work.
@@ -30,6 +30,11 @@ The `advisor` tool is also explicit. Registering the bundle does not start model
 ### Advisor and Board commands
 
 ```text
+/pi-rogue status
+/pi-rogue closeout start [summary]
+/pi-rogue closeout add-evidence <handle|path|note>
+/pi-rogue closeout record success|partial|failed|abandoned
+/pi-rogue closeout show|export
 /pi-rogue-advisor status
 /pi-rogue-advisor settings
 /pi-rogue-advisor model list [advisor|specialist|head]
@@ -68,7 +73,7 @@ Advisor configuration keeps three independent model slots:
 
 ## Zero-background-call guarantee
 
-The bundle has no automatic review, preflight, check-in, router, model-switch, prompt-rewrite, context-storage, panel/fusion, orchestration, loop, or worker behavior. Normal Pi lifecycle events make zero Pi-Rogue model calls. A model call occurs only after the user explicitly invokes the Advisor tool or command, a specialist `ask`, or a Head `ask`. Explicit failures are visible and fail closed; no result silently retries, suppresses the user's task, or triggers another call.
+The bundle has no automatic review, preflight, check-in, router, model-switch, prompt-rewrite, context-storage, panel/fusion, orchestration, loop, or worker behavior. Closeout lifecycle collection only snapshots bounded local facts when a user has explicitly started a closeout; it makes no model calls. Normal Pi lifecycle events make zero Pi-Rogue model calls. A model call occurs only after the user explicitly invokes the Advisor tool or command, a specialist `ask`, or a Head `ask`. Explicit failures are visible and fail closed; no result silently retries, suppresses the user's task, or triggers another call.
 
 ## Release status
 
