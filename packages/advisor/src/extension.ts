@@ -1844,12 +1844,17 @@ function collectLifecycleBoardEvents(state: SessionState, toolResults: unknown[]
   state.boardEvents = [...state.boardEvents, ...events].slice(-MAX_BOARD_EVENTS);
 }
 
-async function escalateBoardHead(pi: ExtensionAPI, ctx: any, cfg: AdvisorConfig, state: SessionState, riskFingerprint: string): Promise<void> {
-  const watch = loadBoardWatchConfig();
-  if (watch.headEscalation !== "enabled" || watch.headMaxCalls <= 0 || state.boardWatch.lastEscalatedRiskFingerprint === riskFingerprint || state.boardWatch.headAttempts >= watch.headMaxCalls) return;
+function reserveBoardHeadEscalation(config: BoardWatchConfig, state: SessionState, riskFingerprint: string): boolean {
+  if (config.headEscalation !== "enabled" || config.headMaxCalls <= 0) return false;
+  if (state.boardWatch.lastEscalatedRiskFingerprint === riskFingerprint || state.boardWatch.headAttempts >= config.headMaxCalls) return false;
   state.boardWatch.headAttempts += 1;
   state.boardWatch.lastEscalatedRiskFingerprint = riskFingerprint;
   saveState(state);
+  return true;
+}
+
+async function escalateBoardHead(pi: ExtensionAPI, ctx: any, cfg: AdvisorConfig, state: SessionState, riskFingerprint: string): Promise<void> {
+  const watch = loadBoardWatchConfig();
   const headConfig = {
     ...defaultHeadOfBoardConfig(),
     mode: "enabled" as const,
@@ -1924,7 +1929,7 @@ function recordBoardWatchIfEnabled(pi: ExtensionAPI, ctx: any, state: SessionSta
       details: result.advice.details,
     }, { triggerTurn: false, deliverAs: "nextTurn" });
   }
-  if (config.headEscalation === "enabled" && result.decision.action === "would_whisper" && result.riskFingerprint) {
+  if (result.decision.action === "would_whisper" && result.riskFingerprint && reserveBoardHeadEscalation(config, state, result.riskFingerprint)) {
     void escalateBoardHead(pi, ctx, loadConfig(), state, result.riskFingerprint);
   }
 }

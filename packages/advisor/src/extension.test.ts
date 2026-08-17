@@ -324,6 +324,7 @@ describe("Advisor PR1 lifecycle", () => {
         },
       };
       handlers.get("turn_end")?.({ turnIndex: 0, toolResults: [{ toolName: "edit", input: { path: "packages/advisor/src/shadow-head.ts" }, status: "success" }] }, ctx);
+      handlers.get("turn_end")?.({ turnIndex: 1, toolResults: [{ toolName: "edit", input: { path: "packages/advisor/src/shadow-head-2.ts" }, status: "success" }] }, ctx);
       await new Promise((resolve) => setTimeout(resolve, 100));
       expect(vi.mocked(completeSimple)).toHaveBeenCalledTimes(callsBefore + 1);
       expect(sendMessage).toHaveBeenCalledWith(expect.objectContaining({ customType: "advisor:board", details: expect.objectContaining({ kind: "board-head", readOnly: true }) }), expect.objectContaining({ triggerTurn: false, deliverAs: "nextTurn" }));

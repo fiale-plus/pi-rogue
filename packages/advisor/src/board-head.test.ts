@@ -125,7 +125,7 @@ describe("head-of-board adapter", () => {
     const request = buildHeadOfBoardRequest({
       ledger,
       decision: { action: "would_whisper", severity: "important", reason: "rerun with Authorization: Bearer abcdef1234567890 Authorization: Basic dXNlcjpwYXNz token=abcd1234 AWS_ACCESS_KEY_ID=AKIAABCDEFGHIJKLMNOP ASIAABCDEFGHIJKLMNOP",  riskIds: ["risk:token=abcd1234"] },
-      question: "Assess release readiness with MY_SECRET=shhhhhhh and {\"apiKey\": \"json-secret-value\", \"AWS_SECRET_ACCESS_KEY\": \"json-aws-secret-value\"}",
+      question: "Assess release readiness with MY_SECRET=shhhhhhh and {\"apiKey\": \"json-secret-value\", \"AWS_SECRET_ACCESS_KEY\": \"json-aws-secret-value\", \"SecretAccessKey\": \"camel-aws-secret\", \"SessionToken\": \"camel-session-token\"}",
     });
     const payload = JSON.stringify({ content: request.messages[0]?.content, escalation: request.escalation });
 
@@ -138,6 +138,8 @@ describe("head-of-board adapter", () => {
     expect(payload).not.toContain("dXNlcjpwYXNz");
     expect(payload).not.toContain("json-secret-value");
     expect(payload).not.toContain("json-aws-secret-value");
+    expect(payload).not.toContain("camel-aws-secret");
+    expect(payload).not.toContain("camel-session-token");
     expect(payload).toContain("[secret]");
   });
 
