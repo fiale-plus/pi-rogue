@@ -263,7 +263,7 @@ describe("Advisor PR1 lifecycle", () => {
     }
   });
 
-  it("deduplicates the same lifecycle tool result observed at turn_end and agent_end", () => {
+  it("deduplicates repeated lifecycle events while preserving same-turn failures", () => {
     const handlers = new Map<string, (event: unknown, ctx: any) => void>();
     const pi = {
       on: (event: string, handler: (event: unknown, ctx: any) => void) => { handlers.set(event, handler); },
@@ -273,11 +273,12 @@ describe("Advisor PR1 lifecycle", () => {
     } as unknown as ExtensionAPI;
     registerAdvisor(pi);
     const ctx = { session: { id: `advisor-dedupe-${Date.now()}-${Math.random()}` }, cwd: process.cwd(), ui: { setStatus: vi.fn() } };
-    const event = { turnIndex: 0, toolResults: [{ toolName: "bash", input: { command: "npm test" }, status: "error", error: "failure" }] };
+    const failure = { toolName: "bash", input: { command: "npm test" }, status: "error", error: "failure" };
+    const event = { turnIndex: 0, toolResults: [failure, failure, failure] };
     handlers.get("turn_end")?.(event, ctx);
     handlers.get("agent_end")?.(event, ctx);
     const state = JSON.parse(readFileSync(advisorSessionStatePath(ctx), "utf8"));
-    expect(state.boardEvents.filter((item: any) => item.type === "tool_failure")).toHaveLength(1);
+    expect(state.boardEvents.filter((item: any) => item.type === "tool_failure")).toHaveLength(3);
   });
 
   it("increments turns on turn_end only, keeping cooldown turn accounting stable", () => {

@@ -1831,18 +1831,7 @@ function collectLifecycleBoardEvents(state: SessionState, toolResults: unknown[]
     const failure = lifecycleFailureEvent(tool, turn, timestamp);
     if (failure) events.push(failure);
   }
-  const seen = new Set(state.boardEvents.map((event) => event.type === "file_changed"
-    ? `${event.type}:${event.path}:${event.turn ?? ""}`
-    : `${event.type}:${event.tool}:${event.key}:${event.turn ?? ""}`));
-  const unique = events.filter((event) => {
-    const key = event.type === "file_changed"
-      ? `${event.type}:${event.path}:${event.turn ?? ""}`
-      : `${event.type}:${event.tool}:${event.key}:${event.turn ?? ""}`;
-    if (seen.has(key)) return false;
-    seen.add(key);
-    return true;
-  });
-  state.boardEvents = [...state.boardEvents, ...unique].slice(-MAX_BOARD_EVENTS);
+  state.boardEvents = [...state.boardEvents, ...events].slice(-MAX_BOARD_EVENTS);
 }
 
 function recordBoardWatchIfEnabled(pi: ExtensionAPI, ctx: any, state: SessionState): void {
@@ -1870,7 +1859,10 @@ function collectLifecycleEvidence(event: unknown, ctx: any, agentEnd: boolean, p
   if (text) state.notes = [...state.notes, text].slice(-MAX_NOTES);
   const toolResults = Array.isArray(record.toolResults) ? record.toolResults : [];
   const timestamp = new Date().toISOString();
-  collectLifecycleBoardEvents(state, toolResults, state.turns, timestamp);
+  // turn_end is the authoritative tool-result boundary. agent_end repeats the
+  // same results for the completed run, so collecting there would double-count
+  // retries and inflate repeated-failure risks.
+  if (!agentEnd) collectLifecycleBoardEvents(state, toolResults, state.turns, timestamp);
   state.files = [...new Set([
     ...state.files,
     ...state.boardEvents.filter((entry) => entry.type === "file_changed").map((entry) => entry.path),

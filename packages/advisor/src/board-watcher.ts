@@ -124,8 +124,8 @@ export function runBoardWatch(config: BoardWatchConfig, previous: BoardWatchStat
     state.suppressed += 1;
     return { state, decision, skipped: "limit" };
   }
-  state.lastRiskFingerprint = id;
   if (config.mode !== "intervene") return { state, decision };
+  state.lastRiskFingerprint = id;
   state.lastInterventionTurn = turn;
   state.interventions += 1;
   return {
