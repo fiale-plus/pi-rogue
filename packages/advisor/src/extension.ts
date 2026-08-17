@@ -23,6 +23,7 @@ import {
   type SpecialistCallState,
 } from "./board-specialist.js";
 import { loadBoardRoleBody, loadBoardRoleCatalog } from "./board-roles.js";
+import { defaultBoardWatchConfig, normalizeBoardWatchConfig, normalizeBoardWatchState, runBoardWatch, type BoardWatchConfig, type BoardWatchState } from "./board-watcher.js";
 
 // ── Explicit-only configuration ─────────────────────────────────────────
 
@@ -71,7 +72,12 @@ const DEFAULT_CONFIG: AdvisorConfig = {
 };
 
 const CONFIG_PATH = featureFile("advisor", "config.json");
+const BOARD_WATCH_CONFIG_PATH = featureFile("advisor", "board-watch.json");
 const LEGACY_STATE_PATH = featureFile("advisor", "state.json");
+
+export function advisorBoardWatchConfigPath(): string {
+  return BOARD_WATCH_CONFIG_PATH;
+}
 const CACHE_PATH = featureFile("advisor", "cache.json");
 const DEFAULT_DIAGNOSTICS_PATH = featureFile("advisor", "diagnostics.jsonl");
 const SESSION_STATE_PROP = "__piRogueAdvisorStatePath";
@@ -144,6 +150,7 @@ interface SessionState {
     lastNote?: string;
     lastDenied?: string;
   };
+  boardWatch: BoardWatchState;
 }
 type BoardLifecycleEvent = Extract<BoardEvent, { type: "file_changed" | "tool_failure" }>;
 
@@ -237,6 +244,14 @@ function loadConfig(): AdvisorConfig {
 
 function saveConfig(c: AdvisorConfig) {
   writeJson(CONFIG_PATH, c);
+}
+
+function loadBoardWatchConfig(): BoardWatchConfig {
+  return normalizeBoardWatchConfig(readJson(BOARD_WATCH_CONFIG_PATH, defaultBoardWatchConfig()));
+}
+
+function saveBoardWatchConfig(config: BoardWatchConfig): void {
+  writeJson(BOARD_WATCH_CONFIG_PATH, normalizeBoardWatchConfig(config));
 }
 
 function advisorSessionDir(ctxOrKey?: any): string {
@@ -384,6 +399,7 @@ function loadStateFromPath(path: string): SessionState {
     cacheHits: raw.cacheHits ?? 0,
     evidenceLedger: normalizeEvidenceLedger(raw.evidenceLedger),
     boardEvents: normalizeBoardEvents(raw.boardEvents),
+    boardWatch: normalizeBoardWatchState(raw.boardWatch),
     workflow: normalizeWorkflowState(raw.workflow),
     rateLimit: normalizeRateLimitState(raw.rateLimit),
     advisorLoop: raw.advisorLoop && typeof raw.advisorLoop === "object" ? {
@@ -1044,8 +1060,9 @@ const STRUCTURED_FAILING_TEST_RE = /(?:\bTests?\s+.*?\bfailed\s+\([1-9]\d*\)|\bT
 const HUMAN_TEST_SUMMARY_RE = /(?:\bTests?\s+\d+\s+(?:passed|failed)\s+\(\d+\)|\bTest Files\s+\d+\s+(?:passed|failed)\s+\(\d+\))/i;
 
 type AdvisorHintDetails = {
-  kind?: "handoff" | "answer";
-  decision?: "continue" | "review" | "defer";
+  kind?: "handoff" | "answer" | "board-watch" | "board-head";
+  decision?: "continue" | "review" | "defer" | "would_whisper";
+  severity?: "note" | "important" | "blocker";
   reason?: string;
   summary?: string;
   actions?: unknown;
@@ -1215,6 +1232,15 @@ function renderAdvisorHint(message: any, options: { expanded?: boolean }, theme:
   const sourceColor = customType === "advisor:llm" ? "success" : customType === "advisor:model" ? "accent" : "muted";
   const source = theme.bold(theme.fg(sourceColor, `[${customType}]`));
 
+  if (details.kind === "board-watch" || details.kind === "board-head") {
+    const body = sanitizeAdvisorText(contentText(message?.content) || "No Board advice.");
+    const box = new Box(1, 1, (s: string) => theme.bg("customMessageBg", s));
+    const label = details.kind === "board-head" ? "Head-of-Board advice" : "Board suggestion";
+    box.addChild(new Text(`${theme.bold(theme.fg("accent", "⚠"))} ${source} ${theme.bold(theme.fg("accent", label))}`, 0, 0));
+    box.addChild(new Text(theme.fg("dim", `${body}\n(non-binding, read-only; the main model may ignore it)`), 0, 0));
+    return box;
+  }
+
   if (details.kind === "answer") {
     const body = sanitizeAdvisorText(contentText(message?.content) || details.summary || "No advisor response.");
     const box = new Box(1, 1, (s: string) => theme.bg("customMessageBg", s));
@@ -1223,7 +1249,7 @@ function renderAdvisorHint(message: any, options: { expanded?: boolean }, theme:
     return box;
   }
 
-  const decision = details.decision ?? "defer";
+  const decision = details.decision === "would_whisper" ? "defer" : details.decision ?? "defer";
   const decisionColor = decision === "review" ? "accent" : decision === "continue" ? "muted" : "dim";
   const verdict = theme.bold(theme.fg(decisionColor, decision));
   const glyph = decision === "review" ? "↗" : decision === "defer" ? "…" : "·";
@@ -1818,7 +1844,22 @@ function collectLifecycleBoardEvents(state: SessionState, toolResults: unknown[]
   state.boardEvents = [...state.boardEvents, ...events].slice(-MAX_BOARD_EVENTS);
 }
 
-function collectLifecycleEvidence(event: unknown, ctx: any, agentEnd: boolean): void {
+function recordBoardWatchIfEnabled(pi: ExtensionAPI, ctx: any, state: SessionState): void {
+  const config = loadBoardWatchConfig();
+  if (config.mode === "off") return;
+  const result = runBoardWatch(config, state.boardWatch, currentBoardLedger(ctx, state), state.turns);
+  state.boardWatch = result.state;
+  if (result.advice && typeof pi.sendMessage === "function") {
+    pi.sendMessage({
+      customType: "advisor:board",
+      content: result.advice.content,
+      display: true,
+      details: result.advice.details,
+    }, { triggerTurn: false, deliverAs: "nextTurn" });
+  }
+}
+
+function collectLifecycleEvidence(event: unknown, ctx: any, agentEnd: boolean, pi: ExtensionAPI): void {
   const state = loadState(ctx);
   const record = event && typeof event === "object" ? event as Record<string, unknown> : {};
   const turnIndex = Number(record.turnIndex);
@@ -1828,7 +1869,10 @@ function collectLifecycleEvidence(event: unknown, ctx: any, agentEnd: boolean): 
   if (text) state.notes = [...state.notes, text].slice(-MAX_NOTES);
   const toolResults = Array.isArray(record.toolResults) ? record.toolResults : [];
   const timestamp = new Date().toISOString();
-  collectLifecycleBoardEvents(state, toolResults, state.turns, timestamp);
+  // turn_end is the authoritative tool-result boundary. agent_end repeats the
+  // same results for the completed run, so collecting there would double-count
+  // retries and inflate repeated-failure risks.
+  if (!agentEnd) collectLifecycleBoardEvents(state, toolResults, state.turns, timestamp);
   state.files = [...new Set([
     ...state.files,
     ...state.boardEvents.filter((entry) => entry.type === "file_changed").map((entry) => entry.path),
@@ -1839,6 +1883,7 @@ function collectLifecycleEvidence(event: unknown, ctx: any, agentEnd: boolean): 
     if (summary && /error|fail|exception/i.test(summary)) state.errors = [...state.errors, summary].slice(-MAX_ERRORS);
   }
   if (agentEnd && text) state.lastTask = text.slice(0, 500);
+  if (!agentEnd) recordBoardWatchIfEnabled(pi, ctx, state);
   saveState(state);
   syncCloseoutFacts(ctx, state);
 }
@@ -1850,7 +1895,7 @@ export function registerAdvisor(pi: ExtensionAPI): void {
   if (p.__piRogueAdvisorRegistered) return;
   p.__piRogueAdvisorRegistered = true;
 
-  for (const customType of ["advisor:model", "advisor:rules", "advisor:llm"] as const) {
+  for (const customType of ["advisor:model", "advisor:rules", "advisor:llm", "advisor:board"] as const) {
     pi.registerMessageRenderer(customType, renderAdvisorHint);
   }
 
@@ -1863,10 +1908,10 @@ export function registerAdvisor(pi: ExtensionAPI): void {
       saveState(loadState(ctx));
   });
   pi.on("turn_end", (event, ctx) => {
-    collectLifecycleEvidence(event, ctx, false);
+    collectLifecycleEvidence(event, ctx, false, pi);
   });
   pi.on("agent_end", (event, ctx) => {
-    collectLifecycleEvidence(event, ctx, true);
+    collectLifecycleEvidence(event, ctx, true, pi);
   });
   pi.on("agent_settled", (_event, ctx) => {
     syncCloseoutFacts(ctx, loadState(ctx));
@@ -2025,6 +2070,26 @@ export function registerAdvisor(pi: ExtensionAPI): void {
           ctx.ui.notify("Usage: board specialist status|suggest|ask <role-id> <task>", "error");
           return;
         }
+        if (area === "watch") {
+          const action = String(parts[2] ?? "status").toLowerCase();
+          const current = loadBoardWatchConfig();
+          if (action === "status") {
+            ctx.ui.notify([
+              `Board watcher: ${current.mode}`,
+              `Runs: ${state.boardWatch.runs}; interventions: ${state.boardWatch.interventions}; suppressed: ${state.boardWatch.suppressed}`,
+              `Cooldown: ${current.cooldownTurns} turn(s); max interventions: ${current.maxInterventions}`,
+              "Watcher is deterministic and read-only; interventions are non-binding next-turn advice.",
+            ].join("\n"), "info");
+            return;
+          }
+          if (action === "off" || action === "shadow" || action === "intervene") {
+            saveBoardWatchConfig({ ...current, mode: action });
+            ctx.ui.notify(`Board watcher mode set to ${action}.`, "info");
+            return;
+          }
+          ctx.ui.notify("Usage: board watch status|off|shadow|intervene", "error");
+          return;
+        }
         if (area === "head") {
           const action = String(parts[2] ?? "status").toLowerCase();
           if (action === "status") {
@@ -2043,7 +2108,7 @@ export function registerAdvisor(pi: ExtensionAPI): void {
           ctx.ui.notify("Usage: board head status|ask <decision question>", "error");
           return;
         }
-        ctx.ui.notify("Usage: board specialist status|suggest|ask or board head status|ask", "error");
+        ctx.ui.notify("Usage: board watch status|off|shadow|intervene; specialist status|suggest|ask; or head status|ask", "error");
         return;
       }
 
