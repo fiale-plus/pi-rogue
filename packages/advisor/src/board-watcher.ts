@@ -107,6 +107,10 @@ function adviceText(decision: Extract<BoardDecision, { action: "would_whisper" }
   ].join("\n").slice(0, 1800);
 }
 
+export function boardWatchRiskFingerprint(ledger: BoardLedger, decision: BoardDecision): string | undefined {
+  return decision.action === "would_whisper" ? fingerprint(ledger, decision) : undefined;
+}
+
 export function runBoardWatch(config: BoardWatchConfig, previous: BoardWatchState, ledger: BoardLedger, turn: number, now = new Date().toISOString()): BoardWatchResult {
   const prior = normalizeBoardWatchState(previous);
   const state: BoardWatchState = {
@@ -129,7 +133,7 @@ export function runBoardWatch(config: BoardWatchConfig, previous: BoardWatchStat
     state.suppressed += 1;
     return { state, decision, riskFingerprint: id, skipped: "cooldown" };
   }
-  if (prior.interventions >= config.maxInterventions) {
+  if (config.mode === "intervene" && prior.interventions >= config.maxInterventions) {
     state.suppressed += 1;
     return { state, decision, riskFingerprint: id, skipped: "limit" };
   }

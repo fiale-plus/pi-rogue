@@ -23,7 +23,7 @@ import {
   type SpecialistCallState,
 } from "./board-specialist.js";
 import { loadBoardRoleBody, loadBoardRoleCatalog } from "./board-roles.js";
-import { defaultBoardWatchConfig, normalizeBoardWatchConfig, normalizeBoardWatchState, runBoardWatch, type BoardWatchConfig, type BoardWatchState } from "./board-watcher.js";
+import { boardWatchRiskFingerprint, defaultBoardWatchConfig, normalizeBoardWatchConfig, normalizeBoardWatchState, runBoardWatch, type BoardWatchConfig, type BoardWatchState } from "./board-watcher.js";
 
 // ── Explicit-only configuration ─────────────────────────────────────────
 
@@ -1890,6 +1890,14 @@ async function escalateBoardHead(pi: ExtensionAPI, ctx: any, cfg: AdvisorConfig,
       return;
     }
     const latest = loadState(ctx);
+    const latestLedger = currentBoardLedger(ctx, latest);
+    const latestDecision = decideBoardAction(latestLedger);
+    if (boardWatchRiskFingerprint(latestLedger, latestDecision) !== riskFingerprint) {
+      latest.headOfBoard = { ...(latest.headOfBoard ?? { calls: 0 }), lastSkipped: "stale_risk" };
+      latest.boardWatch.headAttempts = Math.max(latest.boardWatch.headAttempts, state.boardWatch.headAttempts);
+      saveState(latest);
+      return;
+    }
     latest.headOfBoard = {
       ...(latest.headOfBoard ?? { calls: 0 }),
       calls: (latest.headOfBoard?.calls ?? 0) + result.accounting.headOfBoardCalls,
@@ -1904,7 +1912,7 @@ async function escalateBoardHead(pi: ExtensionAPI, ctx: any, cfg: AdvisorConfig,
         customType: "advisor:board",
         content: `Head-of-Board advice (read-only, non-binding; model ${result.response.model}):\n${String(result.response.text).slice(0, 1800)}`,
         display: true,
-        details: { kind: "board-head", decision: "would_whisper", severity: decision.action === "would_whisper" ? decision.severity : "important", reason: "Board escalation", nonBinding: true, readOnly: true },
+        details: { kind: "board-head", decision: "would_whisper", severity: latestDecision.action === "would_whisper" ? latestDecision.severity : "important", reason: "Board escalation", nonBinding: true, readOnly: true },
       }, { triggerTurn: false, deliverAs: "nextTurn" });
     }
   } catch (error) {

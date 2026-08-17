@@ -311,7 +311,7 @@ describe("Advisor PR1 lifecycle", () => {
     } as unknown as ExtensionAPI;
     const callsBefore = vi.mocked(completeSimple).mock.calls.length;
     vi.mocked(completeSimple).mockResolvedValue({ content: [{ type: "text", text: "Validate before continuing." }] } as any);
-    writeFileSync(advisorBoardWatchConfigPath(), JSON.stringify({ mode: "shadow", headEscalation: "enabled", headMaxCalls: 1 }));
+    writeFileSync(advisorBoardWatchConfigPath(), JSON.stringify({ mode: "shadow", maxInterventions: 0, headEscalation: "enabled", headMaxCalls: 1 }));
     try {
       registerAdvisor(pi);
       const ctx = {
@@ -327,7 +327,7 @@ describe("Advisor PR1 lifecycle", () => {
       handlers.get("turn_end")?.({ turnIndex: 1, toolResults: [{ toolName: "edit", input: { path: "packages/advisor/src/shadow-head-2.ts" }, status: "success" }] }, ctx);
       await new Promise((resolve) => setTimeout(resolve, 100));
       expect(vi.mocked(completeSimple)).toHaveBeenCalledTimes(callsBefore + 1);
-      expect(sendMessage).toHaveBeenCalledWith(expect.objectContaining({ customType: "advisor:board", details: expect.objectContaining({ kind: "board-head", readOnly: true }) }), expect.objectContaining({ triggerTurn: false, deliverAs: "nextTurn" }));
+      expect(sendMessage).not.toHaveBeenCalled();
     } finally {
       if (existsSync(advisorBoardWatchConfigPath())) unlinkSync(advisorBoardWatchConfigPath());
     }
