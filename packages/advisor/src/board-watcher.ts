@@ -15,6 +15,7 @@ export interface BoardWatchState {
   suppressed: number;
   lastAt?: string;
   lastTurn?: number;
+  lastInterventionTurn?: number;
   lastRiskFingerprint?: string;
   lastDecision?: BoardDecision;
 }
@@ -72,6 +73,7 @@ export function normalizeBoardWatchState(raw: unknown): BoardWatchState {
     suppressed: count(record.suppressed),
     lastAt: typeof record.lastAt === "string" ? record.lastAt : undefined,
     lastTurn: Number.isFinite(Number(record.lastTurn)) ? Math.max(0, Math.floor(Number(record.lastTurn))) : undefined,
+    lastInterventionTurn: Number.isFinite(Number(record.lastInterventionTurn)) ? Math.max(0, Math.floor(Number(record.lastInterventionTurn))) : undefined,
     lastRiskFingerprint: typeof record.lastRiskFingerprint === "string" ? record.lastRiskFingerprint : undefined,
     lastDecision: record.lastDecision as BoardDecision | undefined,
   };
@@ -114,7 +116,7 @@ export function runBoardWatch(config: BoardWatchConfig, previous: BoardWatchStat
     state.suppressed += 1;
     return { state, decision, skipped: "duplicate" };
   }
-  if (prior.lastTurn !== undefined && turn - prior.lastTurn < config.cooldownTurns) {
+  if (prior.lastInterventionTurn !== undefined && turn - prior.lastInterventionTurn < config.cooldownTurns) {
     state.suppressed += 1;
     return { state, decision, skipped: "cooldown" };
   }
@@ -124,6 +126,7 @@ export function runBoardWatch(config: BoardWatchConfig, previous: BoardWatchStat
   }
   state.lastRiskFingerprint = id;
   if (config.mode !== "intervene") return { state, decision };
+  state.lastInterventionTurn = turn;
   state.interventions += 1;
   return {
     state,

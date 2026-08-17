@@ -41,7 +41,10 @@ describe("Board watcher", () => {
     const changed = runBoardWatch(config, first.state, riskyLedger(2), 2);
     expect(changed.advice).toBeUndefined();
     expect(changed.skipped).toBe("cooldown");
-    const afterCooldown = runBoardWatch(config, changed.state, riskyLedger(5), 5);
+    const consecutive = runBoardWatch(config, changed.state, riskyLedger(3), 3);
+    expect(consecutive.advice).toBeUndefined();
+    expect(consecutive.skipped).toBe("cooldown");
+    const afterCooldown = runBoardWatch(config, consecutive.state, riskyLedger(4), 4);
     expect(afterCooldown.advice).toBeDefined();
   });
 });
