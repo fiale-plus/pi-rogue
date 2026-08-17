@@ -1,8 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
-import { readFileSync } from "node:fs";
+import { readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { completeSimple } from "@earendil-works/pi-ai/compat";
-import { advisorModelInspectionText, inspectAdvisorModels, advisorSessionStatePath, normalizeAdvisorConfig, rankAvailableAdvisorModels, registerAdvisor, resolveModelCandidates, type AdvisorConfig } from "./extension.js";
+import { advisorBoardWatchConfigPath, advisorModelInspectionText, inspectAdvisorModels, advisorSessionStatePath, normalizeAdvisorConfig, rankAvailableAdvisorModels, registerAdvisor, resolveModelCandidates, type AdvisorConfig } from "./extension.js";
 
 vi.mock("@earendil-works/pi-ai/compat", async () => {
   const actual = await vi.importActual<typeof import("@earendil-works/pi-ai/compat")>("@earendil-works/pi-ai/compat");
@@ -238,6 +238,29 @@ describe("Advisor PR1 lifecycle", () => {
     )).map((event: { type: string; path: string }) => event.path)).toEqual([
       "packages/advisor/src/changed.ts",
     ]);
+  });
+
+  it("queues a non-binding next-turn message only when intervention mode is explicit", () => {
+    const handlers = new Map<string, (event: unknown, ctx: any) => void>();
+    const sendMessage = vi.fn();
+    const pi = {
+      on: (event: string, handler: (event: unknown, ctx: any) => void) => { handlers.set(event, handler); },
+      registerMessageRenderer: vi.fn(),
+      registerTool: vi.fn(),
+      registerCommand: vi.fn(),
+      sendMessage,
+    } as unknown as ExtensionAPI;
+    writeFileSync(advisorBoardWatchConfigPath(), JSON.stringify({ mode: "intervene", cooldownTurns: 0, maxInterventions: 4 }));
+    try {
+      registerAdvisor(pi);
+      const ctx = { session: { id: `advisor-watch-${Date.now()}-${Math.random()}` }, cwd: process.cwd(), ui: { setStatus: vi.fn() } };
+      handlers.get("session_start")?.({}, ctx);
+      handlers.get("turn_end")?.({ turnIndex: 0, toolResults: [{ toolName: "edit", input: { path: "packages/advisor/src/watched.ts" }, status: "success" }] }, ctx);
+      expect(sendMessage).toHaveBeenCalledWith(expect.objectContaining({ customType: "advisor:board", details: expect.objectContaining({ nonBinding: true, readOnly: true }) }), { triggerTurn: false, deliverAs: "nextTurn" });
+      expect(vi.mocked(completeSimple)).not.toHaveBeenCalled();
+    } finally {
+      unlinkSync(advisorBoardWatchConfigPath());
+    }
   });
 
   it("increments turns on turn_end only, keeping cooldown turn accounting stable", () => {

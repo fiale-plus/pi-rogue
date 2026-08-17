@@ -1,0 +1,47 @@
+import { describe, expect, it } from "vitest";
+import { buildBoardLedger } from "./board.js";
+import { defaultBoardWatchConfig, defaultBoardWatchState, normalizeBoardWatchConfig, runBoardWatch } from "./board-watcher.js";
+
+function riskyLedger(turn = 1) {
+  return buildBoardLedger([
+    { type: "session", id: "watch-session" },
+    { type: "turn", turn },
+    { type: "file_changed", path: "src/change.ts", turn },
+  ]);
+}
+
+describe("Board watcher", () => {
+  it("defaults to deterministic shadow mode", () => {
+    expect(defaultBoardWatchConfig()).toEqual({ mode: "shadow", cooldownTurns: 3, maxInterventions: 4 });
+    expect(normalizeBoardWatchConfig({ mode: "intervene", cooldownTurns: 999, maxInterventions: -1 })).toEqual({ mode: "intervene", cooldownTurns: 100, maxInterventions: 0 });
+  });
+
+  it("records material risks without calling a model or queuing advice in shadow mode", () => {
+    const result = runBoardWatch(defaultBoardWatchConfig(), defaultBoardWatchState(), riskyLedger(), 1);
+    expect(result.decision.action).toBe("would_whisper");
+    expect(result.advice).toBeUndefined();
+    expect(result.state.runs).toBe(1);
+    expect(result.state.interventions).toBe(0);
+  });
+
+  it("queues one bounded non-binding intervention and deduplicates it", () => {
+    const config = { ...defaultBoardWatchConfig(), mode: "intervene" as const, cooldownTurns: 0 };
+    const first = runBoardWatch(config, defaultBoardWatchState(), riskyLedger(), 1);
+    expect(first.advice).toMatchObject({ details: { nonBinding: true, readOnly: true } });
+    expect(first.advice?.content.length).toBeLessThanOrEqual(1800);
+    const duplicate = runBoardWatch(config, first.state, riskyLedger(), 2);
+    expect(duplicate.advice).toBeUndefined();
+    expect(duplicate.skipped).toBe("duplicate");
+    expect(duplicate.state.suppressed).toBe(1);
+  });
+
+  it("enforces cooldown for a changed risk fingerprint", () => {
+    const config = { ...defaultBoardWatchConfig(), mode: "intervene" as const, cooldownTurns: 3 };
+    const first = runBoardWatch(config, defaultBoardWatchState(), riskyLedger(1), 1);
+    const changed = runBoardWatch(config, first.state, riskyLedger(2), 2);
+    expect(changed.advice).toBeUndefined();
+    expect(changed.skipped).toBe("cooldown");
+    const afterCooldown = runBoardWatch(config, changed.state, riskyLedger(5), 5);
+    expect(afterCooldown.advice).toBeDefined();
+  });
+});

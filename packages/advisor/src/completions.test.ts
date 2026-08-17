@@ -27,8 +27,9 @@ describe("advisor completions", () => {
     expect(advisorArgumentCompletions("model list ")?.map((i) => i.value)).toEqual(["advisor", "specialist", "head"]);
   });
 
-  it("offers explicit Board roles without shadow or discovery controls", () => {
-    expect(advisorArgumentCompletions("board ")?.map((i) => i.value)).toEqual(["specialist", "head"]);
+  it("offers explicit Board controls and roles", () => {
+    expect(advisorArgumentCompletions("board ")?.map((i) => i.value)).toEqual(["watch", "specialist", "head"]);
+    expect(advisorArgumentCompletions("board watch ")?.map((i) => i.value)).toEqual(["status", "off", "shadow", "intervene"]);
     expect(advisorArgumentCompletions("review ")).toBeNull();
     expect(advisorArgumentCompletions("profile ")).toBeNull();
   });
