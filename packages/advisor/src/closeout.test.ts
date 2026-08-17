@@ -68,17 +68,27 @@ describe("session closeout ledger", () => {
     const path = closeout.closeoutFilePath(current);
     mkdirSync(dirname(path), { recursive: true });
     writeFileSync(path, JSON.stringify({
-      session: { key: "v2-session" },
+      session: { key: "wrong-session" },
       status: "not-a-status",
-      summary: "ok",
+      summary: "token=sk-12345678901234567890",
       evidence: [{ reference: "ctx://one" }, null, { reference: "" }],
       facts: { turns: "bad", changedFiles: "bad", validations: "bad" },
     }), "utf8");
+    expect(closeout.loadCloseout(current)).toBeUndefined();
 
-    const record = closeout.loadCloseout(current);
+    writeFileSync(path, JSON.stringify({
+      session: { key: closeout.normalizeCloseout({ session: { key: "wrong-session" } })?.session.key ?? "" },
+      status: "not-a-status",
+      summary: "token=sk-12345678901234567890",
+      evidence: [{ reference: "ctx://one" }, null, { reference: "" }],
+      facts: { turns: "bad", changedFiles: "bad", validations: "bad" },
+    }), "utf8");
+    const record = closeout.normalizeCloseout(JSON.parse(readFileSync(path, "utf8")));
     expect(record?.status).toBe("open");
     expect(record?.evidence).toHaveLength(1);
     expect(record?.facts.turns).toBe(0);
     expect(closeout.closeoutText(record)).toContain("Status: **open**");
+    expect(closeout.closeoutText(record)).toContain("token=[REDACTED]");
+    expect(closeout.closeoutText(record)).not.toContain("sk-12345678901234567890");
   });
 });

@@ -1910,7 +1910,7 @@ export function registerAdvisor(pi: ExtensionAPI): void {
         }
         if (action === "record") {
           const next = String(parts[2] ?? "").toLowerCase();
-          if (next !== "success" && next !== "partial" && next !== "failed" && next !== "abandoned") {
+          if (parts.length !== 3 || (next !== "success" && next !== "partial" && next !== "failed" && next !== "abandoned")) {
             ctx.ui.notify("Usage: /pi-rogue closeout record success|partial|failed|abandoned", "error");
             return;
           }
@@ -1919,11 +1919,15 @@ export function registerAdvisor(pi: ExtensionAPI): void {
           return;
         }
         if (action === "export") {
+          if (parts.length !== 2) {
+            ctx.ui.notify("Usage: /pi-rogue closeout export", "error");
+            return;
+          }
           const exported = exportCloseout(ctx);
           ctx.ui.notify(exported.path ? `Closeout exported to ${exported.path}` : "No active closeout. Start one with /pi-rogue closeout start [summary].", exported.path ? "info" : "warning");
           return;
         }
-        if (action !== "show") {
+        if (action !== "show" || parts.length !== 2) {
           ctx.ui.notify("Usage: /pi-rogue closeout start|add-evidence|record|show|export ...", "error");
           return;
         }

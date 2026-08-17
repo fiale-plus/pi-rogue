@@ -53,7 +53,14 @@ export type CloseoutRecord = {
 type UnknownRecord = Record<string, unknown>;
 
 function text(value: unknown, max: number): string {
-  return String(value ?? "").replace(/[\u0000-\u001f\u007f]/g, " ").replace(/\s+/g, " ").trim().slice(0, max);
+  return String(value ?? "")
+    .replace(/[\u0000-\u001f\u007f]/g, " ")
+    .replace(/\b(sk-[A-Za-z0-9_-]{12,})\b/g, "[REDACTED_API_KEY]")
+    .replace(/\b(gh[pousr]_[A-Za-z0-9_]{12,})\b/g, "[REDACTED_GITHUB_TOKEN]")
+    .replace(/([\"']?(?:api[_-]?key|token|secret|password|credential)[\w.-]*[\"']?\s*[:=]\s*[\"']?)([^\s'\",;}]+)/gi, "$1[REDACTED]")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, max);
 }
 
 function boundedList(value: unknown, max: number, itemMax: number): string[] {
@@ -122,7 +129,7 @@ export function normalizeCloseout(raw: unknown, ctx?: any): CloseoutRecord | und
   const source = raw as UnknownRecord;
   const sessionSource = source.session && typeof source.session === "object" ? source.session as UnknownRecord : {};
   const key = text(sessionSource.key, 180);
-  if (!key) return undefined;
+  if (!key || (ctx && key !== sessionKey(ctx))) return undefined;
   const now = new Date().toISOString();
   return {
     version: CLOSEOUT_VERSION,
