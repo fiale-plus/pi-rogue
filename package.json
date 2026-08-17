@@ -13,7 +13,8 @@
     "check:coverage": "tsx scripts/validate-validation-coverage.ts",
     "test": "vitest run",
     "test:packed-min-node": "node scripts/test-packed-minimum-node.mjs",
-    "board:eval": "tsx scripts/select-board-fixtures.ts"
+    "board:eval": "tsx scripts/select-board-fixtures.ts",
+    "evaluate:advisor": "tsx scripts/evaluate-advisor-closeout.ts"
   },
   "engines": {
     "node": ">=22.19.0"

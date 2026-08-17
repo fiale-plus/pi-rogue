@@ -82,6 +82,16 @@ Specialists default to `suggest` mode and are limited to three calls per session
 
 Closeout is an explicit local evidence ledger for carrying useful facts between work sessions. Start it with `/pi-rogue closeout start [summary]`, add handles or notes with `add-evidence`, record a user-selected `success`, `partial`, `failed`, or `abandoned` outcome, then inspect or export it. Lifecycle hooks only snapshot bounded changed-file, validation, failure, and call-count facts after a closeout exists; they do not make model calls or infer completion.
 
+The offline evaluation harness consumes these closeout records without loading raw transcripts:
+
+```bash
+npm run evaluate:advisor -- --input ./evaluation.json \
+  --json-output /tmp/advisor-evaluation.json \
+  --markdown-output /tmp/advisor-evaluation.md
+```
+
+Each fixture compares a no-Advisor baseline with an explicit Advisor/Board observation by task class. The report is descriptive and fail-closed for safety-sensitive slices; it does not promote models or policies automatically.
+
 ## Explicit-only guarantee
 
 There is no automatic preflight, review, check-in, route decision, model switch, prompt rewrite, context database, orchestration loop, Fusion/panel call, background worker, or lifecycle model work. Pi-Rogue makes zero model calls during ordinary session startup, turn-end, and agent-end handling. Only an explicit Advisor, specialist, or Head invocation can perform bounded model work.
