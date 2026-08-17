@@ -82,7 +82,7 @@ export interface HeadOfBoardResult {
 
 export type HeadOfBoardComplete = (systemPrompt: string, messages: Array<{ role: "user"; content: string }>, options: { maxTokens: number; reasoning: ThinkingLevel }) => Promise<HeadOfBoardCompletion | null>;
 
-const SECRET_RE = /\b(?:(?:sk|ghp|gho|github_pat|xox[abprs]|hf)[-_][A-Za-z0-9_\-]{8,}|AKIA[A-Z0-9]{12,})\b/g;
+const SECRET_RE = /\b(?:(?:sk|ghp|gho|github_pat|xox[abprs]|hf)[-_][A-Za-z0-9_\-]{8,}|(?:AKIA|ASIA)[A-Z0-9]{16})\b/g;
 const KEYED_SECRET_RE = /(["']?\b(?:api[_-]?key|token|secret|password|authorization)\b["']?)\s*[:=]\s*["']?[^\s"',;}]{4,}/gi;
 const BASIC_AUTH_RE = /(["']?authorization["']?\s*[:=]\s*["']?)Basic\s+[A-Za-z0-9+/=]+/gi;
 const NAMED_SECRET_ASSIGNMENT_RE = /\b[A-Z0-9_]*(?:SECRET|TOKEN|PASSWORD|API_KEY|ACCESS_KEY)[A-Z0-9_]*\s*=\s*[^\s"',;}]{4,}/gi;

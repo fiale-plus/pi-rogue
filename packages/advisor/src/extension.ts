@@ -1864,7 +1864,6 @@ async function escalateBoardHead(pi: ExtensionAPI, ctx: any, cfg: AdvisorConfig,
       ledger,
       decision,
       question: "Review this material Board risk and recommend the next safe step. Do not request or perform mutations.",
-      reason: "architecture_risk",
     }, async (systemPrompt, messages, options) => completeWithHigherAdvisorModel(ctx, cfg, systemPrompt, messages, {
       ...options,
       role: "head",
@@ -1872,20 +1871,29 @@ async function escalateBoardHead(pi: ExtensionAPI, ctx: any, cfg: AdvisorConfig,
     }));
     state.headOfBoard = state.headOfBoard ?? { calls: 0 };
     if (result.skipped) {
-      state.headOfBoard.lastSkipped = result.skipped;
-      saveState(state);
+      const latest = loadState(ctx);
+      latest.headOfBoard = { ...(latest.headOfBoard ?? { calls: 0 }), lastSkipped: result.skipped };
+      latest.boardWatch.headAttempts = Math.max(latest.boardWatch.headAttempts, state.boardWatch.headAttempts);
+      saveState(latest);
       return;
     }
     if (!result.response) {
-      state.headOfBoard.lastSkipped = "no_response";
-      saveState(state);
+      const latest = loadState(ctx);
+      latest.headOfBoard = { ...(latest.headOfBoard ?? { calls: 0 }), lastSkipped: "no_response" };
+      latest.boardWatch.headAttempts = Math.max(latest.boardWatch.headAttempts, state.boardWatch.headAttempts);
+      saveState(latest);
       return;
     }
-    state.headOfBoard.calls += result.accounting.headOfBoardCalls;
-    state.headOfBoard.lastAt = new Date().toISOString();
-    state.headOfBoard.lastModel = result.response.model;
-    state.headOfBoard.lastSkipped = undefined;
-    saveState(state);
+    const latest = loadState(ctx);
+    latest.headOfBoard = {
+      ...(latest.headOfBoard ?? { calls: 0 }),
+      calls: (latest.headOfBoard?.calls ?? 0) + result.accounting.headOfBoardCalls,
+      lastAt: new Date().toISOString(),
+      lastModel: result.response.model,
+      lastSkipped: undefined,
+    };
+    latest.boardWatch.headAttempts = Math.max(latest.boardWatch.headAttempts, state.boardWatch.headAttempts);
+    saveState(latest);
     if (typeof pi.sendMessage === "function") {
       pi.sendMessage({
         customType: "advisor:board",
@@ -1895,9 +1903,10 @@ async function escalateBoardHead(pi: ExtensionAPI, ctx: any, cfg: AdvisorConfig,
       }, { triggerTurn: false, deliverAs: "nextTurn" });
     }
   } catch (error) {
-    state.headOfBoard = state.headOfBoard ?? { calls: 0 };
-    state.headOfBoard.lastSkipped = "error";
-    saveState(state);
+    const latest = loadState(ctx);
+    latest.headOfBoard = { ...(latest.headOfBoard ?? { calls: 0 }), lastSkipped: "error" };
+    latest.boardWatch.headAttempts = Math.max(latest.boardWatch.headAttempts, state.boardWatch.headAttempts);
+    saveState(latest);
     appendAdvisorDiagnostic("board_head_escalation_failed", { error: error instanceof Error ? error.message : String(error) });
   }
 }

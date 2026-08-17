@@ -89,6 +89,16 @@ describe("head-of-board adapter", () => {
     expect(request.messages[0]?.content).toContain("decision_needed");
   });
 
+  it("derives automatic escalation reason from the material risk", () => {
+    const ledger = ledgerFrom([
+      { type: "tool_failure", tool: "bash", key: "npm-test", message: "failed", turn: 1 },
+      { type: "tool_failure", tool: "bash", key: "npm-test", message: "failed", turn: 2 },
+      { type: "tool_failure", tool: "bash", key: "npm-test", message: "failed", turn: 3 },
+    ]);
+    const request = buildHeadOfBoardRequest({ ledger, decision: decideBoardAction(ledger), question: "What next?" });
+    expect(request.escalation.reason).toBe("repeated_failure");
+  });
+
   it("preserves promoted shadow risks when rebuilding a head-of-board ledger", () => {
     const ledger = ledgerFrom([{ type: "turn", turn: 3, progress: true }]);
     const risk = { id: "repeated_failure:npm-test", type: "repeated_failure" as const, severity: "important" as const, evidence: "npm test failed repeatedly", evidencePointers: ["failure:npm-test"] };
@@ -114,7 +124,7 @@ describe("head-of-board adapter", () => {
     const ledger = ledgerFrom([{ type: "file_changed", path: "packages/advisor/src/board-head.ts", turn: 4 }]);
     const request = buildHeadOfBoardRequest({
       ledger,
-      decision: { action: "would_whisper", severity: "important", reason: "rerun with Authorization: Bearer abcdef1234567890 Authorization: Basic dXNlcjpwYXNz token=abcd1234 AWS_ACCESS_KEY_ID=AKIAABCDEFGHIJKLMNOP", riskIds: ["risk:token=abcd1234"] },
+      decision: { action: "would_whisper", severity: "important", reason: "rerun with Authorization: Bearer abcdef1234567890 Authorization: Basic dXNlcjpwYXNz token=abcd1234 AWS_ACCESS_KEY_ID=AKIAABCDEFGHIJKLMNOP ASIAABCDEFGHIJKLMNOP",  riskIds: ["risk:token=abcd1234"] },
       question: "Assess release readiness with MY_SECRET=shhhhhhh and {\"apiKey\": \"json-secret-value\"}",
     });
     const payload = JSON.stringify({ content: request.messages[0]?.content, escalation: request.escalation });
@@ -122,6 +132,8 @@ describe("head-of-board adapter", () => {
     expect(payload).not.toContain("abcd1234");
     expect(payload).not.toContain("abcdef1234567890");
     expect(payload).not.toContain("AKIAABCDEFGHIJKLMNOP");
+    expect(payload).not.toContain("ASIAABCDEFGHIJKLMNOP");
+    expect(payload).not.toContain("EFGH");
     expect(payload).not.toContain("shhhhhhh");
     expect(payload).not.toContain("dXNlcjpwYXNz");
     expect(payload).not.toContain("json-secret-value");
