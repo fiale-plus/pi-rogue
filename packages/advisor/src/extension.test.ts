@@ -263,6 +263,23 @@ describe("Advisor PR1 lifecycle", () => {
     }
   });
 
+  it("deduplicates the same lifecycle tool result observed at turn_end and agent_end", () => {
+    const handlers = new Map<string, (event: unknown, ctx: any) => void>();
+    const pi = {
+      on: (event: string, handler: (event: unknown, ctx: any) => void) => { handlers.set(event, handler); },
+      registerMessageRenderer: vi.fn(),
+      registerTool: vi.fn(),
+      registerCommand: vi.fn(),
+    } as unknown as ExtensionAPI;
+    registerAdvisor(pi);
+    const ctx = { session: { id: `advisor-dedupe-${Date.now()}-${Math.random()}` }, cwd: process.cwd(), ui: { setStatus: vi.fn() } };
+    const event = { turnIndex: 0, toolResults: [{ toolName: "bash", input: { command: "npm test" }, status: "error", error: "failure" }] };
+    handlers.get("turn_end")?.(event, ctx);
+    handlers.get("agent_end")?.(event, ctx);
+    const state = JSON.parse(readFileSync(advisorSessionStatePath(ctx), "utf8"));
+    expect(state.boardEvents.filter((item: any) => item.type === "tool_failure")).toHaveLength(1);
+  });
+
   it("increments turns on turn_end only, keeping cooldown turn accounting stable", () => {
     const handlers = new Map<string, (event: unknown, ctx: any) => void>();
     const pi = {

@@ -1831,7 +1831,18 @@ function collectLifecycleBoardEvents(state: SessionState, toolResults: unknown[]
     const failure = lifecycleFailureEvent(tool, turn, timestamp);
     if (failure) events.push(failure);
   }
-  state.boardEvents = [...state.boardEvents, ...events].slice(-MAX_BOARD_EVENTS);
+  const seen = new Set(state.boardEvents.map((event) => event.type === "file_changed"
+    ? `${event.type}:${event.path}:${event.turn ?? ""}`
+    : `${event.type}:${event.tool}:${event.key}:${event.turn ?? ""}`));
+  const unique = events.filter((event) => {
+    const key = event.type === "file_changed"
+      ? `${event.type}:${event.path}:${event.turn ?? ""}`
+      : `${event.type}:${event.tool}:${event.key}:${event.turn ?? ""}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+  state.boardEvents = [...state.boardEvents, ...unique].slice(-MAX_BOARD_EVENTS);
 }
 
 function recordBoardWatchIfEnabled(pi: ExtensionAPI, ctx: any, state: SessionState): void {
