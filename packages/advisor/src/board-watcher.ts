@@ -37,6 +37,7 @@ export interface BoardWatchResult {
   state: BoardWatchState;
   decision: BoardDecision;
   advice?: BoardWatchAdvice;
+  riskFingerprint?: string;
   skipped?: "off" | "silent" | "ledger_update" | "duplicate" | "cooldown" | "limit";
 }
 
@@ -114,23 +115,24 @@ export function runBoardWatch(config: BoardWatchConfig, previous: BoardWatchStat
   const id = fingerprint(ledger, decision);
   if (prior.lastRiskFingerprint === id) {
     state.suppressed += 1;
-    return { state, decision, skipped: "duplicate" };
+    return { state, decision, riskFingerprint: id, skipped: "duplicate" };
   }
   if (prior.lastInterventionTurn !== undefined && turn - prior.lastInterventionTurn < config.cooldownTurns) {
     state.suppressed += 1;
-    return { state, decision, skipped: "cooldown" };
+    return { state, decision, riskFingerprint: id, skipped: "cooldown" };
   }
   if (prior.interventions >= config.maxInterventions) {
     state.suppressed += 1;
-    return { state, decision, skipped: "limit" };
+    return { state, decision, riskFingerprint: id, skipped: "limit" };
   }
-  if (config.mode !== "intervene") return { state, decision };
+  if (config.mode !== "intervene") return { state, decision, riskFingerprint: id };
   state.lastRiskFingerprint = id;
   state.lastInterventionTurn = turn;
   state.interventions += 1;
   return {
     state,
     decision,
+    riskFingerprint: id,
     advice: {
       fingerprint: id,
       content: adviceText(decision, ledger),
