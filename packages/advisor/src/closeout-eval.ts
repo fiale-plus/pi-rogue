@@ -117,6 +117,18 @@ function normalizeAdvisor(raw: unknown): AdvisorObservation {
   };
 }
 
+function hasOwn(value: object, key: string): boolean {
+  return Object.prototype.hasOwnProperty.call(value, key);
+}
+
+function isValidObservation(value: unknown, advisor: boolean): boolean {
+  if (!value || typeof value !== "object") return false;
+  const source = value as Record<string, unknown>;
+  const required = ["result", "reworkTurns", "validationPasses", "validationFailures"];
+  if (!required.every((key) => hasOwn(source, key))) return false;
+  return !advisor || ["ran", "utility", "disposition", "evidenceBacked", "safety"].every((key) => hasOwn(source, key));
+}
+
 function isValidCloseout(value: unknown): value is CloseoutRecord {
   if (!value || typeof value !== "object") return false;
   const record = value as CloseoutRecord;
@@ -137,7 +149,7 @@ export function normalizeEvaluationCases(raw: unknown): CloseoutEvaluationCase[]
   return source.flatMap((item): CloseoutEvaluationCase[] => {
     if (!item || typeof item !== "object") return [];
     const entry = item as Record<string, unknown>;
-    if (!isValidCloseout(entry.closeout)) return [];
+    if (!isValidCloseout(entry.closeout) || !isValidObservation(entry.baseline, false) || !isValidObservation(entry.advisor, true)) return [];
     const id = clean(entry.id, 120);
     const taskClass = clean(entry.taskClass, MAX_TASK_CLASS);
     if (!id || !taskClass) return [];

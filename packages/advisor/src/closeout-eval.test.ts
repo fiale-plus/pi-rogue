@@ -57,6 +57,7 @@ describe("closeout evaluation", () => {
         evaluationCase(),
         { id: "bad", taskClass: "", closeout },
         { id: "incomplete-closeout", taskClass: "review", closeout: { version: 1, session: { key: "x" } } },
+        { id: "missing-observation", taskClass: "review", closeout, baseline: { result: "success" } },
         { id: "bad-closeout", taskClass: "review", closeout: { version: 2, session: { key: "x" } } },
       ],
       rawTranscript: "SECRET raw transcript",
