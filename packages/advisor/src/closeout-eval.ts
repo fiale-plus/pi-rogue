@@ -126,7 +126,13 @@ function isValidObservation(value: unknown, advisor: boolean): boolean {
   const source = value as Record<string, unknown>;
   const required = ["result", "reworkTurns", "validationPasses", "validationFailures"];
   if (!required.every((key) => hasOwn(source, key))) return false;
-  return !advisor || ["ran", "utility", "disposition", "evidenceBacked", "safety"].every((key) => hasOwn(source, key));
+  if (!(["success", "partial", "failed", "unknown"] as unknown[]).includes(source.result)) return false;
+  if (!["reworkTurns", "validationPasses", "validationFailures"].every((key) => typeof source[key] === "number" && Number.isFinite(source[key]) && source[key] >= 0)) return false;
+  if (!advisor) return true;
+  if (!["ran", "evidenceBacked"].every((key) => typeof source[key] === "boolean")) return false;
+  if (!(typeof source.utility === "string" && ["helpful", "neutral", "harmful", "not_run"].includes(source.utility))) return false;
+  if (!(typeof source.disposition === "string" && ["accepted", "corrected", "dismissed", "not_recorded"].includes(source.disposition))) return false;
+  return typeof source.safety === "string" && ["fail_closed", "approved", "unknown"].includes(source.safety);
 }
 
 function isValidCloseout(value: unknown): value is CloseoutRecord {
@@ -146,22 +152,26 @@ function isValidCloseout(value: unknown): value is CloseoutRecord {
 
 export function normalizeEvaluationCases(raw: unknown): CloseoutEvaluationCase[] {
   const source = Array.isArray(raw) ? raw : raw && typeof raw === "object" && Array.isArray((raw as { cases?: unknown }).cases) ? (raw as { cases: unknown[] }).cases : [];
-  return source.flatMap((item): CloseoutEvaluationCase[] => {
-    if (!item || typeof item !== "object") return [];
+  const cases: CloseoutEvaluationCase[] = [];
+  for (const item of source) {
+    if (cases.length >= MAX_CASES) break;
+    if (!item || typeof item !== "object") continue;
     const entry = item as Record<string, unknown>;
-    if (!isValidCloseout(entry.closeout) || !isValidObservation(entry.baseline, false) || !isValidObservation(entry.advisor, true)) return [];
+    if (typeof entry.id !== "string" || typeof entry.taskClass !== "string" || typeof entry.safetySensitive !== "boolean") continue;
+    if (!isValidCloseout(entry.closeout) || !isValidObservation(entry.baseline, false) || !isValidObservation(entry.advisor, true)) continue;
     const id = clean(entry.id, 120);
     const taskClass = clean(entry.taskClass, MAX_TASK_CLASS);
-    if (!id || !taskClass) return [];
-    return [{
+    if (!id || !taskClass) continue;
+    cases.push({
       id,
       taskClass,
-      safetySensitive: entry.safetySensitive === true,
+      safetySensitive: entry.safetySensitive,
       closeout: entry.closeout,
       baseline: normalizeObservation(entry.baseline),
       advisor: normalizeAdvisor(entry.advisor),
-    }];
-  }).slice(0, MAX_CASES);
+    });
+  }
+  return cases;
 }
 
 function successRate(rows: EvaluationObservation[]): number {

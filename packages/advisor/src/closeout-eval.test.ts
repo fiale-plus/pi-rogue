@@ -58,11 +58,13 @@ describe("closeout evaluation", () => {
         { id: "bad", taskClass: "", closeout },
         { id: "incomplete-closeout", taskClass: "review", closeout: { version: 1, session: { key: "x" } } },
         { id: "missing-observation", taskClass: "review", closeout, baseline: { result: "success" } },
+        { id: "malformed-flags", taskClass: "safety", safetySensitive: "true", closeout, baseline: { result: "success", reworkTurns: 0, validationPasses: 1, validationFailures: 0 }, advisor: { result: "success", reworkTurns: 0, validationPasses: 1, validationFailures: 0, ran: "true", utility: "helpful", disposition: "accepted", evidenceBacked: true, safety: "approved" } },
         { id: "bad-closeout", taskClass: "review", closeout: { version: 2, session: { key: "x" } } },
       ],
       rawTranscript: "SECRET raw transcript",
     });
     expect(cases).toHaveLength(1);
+    expect(normalizeEvaluationCases({ cases: Array.from({ length: 501 }, (_, index) => evaluationCase({ id: `case-${index}` })) })).toHaveLength(500);
     const report = evaluateCloseoutCases(cases);
     expect(renderCloseoutEvaluationMarkdown(report)).not.toContain("SECRET raw transcript");
   });
