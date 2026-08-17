@@ -2119,11 +2119,15 @@ export function registerAdvisor(pi: ExtensionAPI): void {
       }
 
       if (!rawArg || command === "status" || command === "settings" || command === "config") {
+        const activeMainModel = modelId(ctx?.model) || "none reported by Pi";
+        const watch = loadBoardWatchConfig();
         ctx.ui.notify([
+          `Pi main model: ${activeMainModel}`,
           advisorModelStatusText(cfg, availableAdvisorModels(ctx)),
           `Board: specialists=${cfg.board.specialists}, maxSpecialistCalls=${cfg.board.maxSpecialistCalls}, specialistMaxTokens=${cfg.board.specialistMaxTokens}, headMaxTokens=${cfg.board.headMaxTokens}`,
+          `Board watcher: ${watch.mode}; Head escalation: ${watch.headEscalation}`,
           `Explicit calls: ${state.advisorCalls} advisor, ${state.specialistDispatch?.calls ?? 0} specialist, ${state.headOfBoard?.calls ?? 0} head`,
-          "Use /pi-rogue-advisor model list for role recommendations and available model facts.",
+          "Pi-Rogue never changes the Pi main model. Use /pi-rogue-advisor model list for role recommendations and available model facts.",
         ].join("\n"), "info");
         return;
       }

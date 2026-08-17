@@ -45,6 +45,9 @@ describe("bundle extension", () => {
     expect(rootReadme).not.toContain("/pi-rogue-context");
     expect(bundleReadme).toContain("## Supported surface");
     expect(bundleReadme).toContain("/pi-rogue-advisor model list");
+    expect(bundleReadme).toContain("board watch status|off|shadow|intervene");
+    expect(rootReadme).toContain("openrouter/deepseek/deepseek-v4-flash");
+    expect(rootReadme).toContain("main Pi model");
   });
 });
 

@@ -351,6 +351,26 @@ describe("Advisor PR1 lifecycle", () => {
     expect(state.boardEvents.filter((item: any) => item.type === "tool_failure")).toHaveLength(3);
   });
 
+  it("reports Pi's active main model without changing it", async () => {
+    const commands = new Map<string, any>();
+    const notifications: string[] = [];
+    const pi = {
+      on: vi.fn(),
+      registerMessageRenderer: vi.fn(),
+      registerTool: vi.fn(),
+      registerCommand: (name: string, command: any) => commands.set(name, command),
+    } as unknown as ExtensionAPI;
+    registerAdvisor(pi);
+    await commands.get("pi-rogue-advisor").handler("status", {
+      model: { provider: "openrouter", id: "deepseek/deepseek-v4-flash" },
+      modelRegistry: { getAvailable: () => [] },
+      session: { id: `advisor-main-model-${Date.now()}-${Math.random()}` },
+      cwd: process.cwd(),
+      ui: { notify: (text: string) => notifications.push(text), setStatus: vi.fn() },
+    });
+    expect(notifications[0]).toContain("Pi main model: openrouter/deepseek/deepseek-v4-flash");
+  });
+
   it("increments turns on turn_end only, keeping cooldown turn accounting stable", () => {
     const handlers = new Map<string, (event: unknown, ctx: any) => void>();
     const pi = {
