@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { readFileSync, unlinkSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { completeSimple } from "@earendil-works/pi-ai/compat";
 import { advisorBoardWatchConfigPath, advisorModelInspectionText, inspectAdvisorModels, advisorSessionStatePath, normalizeAdvisorConfig, rankAvailableAdvisorModels, registerAdvisor, resolveModelCandidates, type AdvisorConfig } from "./extension.js";
@@ -259,7 +259,7 @@ describe("Advisor PR1 lifecycle", () => {
       expect(sendMessage).toHaveBeenCalledWith(expect.objectContaining({ customType: "advisor:board", details: expect.objectContaining({ nonBinding: true, readOnly: true }) }), { triggerTurn: false, deliverAs: "nextTurn" });
       expect(vi.mocked(completeSimple)).not.toHaveBeenCalled();
     } finally {
-      unlinkSync(advisorBoardWatchConfigPath());
+      if (existsSync(advisorBoardWatchConfigPath())) unlinkSync(advisorBoardWatchConfigPath());
     }
   });
 
@@ -295,7 +295,7 @@ describe("Advisor PR1 lifecycle", () => {
       await new Promise((resolve) => setTimeout(resolve, 20));
       expect(vi.mocked(completeSimple)).toHaveBeenCalledTimes(1);
     } finally {
-      unlinkSync(advisorBoardWatchConfigPath());
+      if (existsSync(advisorBoardWatchConfigPath())) unlinkSync(advisorBoardWatchConfigPath());
     }
   });
 
@@ -328,7 +328,7 @@ describe("Advisor PR1 lifecycle", () => {
       expect(vi.mocked(completeSimple)).toHaveBeenCalledTimes(callsBefore + 1);
       expect(sendMessage).toHaveBeenCalledWith(expect.objectContaining({ customType: "advisor:board", details: expect.objectContaining({ kind: "board-head", readOnly: true }) }), expect.objectContaining({ triggerTurn: false, deliverAs: "nextTurn" }));
     } finally {
-      unlinkSync(advisorBoardWatchConfigPath());
+      if (existsSync(advisorBoardWatchConfigPath())) unlinkSync(advisorBoardWatchConfigPath());
     }
   });
 
