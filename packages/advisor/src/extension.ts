@@ -1060,8 +1060,9 @@ const STRUCTURED_FAILING_TEST_RE = /(?:\bTests?\s+.*?\bfailed\s+\([1-9]\d*\)|\bT
 const HUMAN_TEST_SUMMARY_RE = /(?:\bTests?\s+\d+\s+(?:passed|failed)\s+\(\d+\)|\bTest Files\s+\d+\s+(?:passed|failed)\s+\(\d+\))/i;
 
 type AdvisorHintDetails = {
-  kind?: "handoff" | "answer";
-  decision?: "continue" | "review" | "defer";
+  kind?: "handoff" | "answer" | "board-watch" | "board-head";
+  decision?: "continue" | "review" | "defer" | "would_whisper";
+  severity?: "note" | "important" | "blocker";
   reason?: string;
   summary?: string;
   actions?: unknown;
@@ -1231,6 +1232,15 @@ function renderAdvisorHint(message: any, options: { expanded?: boolean }, theme:
   const sourceColor = customType === "advisor:llm" ? "success" : customType === "advisor:model" ? "accent" : "muted";
   const source = theme.bold(theme.fg(sourceColor, `[${customType}]`));
 
+  if (details.kind === "board-watch" || details.kind === "board-head") {
+    const body = sanitizeAdvisorText(contentText(message?.content) || "No Board advice.");
+    const box = new Box(1, 1, (s: string) => theme.bg("customMessageBg", s));
+    const label = details.kind === "board-head" ? "Head-of-Board advice" : "Board suggestion";
+    box.addChild(new Text(`${theme.bold(theme.fg("accent", "⚠"))} ${source} ${theme.bold(theme.fg("accent", label))}`, 0, 0));
+    box.addChild(new Text(theme.fg("dim", `${body}\n(non-binding, read-only; the main model may ignore it)`), 0, 0));
+    return box;
+  }
+
   if (details.kind === "answer") {
     const body = sanitizeAdvisorText(contentText(message?.content) || details.summary || "No advisor response.");
     const box = new Box(1, 1, (s: string) => theme.bg("customMessageBg", s));
@@ -1239,7 +1249,7 @@ function renderAdvisorHint(message: any, options: { expanded?: boolean }, theme:
     return box;
   }
 
-  const decision = details.decision ?? "defer";
+  const decision = details.decision === "would_whisper" ? "defer" : details.decision ?? "defer";
   const decisionColor = decision === "review" ? "accent" : decision === "continue" ? "muted" : "dim";
   const verdict = theme.bold(theme.fg(decisionColor, decision));
   const glyph = decision === "review" ? "↗" : decision === "defer" ? "…" : "·";
@@ -1873,7 +1883,7 @@ function collectLifecycleEvidence(event: unknown, ctx: any, agentEnd: boolean, p
     if (summary && /error|fail|exception/i.test(summary)) state.errors = [...state.errors, summary].slice(-MAX_ERRORS);
   }
   if (agentEnd && text) state.lastTask = text.slice(0, 500);
-  recordBoardWatchIfEnabled(pi, ctx, state);
+  if (!agentEnd) recordBoardWatchIfEnabled(pi, ctx, state);
   saveState(state);
   syncCloseoutFacts(ctx, state);
 }
