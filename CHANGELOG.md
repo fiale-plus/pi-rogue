@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.3.39
+
+### Summary
+
+This release adds an explicit, cost-bounded runtime posture: a deterministic Board watcher, optional read-only Head-of-Board escalation, and documented cheap-main-model guidance without hidden model routing.
+
+### Changes
+
+- Add deterministic Board watching with shadow/intervene modes, turn-end lifecycle accounting, cooldowns, fingerprints, and intervention caps.
+- Add opt-in, read-only Board-to-Head escalation with atomic attempt limits, stale-risk suppression, compact evidence, and secret redaction.
+- Document runtime model truth and the separation between Pi's active model, Advisor, Board, and Head roles.
+- Keep Board and Head advice advisory, visible, bounded, and non-binding; regular Advisor calls remain on-demand.
+
+### Validation
+
+- Full Vitest suite passed: 119 tests on the release stack.
+- TypeScript, script, coverage, and packed minimum-Node smoke checks passed.
+- Post-merge GitHub Actions passed on `main`.
+- Independent and Codex reviews found no blockers or majors.
+
 ## 0.3.38
 
 ### Summary
