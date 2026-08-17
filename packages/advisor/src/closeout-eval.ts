@@ -53,6 +53,8 @@ export type EvaluationSlice = {
 export type CloseoutEvaluationReport = {
   version: typeof CLOSEOUT_EVALUATION_VERSION;
   samples: number;
+  pairedSamples: number;
+  baselineOnlySamples: number;
   baselineSuccessRate: number;
   advisorSuccessRate: number;
   successDelta: number;
@@ -116,7 +118,18 @@ function normalizeAdvisor(raw: unknown): AdvisorObservation {
 }
 
 function isValidCloseout(value: unknown): value is CloseoutRecord {
-  return Boolean(value && typeof value === "object" && (value as CloseoutRecord).version === 1 && typeof (value as CloseoutRecord).session?.key === "string");
+  if (!value || typeof value !== "object") return false;
+  const record = value as CloseoutRecord;
+  return record.version === 1
+    && typeof record.session?.key === "string" && record.session.key.length > 0
+    && (record.status === "open" || record.status === "success" || record.status === "partial" || record.status === "failed" || record.status === "abandoned")
+    && typeof record.summary === "string"
+    && typeof record.startedAt === "string" && typeof record.updatedAt === "string"
+    && Array.isArray(record.evidence) && Array.isArray(record.unresolvedRisks)
+    && Boolean(record.facts && typeof record.facts === "object")
+    && Array.isArray(record.facts.changedFiles)
+    && Array.isArray(record.facts.validations)
+    && Array.isArray(record.facts.failures);
 }
 
 export function normalizeEvaluationCases(raw: unknown): CloseoutEvaluationCase[] {
@@ -155,14 +168,16 @@ function buildSlice(taskClass: string, cases: CloseoutEvaluationCase[]): Evaluat
   const calls = cases.filter((item) => item.advisor.ran);
   const evidenceRows = calls.filter((item) => item.advisor.evidenceBacked);
   const helpfulRows = calls.filter((item) => item.advisor.utility === "helpful");
+  const baselineSuccessRate = successRate(calls.map((item) => item.baseline));
+  const advisorSuccessRate = successRate(calls.map((item) => item.advisor));
   return {
     taskClass,
     samples: cases.length,
-    baselineSuccessRate: round(successRate(cases.map((item) => item.baseline))),
-    advisorSuccessRate: round(successRate(cases.map((item) => item.advisor))),
-    successDelta: round(successRate(cases.map((item) => item.advisor)) - successRate(cases.map((item) => item.baseline))),
-    baselineAverageRework: round(average(cases.map((item) => item.baseline.reworkTurns))),
-    advisorAverageRework: round(average(cases.map((item) => item.advisor.reworkTurns))),
+    baselineSuccessRate: round(baselineSuccessRate),
+    advisorSuccessRate: round(advisorSuccessRate),
+    successDelta: round(advisorSuccessRate - baselineSuccessRate),
+    baselineAverageRework: round(average(calls.map((item) => item.baseline.reworkTurns))),
+    advisorAverageRework: round(average(calls.map((item) => item.advisor.reworkTurns))),
     advisorCalls: calls.length,
     advisorHelpfulRate: round(calls.length ? helpfulRows.length / calls.length : 0),
     evidenceBackedRate: round(calls.length ? evidenceRows.length / calls.length : 0),
@@ -178,16 +193,18 @@ export function evaluateCloseoutCases(cases: CloseoutEvaluationCase[]): Closeout
   const latencies = calls.map((item) => item.advisor.latencyMs).filter((value): value is number => value !== undefined);
   const classes = [...new Set(normalized.map((item) => item.taskClass))].sort();
   const slices = classes.map((taskClass) => buildSlice(taskClass, normalized.filter((item) => item.taskClass === taskClass)));
-  const baselineSuccessRate = successRate(normalized.map((item) => item.baseline));
-  const advisorSuccessRate = successRate(normalized.map((item) => item.advisor));
+  const baselineSuccessRate = successRate(calls.map((item) => item.baseline));
+  const advisorSuccessRate = successRate(calls.map((item) => item.advisor));
   return {
     version: CLOSEOUT_EVALUATION_VERSION,
     samples: normalized.length,
+    pairedSamples: calls.length,
+    baselineOnlySamples: normalized.length - calls.length,
     baselineSuccessRate: round(baselineSuccessRate),
     advisorSuccessRate: round(advisorSuccessRate),
     successDelta: round(advisorSuccessRate - baselineSuccessRate),
-    baselineAverageRework: round(average(normalized.map((item) => item.baseline.reworkTurns))),
-    advisorAverageRework: round(average(normalized.map((item) => item.advisor.reworkTurns))),
+    baselineAverageRework: round(average(calls.map((item) => item.baseline.reworkTurns))),
+    advisorAverageRework: round(average(calls.map((item) => item.advisor.reworkTurns))),
     advisorCalls: calls.length,
     advisorHelpfulRate: round(calls.length ? helpful.length / calls.length : 0),
     advisorEvidenceBackedRate: round(calls.length ? evidenceBacked.length / calls.length : 0),
@@ -211,7 +228,9 @@ export function renderCloseoutEvaluationMarkdown(report: CloseoutEvaluationRepor
     "## Overall",
     "",
     `- Samples: ${report.samples}`,
-    `- Baseline success rate: ${report.baselineSuccessRate}`,
+    `- Paired baseline/Advisor samples: ${report.pairedSamples}`,
+    `- Baseline-only samples: ${report.baselineOnlySamples}`,
+    `- Baseline success rate (paired samples): ${report.baselineSuccessRate}`,
     `- Advisor/Board success rate: ${report.advisorSuccessRate}`,
     `- Success delta: ${report.successDelta}`,
     `- Baseline average rework turns: ${report.baselineAverageRework}`,

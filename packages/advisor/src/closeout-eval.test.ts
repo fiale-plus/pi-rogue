@@ -34,6 +34,8 @@ describe("closeout evaluation", () => {
     ]);
 
     expect(report.samples).toBe(3);
+    expect(report.pairedSamples).toBe(2);
+    expect(report.baselineOnlySamples).toBe(1);
     expect(report.advisorCalls).toBe(2);
     expect(report.advisorHelpfulRate).toBe(0.5);
     expect(report.advisorEvidenceBackedRate).toBe(0.5);
@@ -53,7 +55,8 @@ describe("closeout evaluation", () => {
     const cases = normalizeEvaluationCases({
       cases: [
         evaluationCase(),
-        { id: "bad", taskClass: "", closeout: { version: 1, session: { key: "x" } } },
+        { id: "bad", taskClass: "", closeout },
+        { id: "incomplete-closeout", taskClass: "review", closeout: { version: 1, session: { key: "x" } } },
         { id: "bad-closeout", taskClass: "review", closeout: { version: 2, session: { key: "x" } } },
       ],
       rawTranscript: "SECRET raw transcript",
