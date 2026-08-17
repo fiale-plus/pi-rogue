@@ -12,8 +12,8 @@ function riskyLedger(turn = 1) {
 
 describe("Board watcher", () => {
   it("defaults to deterministic shadow mode", () => {
-    expect(defaultBoardWatchConfig()).toEqual({ mode: "shadow", cooldownTurns: 3, maxInterventions: 4 });
-    expect(normalizeBoardWatchConfig({ mode: "intervene", cooldownTurns: 999, maxInterventions: -1 })).toEqual({ mode: "intervene", cooldownTurns: 100, maxInterventions: 0 });
+    expect(defaultBoardWatchConfig()).toEqual({ mode: "shadow", cooldownTurns: 3, maxInterventions: 4, headEscalation: "off", headMaxCalls: 1 });
+    expect(normalizeBoardWatchConfig({ mode: "intervene", cooldownTurns: 999, maxInterventions: -1, headEscalation: "enabled", headMaxCalls: 99 })).toEqual({ mode: "intervene", cooldownTurns: 100, maxInterventions: 0, headEscalation: "enabled", headMaxCalls: 4 });
   });
 
   it("records material risks without calling a model or queuing advice in shadow mode", () => {

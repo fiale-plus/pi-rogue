@@ -7,6 +7,8 @@ export interface BoardWatchConfig {
   mode: BoardWatchMode;
   cooldownTurns: number;
   maxInterventions: number;
+  headEscalation: "off" | "enabled";
+  headMaxCalls: number;
 }
 
 export interface BoardWatchState {
@@ -17,6 +19,7 @@ export interface BoardWatchState {
   lastTurn?: number;
   lastInterventionTurn?: number;
   lastRiskFingerprint?: string;
+  lastEscalatedRiskFingerprint?: string;
   lastDecision?: BoardDecision;
 }
 
@@ -42,7 +45,7 @@ export interface BoardWatchResult {
 }
 
 export function defaultBoardWatchConfig(): BoardWatchConfig {
-  return { mode: "shadow", cooldownTurns: 3, maxInterventions: 4 };
+  return { mode: "shadow", cooldownTurns: 3, maxInterventions: 4, headEscalation: "off", headMaxCalls: 1 };
 }
 
 export function normalizeBoardWatchConfig(raw: unknown): BoardWatchConfig {
@@ -57,6 +60,8 @@ export function normalizeBoardWatchConfig(raw: unknown): BoardWatchConfig {
     mode: record.mode === "off" || record.mode === "intervene" ? record.mode : "shadow",
     cooldownTurns: bounded(record.cooldownTurns, defaults.cooldownTurns, 0, 100),
     maxInterventions: bounded(record.maxInterventions, defaults.maxInterventions, 0, 32),
+    headEscalation: record.headEscalation === "enabled" ? "enabled" : "off",
+    headMaxCalls: bounded(record.headMaxCalls, defaults.headMaxCalls, 0, 4),
   };
 }
 
@@ -76,6 +81,7 @@ export function normalizeBoardWatchState(raw: unknown): BoardWatchState {
     lastTurn: Number.isFinite(Number(record.lastTurn)) ? Math.max(0, Math.floor(Number(record.lastTurn))) : undefined,
     lastInterventionTurn: Number.isFinite(Number(record.lastInterventionTurn)) ? Math.max(0, Math.floor(Number(record.lastInterventionTurn))) : undefined,
     lastRiskFingerprint: typeof record.lastRiskFingerprint === "string" ? record.lastRiskFingerprint : undefined,
+    lastEscalatedRiskFingerprint: typeof record.lastEscalatedRiskFingerprint === "string" ? record.lastEscalatedRiskFingerprint : undefined,
     lastDecision: record.lastDecision as BoardDecision | undefined,
   };
 }
