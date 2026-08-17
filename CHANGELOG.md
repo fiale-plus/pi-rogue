@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.3.38
+
+### Summary
+
+This release adds explicit session closeout evidence and an offline evaluation harness for measuring Advisor value without hidden inference or runtime routing.
+
+### Changes
+
+- Add the explicit `/pi-rogue closeout start|add-evidence|record|show|export` command family with session-isolated, versioned records.
+- Persist bounded, sanitized evidence, changed-file summaries, validation facts, failures, and explicit user-selected outcomes without making lifecycle model calls.
+- Add offline baseline-versus-Advisor closeout evaluation with paired-only attribution, deterministic task slices, strict fixture validation, and fail-closed safety reporting.
+- Add documentation/runtime-surface regression coverage.
+
+### Validation
+
+- Full Vitest suite passed: 108 tests.
+- TypeScript, script, and validation-coverage checks passed.
+- Packed minimum-Node Pi-host smoke test passed.
+- CI passed on Node.js 22.19.0.
+- Independent reviews found no blockers or majors.
+
 ## 0.3.37
 
 ### Summary
